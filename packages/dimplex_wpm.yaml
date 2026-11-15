@@ -1,0 +1,1618 @@
+# =============================================================================
+# Dimplex Wärmepumpenmanager (WPM, Software M) über Modbus RTU
+# Home-Assistant-Package für: Dimplex HPL 12S-TUW, WPM pCO5 M, Software M 3.11
+#
+# Anbindung:  WPM  ->  Carel PCOS004850 (= LWPM 410)  ->  RS485
+#             ->  Waveshare RS485 TO ETH (B), Modus "Modbus TCP to RTU"  ->  LAN
+#
+# Quelle der Register: Dimplex Wiki, "Modbus RTU - Datenpunktliste" und
+# "Modbus RTU - Funktionsbeschreibungen" (Spalte WPM-Software J/L/M bzw. L/M).
+# Stand: 15.11.2026. NOCH NICHT AN DER ANLAGE GETESTET.
+#
+# -----------------------------------------------------------------------------
+# EINBAU IN HOME ASSISTANT
+# -----------------------------------------------------------------------------
+# 1. In configuration.yaml (falls noch nicht vorhanden):
+#
+#      homeassistant:
+#        packages: !include_dir_named packages
+#
+# 2. Diese Datei nach /config/packages/dimplex_wpm.yaml kopieren.
+# 3. Unten bei "host" die IP des Waveshare eintragen, "port" an den Waveshare
+#    anpassen (dort "Local Port" auf 502 stellen oder hier den Port ändern).
+# 4. Entwicklerwerkzeuge -> YAML -> Konfiguration prüfen, dann HA neu starten.
+#
+# -----------------------------------------------------------------------------
+# EINSTELLUNGEN AM WPM (Touch-Display: Einstellungen -> Netzwerk)
+# -----------------------------------------------------------------------------
+#   Protokoll: Modbus RTU   Adresse: 1   Baudrate: 9600 (oder 19200)
+#   Parität: keine          Stoppbits: 1        -> also 9600 8N1
+# Am Waveshare exakt dieselben seriellen Werte einstellen.
+#
+# -----------------------------------------------------------------------------
+# ERSTE PRÜFUNG NACH DEM EINBAU (bitte in dieser Reihenfolge)
+# -----------------------------------------------------------------------------
+# a) "WP Außentemperatur", "WP Rücklauftemperatur" und "WP Warmwassertemperatur"
+#    mit dem Display vergleichen.
+#    - Stimmen sie: alles gut.
+#    - Sind die Werte um einen Datenpunkt verschoben (Außentemperatur zeigt
+#      z. B. den Rücklauf): bei ALLEN "address:"-Werten 1 abziehen.
+# b) "WP Softwarestand" muss "M3.11" anzeigen. Zeigt er Unsinn, während die
+#    Temperaturen stimmen, arbeitet der WPM im Adressbereich "1...127".
+#    Dann bei allen Adressen ab 208 genau 80 abziehen (z. B. 222 -> 142,
+#    254 -> 174). Die Liste hier entspricht dem Adressbereich "1...207".
+# c) Erst wenn a) und b) passen, die Schreibfunktionen ("... setzen") benutzen.
+#
+# -----------------------------------------------------------------------------
+# HINWEISE
+# -----------------------------------------------------------------------------
+# - Nicht jeder Datenpunkt ist an jeder Anlage belegt. Was dauerhaft 0 oder
+#   -99.9 zeigt, ist bei dir nicht vorhanden -> Eintrag löschen/auskommentieren.
+# - Auskommentierte Blöcke (Schwimmbad, Lüftung, Solar, 2./3. Heizkreis,
+#   passive Kühlung, Raumregelung über BMS, Uhrzeit) sind Datenpunkte, die
+#   eine HPL 12S-TUW normalerweise nicht nutzt. Bei Bedarf "# " entfernen.
+# - Der Waveshare bedient den Bus allein. Nicht gleichzeitig mit einem
+#   zweiten Modbus-Client auf denselben Wandler zugreifen.
+# - Schreibzugriffe ändern echte Einstellungen der Wärmepumpe. Die Grenzen der
+#   "number"-Entitäten sind bewusst enger gewählt als im Wiki erlaubt.
+# =============================================================================
+
+modbus:
+  - name: dimplex
+    type: tcp                      # Waveshare-Modus "Modbus TCP to RTU"
+    # type: rtuovertcp             # nur falls der Waveshare auf "None" (transparent) steht
+    host: 192.168.20.50            # <-- IP des Waveshare eintragen
+    port: 502                      # <-- muss zum "Local Port" des Waveshare passen
+    delay: 2
+    timeout: 5
+    message_wait_milliseconds: 50
+
+    sensors:
+
+      # ------------------------------------------------------------------
+      # Systemstatus (Klartext dazu: siehe template-Sensoren weiter unten)
+      # ------------------------------------------------------------------
+      - name: "WP Statuscode"
+        unique_id: dimplex_wpm_reg_103
+        slave: 1
+        address: 103
+        data_type: uint16
+        scan_interval: 30
+      - name: "WP Sperrcode"
+        unique_id: dimplex_wpm_reg_104
+        slave: 1
+        address: 104
+        data_type: uint16
+        scan_interval: 30
+      - name: "WP Fehlercode"
+        unique_id: dimplex_wpm_reg_105
+        slave: 1
+        address: 105
+        data_type: uint16
+        scan_interval: 30
+      - name: "WP Sensorfehlercode"
+        unique_id: dimplex_wpm_reg_106
+        slave: 1
+        address: 106
+        data_type: uint16
+        scan_interval: 60
+
+      # ------------------------------------------------------------------
+      # Softwarestand (Buchstabe 13 = M, Nummer, Index -> z. B. M3.11)
+      # ------------------------------------------------------------------
+      - name: "WP Software Buchstabe"
+        unique_id: dimplex_wpm_reg_65
+        slave: 1
+        address: 65
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP Software Nummer"
+        unique_id: dimplex_wpm_reg_66
+        slave: 1
+        address: 66
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP Software Index"
+        unique_id: dimplex_wpm_reg_67
+        slave: 1
+        address: 67
+        data_type: uint16
+        scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Betriebsmodus (R/W): 0 Sommer, 1 Winter, 2 Urlaub, 3 Party, 4 2. Wärmeerzeuger, 5 Kühlen
+      # ------------------------------------------------------------------
+      - name: "WP Betriebsmodus Code"
+        unique_id: dimplex_wpm_reg_222
+        slave: 1
+        address: 222
+        data_type: uint16
+        scan_interval: 60
+      - name: "WP Partystunden"
+        unique_id: dimplex_wpm_reg_223
+        slave: 1
+        address: 223
+        data_type: uint16
+        unit_of_measurement: "h"
+        scan_interval: 300
+      - name: "WP Urlaubstage"
+        unique_id: dimplex_wpm_reg_224
+        slave: 1
+        address: 224
+        data_type: uint16
+        unit_of_measurement: "d"
+        scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Betriebsdaten - Temperaturen (nur lesen, 0,1 °C)
+      # ------------------------------------------------------------------
+      # Fühler R1
+      - name: "WP Außentemperatur"
+        unique_id: dimplex_wpm_reg_1
+        slave: 1
+        address: 1
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      # Fühler R2
+      - name: "WP Rücklauftemperatur"
+        unique_id: dimplex_wpm_reg_2
+        slave: 1
+        address: 2
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      - name: "WP Rücklaufsolltemperatur"
+        unique_id: dimplex_wpm_reg_53
+        slave: 1
+        address: 53
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      # Fühler R9
+      - name: "WP Vorlauftemperatur"
+        unique_id: dimplex_wpm_reg_5
+        slave: 1
+        address: 5
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      # Fühler R3
+      - name: "WP Warmwassertemperatur"
+        unique_id: dimplex_wpm_reg_3
+        slave: 1
+        address: 3
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      - name: "WP Warmwasser Soll aktuell"
+        unique_id: dimplex_wpm_reg_58
+        slave: 1
+        address: 58
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      # Fühler R24, nur bei Geräten mit elektronischem Expansionsventil
+      - name: "WP Wärmequelle Eintritt"
+        unique_id: dimplex_wpm_reg_6
+        slave: 1
+        address: 6
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      # Fühler R6
+      - name: "WP Wärmequelle Austritt"
+        unique_id: dimplex_wpm_reg_7
+        slave: 1
+        address: 7
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 30
+      # Raumfühler / RT-RTH Econ; ohne Raumfühler ohne Aussage
+      - name: "WP Raumtemperatur 1"
+        unique_id: dimplex_wpm_reg_11
+        slave: 1
+        address: 11
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 60
+      - name: "WP Raumtemperatur 2"
+        unique_id: dimplex_wpm_reg_12
+        slave: 1
+        address: 12
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 60
+      - name: "WP Raumfeuchte 1"
+        unique_id: dimplex_wpm_reg_13
+        slave: 1
+        address: 13
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "%"
+        device_class: humidity
+        state_class: measurement
+        scan_interval: 60
+      - name: "WP Raumfeuchte 2"
+        unique_id: dimplex_wpm_reg_14
+        slave: 1
+        address: 14
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "%"
+        device_class: humidity
+        state_class: measurement
+        scan_interval: 60
+
+      # ------------------------------------------------------------------
+      # Leistungswerte (ab Software M 3.5). Rohwert in 10 W -> Skalierung am Display gegenprüfen
+      # ------------------------------------------------------------------
+      - name: "WP Heizleistung"
+        unique_id: dimplex_wpm_reg_375
+        slave: 1
+        address: 375
+        data_type: int16
+        scale: 10
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        scan_interval: 30
+      - name: "WP Elektrische Leistung"
+        unique_id: dimplex_wpm_reg_377
+        slave: 1
+        address: 377
+        data_type: int16
+        scale: 10
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        scan_interval: 30
+      # R/W. Wird vom WPM laut Wiki derzeit nur protokolliert, keine Regelfunktion
+      - name: "WP PV Ueberschuss"
+        unique_id: dimplex_wpm_reg_389
+        slave: 1
+        address: 389
+        data_type: int16
+        scale: 10
+        precision: 0
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        scan_interval: 60
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: 2./3. Heizkreis - Betriebsdaten
+      # ------------------------------------------------------------------
+      # - name: "WP Heizkreis 2 Solltemperatur"
+      #   unique_id: dimplex_wpm_reg_54
+      #   slave: 1
+      #   address: 54
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+      # Hinweis: Fühler R5
+      # - name: "WP Heizkreis 2 Temperatur"
+      #   unique_id: dimplex_wpm_reg_9
+      #   slave: 1
+      #   address: 9
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+      # - name: "WP Heizkreis 3 Solltemperatur"
+      #   unique_id: dimplex_wpm_reg_55
+      #   slave: 1
+      #   address: 55
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+      # Hinweis: Fühler R13
+      # - name: "WP Heizkreis 3 Temperatur"
+      #   unique_id: dimplex_wpm_reg_10
+      #   slave: 1
+      #   address: 10
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Kühlen passiv / Primärkreis
+      # ------------------------------------------------------------------
+      # Hinweis: Fühler R11
+      # - name: "WP Kühlen passiv Vorlauf"
+      #   unique_id: dimplex_wpm_reg_19
+      #   slave: 1
+      #   address: 19
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+      # Hinweis: Fühler R4
+      # - name: "WP Kühlen passiv Rücklauf"
+      #   unique_id: dimplex_wpm_reg_20
+      #   slave: 1
+      #   address: 20
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+      # Hinweis: Fühler R24
+      # - name: "WP Rücklauf gemeinsamer Primärkreis"
+      #   unique_id: dimplex_wpm_reg_21
+      #   slave: 1
+      #   address: 21
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Solar
+      # ------------------------------------------------------------------
+      # Hinweis: Fühler R23. Das Wiki nennt Adresse 10 auch für den 3. Heizkreis - nur eines von beiden aktivieren
+      # - name: "WP Solar Kollektorfühler"
+      #   unique_id: dimplex_wpm_reg_10_solar
+      #   slave: 1
+      #   address: 10
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+      # Hinweis: Fühler R22
+      # - name: "WP Solarspeicher"
+      #   unique_id: dimplex_wpm_reg_23
+      #   slave: 1
+      #   address: 23
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 30
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Lüftung (nur mit Lüftungsgerät ZL ... V(F) am WPM)
+      # ------------------------------------------------------------------
+      # - name: "WP Lüftung Außenluft"
+      #   unique_id: dimplex_wpm_reg_120
+      #   slave: 1
+      #   address: 120
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 60
+      # - name: "WP Lüftung Zuluft"
+      #   unique_id: dimplex_wpm_reg_121
+      #   slave: 1
+      #   address: 121
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 60
+      # - name: "WP Lüftung Abluft"
+      #   unique_id: dimplex_wpm_reg_122
+      #   slave: 1
+      #   address: 122
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 60
+      # - name: "WP Lüftung Fortluft"
+      #   unique_id: dimplex_wpm_reg_123
+      #   slave: 1
+      #   address: 123
+      #   data_type: int16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   state_class: measurement
+      #   scan_interval: 60
+      # - name: "WP Lüftung Drehzahl Zuluftventilator"
+      #   unique_id: dimplex_wpm_reg_125
+      #   slave: 1
+      #   address: 125
+      #   data_type: int16
+      #   unit_of_measurement: "1/min"
+      #   state_class: measurement
+      #   scan_interval: 60
+      # - name: "WP Lüftung Drehzahl Abluftventilator"
+      #   unique_id: dimplex_wpm_reg_126
+      #   slave: 1
+      #   address: 126
+      #   data_type: int16
+      #   unit_of_measurement: "1/min"
+      #   state_class: measurement
+      #   scan_interval: 60
+      # Hinweis: R/W, 0...5
+      # - name: "WP Lüftung Stufe"
+      #   unique_id: dimplex_wpm_reg_241
+      #   slave: 1
+      #   address: 241
+      #   data_type: uint16
+      #   scan_interval: 60
+      # Hinweis: R/W, 15...90
+      # - name: "WP Lüftung Zeitwert Stosslüften"
+      #   unique_id: dimplex_wpm_reg_127
+      #   slave: 1
+      #   address: 127
+      #   data_type: uint16
+      #   unit_of_measurement: "min"
+      #   scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Laufzeiten (Stunden)
+      # ------------------------------------------------------------------
+      - name: "WP Laufzeit Verdichter 1"
+        unique_id: dimplex_wpm_reg_72
+        slave: 1
+        address: 72
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      - name: "WP Laufzeit Verdichter 2"
+        unique_id: dimplex_wpm_reg_73
+        slave: 1
+        address: 73
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # Primärpumpe / Ventilator (M11)
+      - name: "WP Laufzeit Ventilator"
+        unique_id: dimplex_wpm_reg_74
+        slave: 1
+        address: 74
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # E10
+      - name: "WP Laufzeit 2. Wärmeerzeuger"
+        unique_id: dimplex_wpm_reg_75
+        slave: 1
+        address: 75
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # M13
+      - name: "WP Laufzeit Heizungspumpe"
+        unique_id: dimplex_wpm_reg_76
+        slave: 1
+        address: 76
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # M18
+      - name: "WP Laufzeit Warmwasserpumpe"
+        unique_id: dimplex_wpm_reg_77
+        slave: 1
+        address: 77
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # E9
+      - name: "WP Laufzeit Flanschheizung"
+        unique_id: dimplex_wpm_reg_78
+        slave: 1
+        address: 78
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # M16
+      - name: "WP Laufzeit Zusatzumwälzpumpe"
+        unique_id: dimplex_wpm_reg_71
+        slave: 1
+        address: 71
+        data_type: uint16
+        unit_of_measurement: "h"
+        device_class: duration
+        state_class: total_increasing
+        scan_interval: 300
+      # Hinweis: M19
+      # - name: "WP Laufzeit Schwimmbadpumpe"
+      #   unique_id: dimplex_wpm_reg_79
+      #   slave: 1
+      #   address: 79
+      #   data_type: uint16
+      #   unit_of_measurement: "h"
+      #   device_class: duration
+      #   state_class: total_increasing
+      #   scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Wärme- und Energiemengen (je 3 Register; Summe siehe template-Sensoren)
+      # ------------------------------------------------------------------
+      # Gesamt = Teil 3 x 100.000.000 + Teil 2 x 10.000 + Teil 1  [kWh]
+      # Nur bei integriertem Wärmemengenzähler oder externem WMZ 25/32 belegt.
+      - name: "WP WMZ Heizen Teil 1"
+        unique_id: dimplex_wpm_reg_303
+        slave: 1
+        address: 303
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP WMZ Heizen Teil 2"
+        unique_id: dimplex_wpm_reg_304
+        slave: 1
+        address: 304
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP WMZ Heizen Teil 3"
+        unique_id: dimplex_wpm_reg_305
+        slave: 1
+        address: 305
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP WMZ Warmwasser Teil 1"
+        unique_id: dimplex_wpm_reg_306
+        slave: 1
+        address: 306
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP WMZ Warmwasser Teil 2"
+        unique_id: dimplex_wpm_reg_307
+        slave: 1
+        address: 307
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP WMZ Warmwasser Teil 3"
+        unique_id: dimplex_wpm_reg_308
+        slave: 1
+        address: 308
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP Umweltenergie Teil 1"
+        unique_id: dimplex_wpm_reg_334
+        slave: 1
+        address: 334
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP Umweltenergie Teil 2"
+        unique_id: dimplex_wpm_reg_335
+        slave: 1
+        address: 335
+        data_type: uint16
+        scan_interval: 300
+      - name: "WP Umweltenergie Teil 3"
+        unique_id: dimplex_wpm_reg_336
+        slave: 1
+        address: 336
+        data_type: uint16
+        scan_interval: 300
+      # - name: "WP WMZ Schwimmbad Teil 1"
+      #   unique_id: dimplex_wpm_reg_309
+      #   slave: 1
+      #   address: 309
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP WMZ Schwimmbad Teil 2"
+      #   unique_id: dimplex_wpm_reg_310
+      #   slave: 1
+      #   address: 310
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP WMZ Schwimmbad Teil 3"
+      #   unique_id: dimplex_wpm_reg_311
+      #   slave: 1
+      #   address: 311
+      #   data_type: uint16
+      #   scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Einstellungen 1. Heiz-/Kühlkreis (R/W)
+      # ------------------------------------------------------------------
+      # Rohwert 0...38 entspricht -19...+19 (19 = 0). Anzeige hier bereits umgerechnet
+      - name: "WP Parallelverschiebung"
+        unique_id: dimplex_wpm_reg_243
+        slave: 1
+        address: 243
+        data_type: uint16
+        scale: 1
+        offset: -19
+        precision: 0
+        unit_of_measurement: "K"
+        scan_interval: 60
+      # 15,0...30,0 °C
+      - name: "WP Raumsolltemperatur"
+        unique_id: dimplex_wpm_reg_46
+        slave: 1
+        address: 46
+        data_type: uint16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 60
+      # 18...60 °C
+      - name: "WP Festwertsolltemperatur"
+        unique_id: dimplex_wpm_reg_244
+        slave: 1
+        address: 244
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+      # 20...70 °C
+      - name: "WP Heizkurvenendpunkt"
+        unique_id: dimplex_wpm_reg_245
+        slave: 1
+        address: 245
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+      # 0,5...5,0 K
+      - name: "WP Heizkreis 1 Hysterese"
+        unique_id: dimplex_wpm_reg_47
+        slave: 1
+        address: 47
+        data_type: uint16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "K"
+        scan_interval: 300
+      # dynamische Kühlung, 10...35 °C
+      - name: "WP Kuehlen Solltemperatur bei 15 Grad AT"
+        unique_id: dimplex_wpm_reg_250
+        slave: 1
+        address: 250
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+      # dynamische Kühlung, 10...35 °C
+      - name: "WP Kuehlen Solltemperatur bei 35 Grad AT"
+        unique_id: dimplex_wpm_reg_341
+        slave: 1
+        address: 341
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Einstellungen Warmwasser (R/W)
+      # ------------------------------------------------------------------
+      # Solltemp. Min ... 85 °C
+      - name: "WP Warmwasser Solltemperatur"
+        unique_id: dimplex_wpm_reg_254
+        slave: 1
+        address: 254
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 60
+      # Wird im Smart-Grid-Zustand Grün als Ziel benutzt
+      - name: "WP Warmwasser Maximaltemperatur"
+        unique_id: dimplex_wpm_reg_255
+        slave: 1
+        address: 255
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+      # Wird im Smart-Grid-Zustand Rot als Ziel benutzt
+      - name: "WP Warmwasser Minimaltemperatur"
+        unique_id: dimplex_wpm_reg_352
+        slave: 1
+        address: 352
+        data_type: uint16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+      # 2...15 K
+      - name: "WP Warmwasser Hysterese"
+        unique_id: dimplex_wpm_reg_252
+        slave: 1
+        address: 252
+        data_type: uint16
+        unit_of_measurement: "K"
+        scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Einstellungen 2. Wärmeerzeuger (R/W)
+      # ------------------------------------------------------------------
+      # -25...35 °C
+      - name: "WP 2WE Grenztemperatur parallel"
+        unique_id: dimplex_wpm_reg_227
+        slave: 1
+        address: 227
+        data_type: int16
+        unit_of_measurement: "°C"
+        device_class: temperature
+        scan_interval: 300
+      # 0,5...2,0 K
+      - name: "WP 2WE Mischer Hysterese"
+        unique_id: dimplex_wpm_reg_48
+        slave: 1
+        address: 48
+        data_type: uint16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "K"
+        scan_interval: 300
+      # 1...6 min
+      - name: "WP 2WE Mischerlaufzeit"
+        unique_id: dimplex_wpm_reg_228
+        slave: 1
+        address: 228
+        data_type: uint16
+        unit_of_measurement: "min"
+        scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # Funktionen (R/W)
+      # ------------------------------------------------------------------
+      # ab M 1.3: 0 Hardware-Eingang, 10 Gelb/Normal, 11 Grün/verstärkt, 12 Rot/abgesenkt, 13 Dunkelgrün. Nach Spannungsreset wieder 0
+      - name: "WP Smart Grid Code"
+        unique_id: dimplex_wpm_reg_374
+        slave: 1
+        address: 374
+        data_type: uint16
+        scan_interval: 30
+      # ab M 3.8: 0 Hardware-Eingang, 10 nicht aktiv, 11 aktiv. Nach Spannungsreset wieder 0
+      - name: "WP Sperre Extern Code"
+        unique_id: dimplex_wpm_reg_337
+        slave: 1
+        address: 337
+        data_type: uint16
+        scan_interval: 60
+      # Extern vorgebbare Außentemperatur (-99,9 = nicht beschrieben). Vor M 3.15 nur nach Freischaltung durch den Kundendienst wirksam
+      - name: "WP Aussentemperatur BMS"
+        unique_id: dimplex_wpm_reg_112
+        slave: 1
+        address: 112
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 300
+      # Heartbeat (erst ab M 3.14, bei M 3.11 nicht vorhanden): Register 62 (schreiben) / 63 (lesen)
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Einstellungen 2./3. Heizkreis (R/W)
+      # ------------------------------------------------------------------
+      # Vor dem Lesen/Schreiben wird über Register 289 der Kreis gewählt (2 oder 3).
+      # - name: "WP HK2-3 Auswahl Heizkreis"
+      #   unique_id: dimplex_wpm_reg_289
+      #   slave: 1
+      #   address: 289
+      #   data_type: uint16
+      #   scan_interval: 300
+      # Hinweis: 20...70 °C
+      # - name: "WP HK2-3 Heizkurvenendpunkt"
+      #   unique_id: dimplex_wpm_reg_291
+      #   slave: 1
+      #   address: 291
+      #   data_type: uint16
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # Hinweis: 20...60 °C
+      # - name: "WP HK2-3 Festwerttemperatur"
+      #   unique_id: dimplex_wpm_reg_292
+      #   slave: 1
+      #   address: 292
+      #   data_type: uint16
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # Hinweis: 0...38 entspricht -19...+19
+      # - name: "WP HK2-3 Parallelverschiebung"
+      #   unique_id: dimplex_wpm_reg_293
+      #   slave: 1
+      #   address: 293
+      #   data_type: uint16
+      #   scale: 1
+      #   offset: -19
+      #   precision: 0
+      #   unit_of_measurement: "K"
+      #   scan_interval: 300
+      # Hinweis: 1...6 min
+      # - name: "WP HK2-3 Mischerlaufzeit"
+      #   unique_id: dimplex_wpm_reg_294
+      #   slave: 1
+      #   address: 294
+      #   data_type: uint16
+      #   unit_of_measurement: "min"
+      #   scan_interval: 300
+      # Hinweis: 0,5...2,0 K
+      # - name: "WP HK2-3 Mischerhysterese"
+      #   unique_id: dimplex_wpm_reg_93
+      #   slave: 1
+      #   address: 93
+      #   data_type: uint16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "K"
+      #   scan_interval: 300
+      # Hinweis: 30...70 °C
+      # - name: "WP HK2-3 Maximale Temperatur"
+      #   unique_id: dimplex_wpm_reg_295
+      #   slave: 1
+      #   address: 295
+      #   data_type: uint16
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # Hinweis: Rohwert 0...30 entspricht 15,0...30,0 °C
+      # - name: "WP HK2-3 Kühlung Raumsolltemperatur"
+      #   unique_id: dimplex_wpm_reg_296
+      #   slave: 1
+      #   address: 296
+      #   data_type: uint16
+      #   scale: 0.5
+      #   offset: 15
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Einstellungen Schwimmbad (R/W)
+      # ------------------------------------------------------------------
+      # Hinweis: 5...60 °C
+      # - name: "WP Schwimmbad Solltemperatur"
+      #   unique_id: dimplex_wpm_reg_258
+      #   slave: 1
+      #   address: 258
+      #   data_type: uint16
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # - name: "WP Schwimmbad Maximaltemperatur"
+      #   unique_id: dimplex_wpm_reg_259
+      #   slave: 1
+      #   address: 259
+      #   data_type: uint16
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # - name: "WP Schwimmbad Minimaltemperatur"
+      #   unique_id: dimplex_wpm_reg_353
+      #   slave: 1
+      #   address: 353
+      #   data_type: uint16
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # Hinweis: 1...20 K
+      # - name: "WP Schwimmbad Hysterese"
+      #   unique_id: dimplex_wpm_reg_256
+      #   slave: 1
+      #   address: 256
+      #   data_type: uint16
+      #   unit_of_measurement: "K"
+      #   scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Raumtemperaturregelung über BMS (R/W, muss vom Kundendienst aktiviert sein)
+      # ------------------------------------------------------------------
+      # Ist-Temperatur wird auf Register 11, Ist-Feuchte auf Register 13 geschrieben (jeweils x10).
+      # Hinweis: 50-59 = 1. Kreis, 60-69 = 2. Kreis, 70-79 = 3. Kreis
+      # - name: "WP BMS Raumadresse"
+      #   unique_id: dimplex_wpm_reg_272
+      #   slave: 1
+      #   address: 272
+      #   data_type: uint16
+      #   scan_interval: 300
+      # Hinweis: 10,0...30,0 °C
+      # - name: "WP BMS Raumsolltemperatur"
+      #   unique_id: dimplex_wpm_reg_288
+      #   slave: 1
+      #   address: 288
+      #   data_type: uint16
+      #   scale: 0.1
+      #   precision: 1
+      #   unit_of_measurement: "°C"
+      #   device_class: temperature
+      #   scan_interval: 300
+      # Hinweis: 1 = nur Heizen, 3 = Heizen und Kühlen
+      # - name: "WP BMS Raumfreigabe"
+      #   unique_id: dimplex_wpm_reg_371
+      #   slave: 1
+      #   address: 371
+      #   data_type: uint16
+      #   scan_interval: 300
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Uhrzeit des WPM (R/W)
+      # ------------------------------------------------------------------
+      # Stellen: Wert ins Register schreiben, danach die zugehörige set-Coil auf 1:
+      # Stunde 213/Coil 102, Minute 214/Coil 103, Tag 217/Coil 104, Monat 215/Coil 105,
+      # Jahr 218/Coil 106 (zweistellig), Wochentag 216/Coil 107 (1 = Montag).
+      # - name: "WP Uhr Stunde"
+      #   unique_id: dimplex_wpm_reg_213
+      #   slave: 1
+      #   address: 213
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP Uhr Minute"
+      #   unique_id: dimplex_wpm_reg_214
+      #   slave: 1
+      #   address: 214
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP Uhr Tag"
+      #   unique_id: dimplex_wpm_reg_217
+      #   slave: 1
+      #   address: 217
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP Uhr Monat"
+      #   unique_id: dimplex_wpm_reg_215
+      #   slave: 1
+      #   address: 215
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP Uhr Jahr"
+      #   unique_id: dimplex_wpm_reg_218
+      #   slave: 1
+      #   address: 218
+      #   data_type: uint16
+      #   scan_interval: 300
+      # - name: "WP Uhr Wochentag"
+      #   unique_id: dimplex_wpm_reg_216
+      #   slave: 1
+      #   address: 216
+      #   data_type: uint16
+      #   scan_interval: 300
+
+    binary_sensors:
+
+      # ------------------------------------------------------------------
+      # Eingänge (nur lesen)
+      # ------------------------------------------------------------------
+      - name: "WP Eingang Smart Grid 1"
+        unique_id: dimplex_wpm_coil_3
+        slave: 1
+        address: 3
+        input_type: coil
+        scan_interval: 30
+      - name: "WP Eingang Smart Grid 2"
+        unique_id: dimplex_wpm_coil_4
+        slave: 1
+        address: 4
+        input_type: coil
+        scan_interval: 30
+      - name: "WP Eingang EVU-Sperre"
+        unique_id: dimplex_wpm_coil_5
+        slave: 1
+        address: 5
+        input_type: coil
+        scan_interval: 30
+      - name: "WP Eingang Sperre Extern"
+        unique_id: dimplex_wpm_coil_6
+        slave: 1
+        address: 6
+        input_type: coil
+        scan_interval: 30
+
+      # ------------------------------------------------------------------
+      # Ausgänge (nur lesen). Das Wiki führt diese Liste nur für Software J/L - bei M prüfen
+      # ------------------------------------------------------------------
+      - name: "WP Verdichter 1"
+        unique_id: dimplex_wpm_coil_41
+        slave: 1
+        address: 41
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Verdichter 2"
+        unique_id: dimplex_wpm_coil_42
+        slave: 1
+        address: 42
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Ventilator"
+        unique_id: dimplex_wpm_coil_43
+        slave: 1
+        address: 43
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP 2. Wärmeerzeuger"
+        unique_id: dimplex_wpm_coil_44
+        slave: 1
+        address: 44
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Heizungspumpe M13"
+        unique_id: dimplex_wpm_coil_45
+        slave: 1
+        address: 45
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Warmwasserpumpe M18"
+        unique_id: dimplex_wpm_coil_46
+        slave: 1
+        address: 46
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Mischer M21 Auf"
+        unique_id: dimplex_wpm_coil_47
+        slave: 1
+        address: 47
+        input_type: coil
+        scan_interval: 30
+      - name: "WP Mischer M21 Zu"
+        unique_id: dimplex_wpm_coil_48
+        slave: 1
+        address: 48
+        input_type: coil
+        scan_interval: 30
+      - name: "WP Zusatzumwälzpumpe M16"
+        unique_id: dimplex_wpm_coil_49
+        slave: 1
+        address: 49
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Flanschheizung E9"
+        unique_id: dimplex_wpm_coil_50
+        slave: 1
+        address: 50
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Heizungspumpe M15"
+        unique_id: dimplex_wpm_coil_51
+        slave: 1
+        address: 51
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Sammelstörmeldung H5"
+        unique_id: dimplex_wpm_coil_57
+        slave: 1
+        address: 57
+        input_type: coil
+        device_class: problem
+        scan_interval: 30
+      - name: "WP Heizungspumpe M14"
+        unique_id: dimplex_wpm_coil_59
+        slave: 1
+        address: 59
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Kühlpumpe M17"
+        unique_id: dimplex_wpm_coil_60
+        slave: 1
+        address: 60
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Heizungspumpe M20"
+        unique_id: dimplex_wpm_coil_61
+        slave: 1
+        address: 61
+        input_type: coil
+        device_class: running
+        scan_interval: 30
+      - name: "WP Umschaltung Raumthermostate Heizen-Kühlen N9"
+        unique_id: dimplex_wpm_coil_66
+        slave: 1
+        address: 66
+        input_type: coil
+        scan_interval: 30
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: Ausgänge für 2. Mischkreis, Schwimmbad, passive Kühlung, Solar, Stellventil
+      # ------------------------------------------------------------------
+      # - name: "WP Mischer M22 Auf"
+      #   unique_id: dimplex_wpm_coil_52
+      #   slave: 1
+      #   address: 52
+      #   input_type: coil
+      #   scan_interval: 30
+      # - name: "WP Mischer M22 Zu"
+      #   unique_id: dimplex_wpm_coil_53
+      #   slave: 1
+      #   address: 53
+      #   input_type: coil
+      #   scan_interval: 30
+      # - name: "WP Schwimmbadpumpe M19"
+      #   unique_id: dimplex_wpm_coil_56
+      #   slave: 1
+      #   address: 56
+      #   input_type: coil
+      #   device_class: running
+      #   scan_interval: 30
+      # - name: "WP Primärpumpe Kühlen M12"
+      #   unique_id: dimplex_wpm_coil_68
+      #   slave: 1
+      #   address: 68
+      #   input_type: coil
+      #   device_class: running
+      #   scan_interval: 30
+      # - name: "WP Solarpumpe M23"
+      #   unique_id: dimplex_wpm_coil_71
+      #   slave: 1
+      #   address: 71
+      #   input_type: coil
+      #   device_class: running
+      #   scan_interval: 30
+      # - name: "WP BMS Zustand Stellventil"
+      #   unique_id: dimplex_wpm_coil_177
+      #   slave: 1
+      #   address: 177
+      #   input_type: coil
+      #   scan_interval: 30
+
+# =============================================================================
+# Klartext, Summen und Schreibfunktionen
+# =============================================================================
+template:
+  - sensor:
+      - name: "WP Status"
+        unique_id: dimplex_wpm_status_text
+        icon: mdi:heat-pump
+        availability: "{{ has_value('sensor.wp_statuscode') }}"
+        state: >-
+          {% set m = {0: 'Aus', 1: 'Aus', 2: 'Heizen', 3: 'Schwimmbad', 4: 'Warmwasser', 5: 'Kühlen', 10: 'Abtauen', 11: 'Durchflussüberwachung', 24: 'Verzögerung Betriebsmodusumschaltung', 30: 'Sperre'} %}
+          {% set v = states('sensor.wp_statuscode') | int(-1) %}
+          {{ m.get(v, 'Unbekannt (' ~ v ~ ')') }}
+      - name: "WP Sperre"
+        unique_id: dimplex_wpm_sperre_text
+        icon: mdi:lock-clock
+        availability: "{{ has_value('sensor.wp_sperrcode') }}"
+        state: >-
+          {% set m = {0: 'Keine', 2: 'Volumenstrom', 5: 'Funktionskontrolle', 6: 'Einsatzgrenze HT', 7: 'Systemkontrolle', 8: 'Verzögerung Umschaltung Kühlen', 9: 'Pumpenvorlauf', 10: 'Mindeststandzeit', 11: 'Netzbelastung', 12: 'Schaltspielsperre', 13: 'Warmwasser Nacherwärmung', 14: 'Regenerativ', 15: 'EVU-Sperre', 16: 'Sanftanlasser', 17: 'Durchfluss', 18: 'Einsatzgrenze Wärmepumpe', 19: 'Hochdruck', 20: 'Niederdruck', 21: 'Einsatzgrenze Wärmequelle', 23: 'System Grenze', 24: 'Last Primärkreis', 25: 'Sperre Extern', 29: 'Inverter', 31: 'Aufwärmen', 33: 'EvD Initialisierung', 34: '2. Wärmeerzeuger freigegeben', 35: 'Störung'} %}
+          {% set v = states('sensor.wp_sperrcode') | int(-1) %}
+          {{ m.get(v, 'Unbekannt (' ~ v ~ ')') }}
+      - name: "WP Störung"
+        unique_id: dimplex_wpm_stoerung_text
+        icon: mdi:alert-circle-outline
+        availability: "{{ has_value('sensor.wp_fehlercode') }}"
+        state: >-
+          {% set m = {0: 'Kein Fehler', 1: 'Fehler N17.1', 2: 'Fehler N17.2', 3: 'Fehler N17.3', 4: 'Fehler N17.4', 6: 'Elektronisches Ex.Ventil', 10: 'WPIO', 12: 'Inverter', 13: 'WQIF', 15: 'Sensorfehler', 16: 'Niederdruck Sole', 19: '!Primärkreis', 20: '!Abtauen', 21: '!Niederdruck Sole', 22: '!Warmwasser', 23: '!Last Verdichter', 24: '!Codierung', 25: '!Niederdruck', 26: '!Frostschutz', 28: '!Hochdruck', 29: '!Temperatur Differenz', 30: '!Heissgasthermostat', 31: '!Durchfluss', 32: '!Aufwärmen'} %}
+          {% set v = states('sensor.wp_fehlercode') | int(-1) %}
+          {{ m.get(v, 'Unbekannt (' ~ v ~ ')') }}
+      - name: "WP Sensorfehler"
+        unique_id: dimplex_wpm_sensorfehler_text
+        icon: mdi:thermometer-alert
+        availability: "{{ has_value('sensor.wp_sensorfehlercode') }}"
+        state: >-
+          {% set m = {0: 'Kein Fehler', 1: 'Außenfühler (R1)', 2: 'Rücklauffühler (R2)', 3: 'Warmwasserfühler (R3)', 4: 'Codierung (R7)', 5: 'Vorlauffühler (R9)', 6: '2. Heizkreisfühler (R5)', 7: '3. Heizkreisfühler (R13)', 8: 'Regenerativfühler (R13)', 9: 'Raumfühler 1', 10: 'Raumfühler 2', 11: 'Fühler Wärmequellenaustritt (R6)', 12: 'Fühler Wärmequelleneintritt (R24)', 14: 'Kollektorfühler (R23)', 15: 'Niederdrucksensor (R25)', 16: 'Hochdrucksensor (R26)', 17: 'Raumfeuchte 1', 18: 'Raumfeuchte 2', 19: 'Fühler Frostschutz-Kälte', 20: 'Heißgas', 21: 'Rücklauffühler (R2.1)', 22: 'Schwimmbadfühler (R20)', 23: 'Vorlauffühler Kühlen Passiv (R11)', 24: 'Rücklauffühler Kühlen Passiv (R4)', 26: 'Fühler Solarspeicher (R22)', 28: 'Anforderungsfühler Heizen (R2.2)', 29: 'RTM Econ', 30: 'Anforderungsfühler Kühlen (R39)', 37: 'Öltemperaturfühler Verdichter 1', 39: 'Öltemperaturfühler Verdichter 2', 41: 'Heißgasfühler Verdichter 1', 43: 'Heißgasfühler Verdichter 2', 45: 'Verdampfer Lufteintrittsfühler', 48: 'Durchflusssensor Sekundärkreis', 49: 'Drucksensor Sekundärkreis', 50: 'Durchflusssensor Primärkreis', 51: 'Drucksensor Primärkreis', 52: 'Sauggasfühler'} %}
+          {% set v = states('sensor.wp_sensorfehlercode') | int(-1) %}
+          {{ m.get(v, 'Unbekannt (' ~ v ~ ')') }}
+      - name: "WP Betriebsmodus"
+        unique_id: dimplex_wpm_betriebsmodus_text
+        icon: mdi:sun-snowflake-variant
+        availability: "{{ has_value('sensor.wp_betriebsmodus_code') }}"
+        state: >-
+          {% set m = {0: 'Sommer', 1: 'Winter', 2: 'Urlaub', 3: 'Party', 4: '2. Wärmeerzeuger', 5: 'Kühlen'} %}
+          {% set v = states('sensor.wp_betriebsmodus_code') | int(-1) %}
+          {{ m.get(v, 'Unbekannt (' ~ v ~ ')') }}
+      - name: "WP Smart Grid"
+        unique_id: dimplex_wpm_smart_grid_text
+        icon: mdi:transmission-tower
+        availability: "{{ has_value('sensor.wp_smart_grid_code') }}"
+        state: >-
+          {% set m = {0: 'Hardware-Eingang', 10: 'Normalbetrieb (gelb)', 11: 'Verstärkter Betrieb (grün)', 12: 'Abgesenkter Betrieb (rot)', 13: 'Verstärkt Stufe 3 (dunkelgrün)'} %}
+          {% set v = states('sensor.wp_smart_grid_code') | int(-1) %}
+          {{ m.get(v, 'Unbekannt (' ~ v ~ ')') }}
+      - name: "WP Softwarestand"
+        unique_id: dimplex_wpm_softwarestand
+        icon: mdi:chip
+        availability: >-
+          {{ has_value('sensor.wp_software_buchstabe') and has_value('sensor.wp_software_nummer') and has_value('sensor.wp_software_index') }}
+        state: >-
+          {% set b = states('sensor.wp_software_buchstabe') | int(0) %}
+          {{ ('ABCDEFGHIJKLMNOPQRSTUVWXYZ'[b - 1] if 1 <= b <= 26 else '?')
+             ~ states('sensor.wp_software_nummer') ~ '.' ~ states('sensor.wp_software_index') }}
+      # Summen der Wärmemengenzähler. Die drei Teilregister werden nacheinander gelesen;
+      # beim Überlauf eines Teilregisters kann kurz ein falscher Wert entstehen.
+      - name: "WP Wärmemenge Heizen"
+        unique_id: dimplex_wpm_waermemenge_heizen
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        availability: >-
+          {{ has_value('sensor.wp_wmz_heizen_teil_1') and has_value('sensor.wp_wmz_heizen_teil_2') and has_value('sensor.wp_wmz_heizen_teil_3') }}
+        state: >-
+          {{ states('sensor.wp_wmz_heizen_teil_3') | int * 100000000
+             + states('sensor.wp_wmz_heizen_teil_2') | int * 10000
+             + states('sensor.wp_wmz_heizen_teil_1') | int }}
+      - name: "WP Wärmemenge Warmwasser"
+        unique_id: dimplex_wpm_waermemenge_warmwasser
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        availability: >-
+          {{ has_value('sensor.wp_wmz_warmwasser_teil_1') and has_value('sensor.wp_wmz_warmwasser_teil_2') and has_value('sensor.wp_wmz_warmwasser_teil_3') }}
+        state: >-
+          {{ states('sensor.wp_wmz_warmwasser_teil_3') | int * 100000000
+             + states('sensor.wp_wmz_warmwasser_teil_2') | int * 10000
+             + states('sensor.wp_wmz_warmwasser_teil_1') | int }}
+      - name: "WP Umweltenergie"
+        unique_id: dimplex_wpm_umweltenergie
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        availability: >-
+          {{ has_value('sensor.wp_umweltenergie_teil_1') and has_value('sensor.wp_umweltenergie_teil_2') and has_value('sensor.wp_umweltenergie_teil_3') }}
+        state: >-
+          {{ states('sensor.wp_umweltenergie_teil_3') | int * 100000000
+             + states('sensor.wp_umweltenergie_teil_2') | int * 10000
+             + states('sensor.wp_umweltenergie_teil_1') | int }}
+
+  - select:
+      - name: "WP Betriebsmodus setzen"
+        unique_id: dimplex_wpm_select_betriebsmodus
+        icon: mdi:sun-snowflake-variant
+        availability: "{{ has_value('sensor.wp_betriebsmodus_code') }}"
+        options: "{{ ['Sommer', 'Winter', 'Urlaub', 'Party', '2. Wärmeerzeuger', 'Kühlen'] }}"
+        state: >-
+          {% set m = {0: 'Sommer', 1: 'Winter', 2: 'Urlaub', 3: 'Party', 4: '2. Wärmeerzeuger', 5: 'Kühlen'} %}
+          {{ m.get(states('sensor.wp_betriebsmodus_code') | int(-1)) }}
+        select_option:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 222
+              value: >-
+                {% set m = {'Sommer': 0, 'Winter': 1, 'Urlaub': 2, 'Party': 3, '2. Wärmeerzeuger': 4, 'Kühlen': 5} %}
+                {{ m[option] }}
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_betriebsmodus_code
+      # Grün = Warmwasser auf Maximaltemperatur laden + Heizung um den Anhebungswert anheben. Danach wieder auf Normalbetrieb (gelb) oder Hardware-Eingang stellen.
+      - name: "WP Smart Grid setzen"
+        unique_id: dimplex_wpm_select_smart_grid
+        icon: mdi:transmission-tower
+        availability: "{{ has_value('sensor.wp_smart_grid_code') }}"
+        options: "{{ ['Hardware-Eingang', 'Normalbetrieb (gelb)', 'Verstärkter Betrieb (grün)', 'Abgesenkter Betrieb (rot)', 'Verstärkt Stufe 3 (dunkelgrün)'] }}"
+        state: >-
+          {% set m = {0: 'Hardware-Eingang', 10: 'Normalbetrieb (gelb)', 11: 'Verstärkter Betrieb (grün)', 12: 'Abgesenkter Betrieb (rot)', 13: 'Verstärkt Stufe 3 (dunkelgrün)'} %}
+          {{ m.get(states('sensor.wp_smart_grid_code') | int(-1)) }}
+        select_option:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 374
+              value: >-
+                {% set m = {'Hardware-Eingang': 0, 'Normalbetrieb (gelb)': 10, 'Verstärkter Betrieb (grün)': 11, 'Abgesenkter Betrieb (rot)': 12, 'Verstärkt Stufe 3 (dunkelgrün)': 13} %}
+                {{ m[option] }}
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_smart_grid_code
+      # Was die Sperre bewirkt (Frostschutz, Urlaub, Sperre Warmwasser, Sommer), wird am WPM eingestellt.
+      - name: "WP Sperre Extern setzen"
+        unique_id: dimplex_wpm_select_sperre_extern
+        icon: mdi:lock-outline
+        availability: "{{ has_value('sensor.wp_sperre_extern_code') }}"
+        options: "{{ ['Hardware-Eingang', 'Sperre nicht aktiv', 'Sperre aktiv'] }}"
+        state: >-
+          {% set m = {0: 'Hardware-Eingang', 10: 'Sperre nicht aktiv', 11: 'Sperre aktiv'} %}
+          {{ m.get(states('sensor.wp_sperre_extern_code') | int(-1)) }}
+        select_option:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 337
+              value: >-
+                {% set m = {'Hardware-Eingang': 0, 'Sperre nicht aktiv': 10, 'Sperre aktiv': 11} %}
+                {{ m[option] }}
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_sperre_extern_code
+
+  - number:
+      - name: "WP Warmwasser Solltemperatur setzen"
+        unique_id: dimplex_wpm_num_ww_soll
+        icon: mdi:water-thermometer
+        availability: "{{ has_value('sensor.wp_warmwasser_solltemperatur') }}"
+        state: "{{ states('sensor.wp_warmwasser_solltemperatur') }}"
+        min: 30
+        max: 60
+        step: 1
+        unit_of_measurement: "°C"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 254
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_warmwasser_solltemperatur
+      # Ziel bei Smart Grid Grün. Darf nicht unter der Solltemperatur liegen.
+      - name: "WP Warmwasser Maximaltemperatur setzen"
+        unique_id: dimplex_wpm_num_ww_max
+        icon: mdi:water-thermometer
+        availability: "{{ has_value('sensor.wp_warmwasser_maximaltemperatur') }}"
+        state: "{{ states('sensor.wp_warmwasser_maximaltemperatur') }}"
+        min: 40
+        max: 65
+        step: 1
+        unit_of_measurement: "°C"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 255
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_warmwasser_maximaltemperatur
+      # Ziel bei Smart Grid Rot. Darf nicht über der Solltemperatur liegen.
+      - name: "WP Warmwasser Minimaltemperatur setzen"
+        unique_id: dimplex_wpm_num_ww_min
+        icon: mdi:water-thermometer
+        availability: "{{ has_value('sensor.wp_warmwasser_minimaltemperatur') }}"
+        state: "{{ states('sensor.wp_warmwasser_minimaltemperatur') }}"
+        min: 10
+        max: 50
+        step: 1
+        unit_of_measurement: "°C"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 352
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_warmwasser_minimaltemperatur
+      - name: "WP Warmwasser Hysterese setzen"
+        unique_id: dimplex_wpm_num_ww_hyst
+        icon: mdi:arrow-expand-vertical
+        availability: "{{ has_value('sensor.wp_warmwasser_hysterese') }}"
+        state: "{{ states('sensor.wp_warmwasser_hysterese') }}"
+        min: 2
+        max: 15
+        step: 1
+        unit_of_measurement: "K"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 252
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_warmwasser_hysterese
+      # Heizungsanhebung/-absenkung über die Heizkurve. Geschrieben wird Wert + 19.
+      - name: "WP Parallelverschiebung setzen"
+        unique_id: dimplex_wpm_num_parallelverschiebung
+        icon: mdi:chart-line
+        availability: "{{ has_value('sensor.wp_parallelverschiebung') }}"
+        state: "{{ states('sensor.wp_parallelverschiebung') }}"
+        min: -19
+        max: 19
+        step: 1
+        unit_of_measurement: "K"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 243
+              value: "{{ value | int + 19 }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_parallelverschiebung
+      - name: "WP Heizkurvenendpunkt setzen"
+        unique_id: dimplex_wpm_num_heizkurvenendpunkt
+        icon: mdi:chart-bell-curve-cumulative
+        availability: "{{ has_value('sensor.wp_heizkurvenendpunkt') }}"
+        state: "{{ states('sensor.wp_heizkurvenendpunkt') }}"
+        min: 20
+        max: 70
+        step: 1
+        unit_of_measurement: "°C"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 245
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_heizkurvenendpunkt
+      - name: "WP Festwertsolltemperatur setzen"
+        unique_id: dimplex_wpm_num_festwert
+        icon: mdi:thermometer
+        availability: "{{ has_value('sensor.wp_festwertsolltemperatur') }}"
+        state: "{{ states('sensor.wp_festwertsolltemperatur') }}"
+        min: 18
+        max: 60
+        step: 1
+        unit_of_measurement: "°C"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 244
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_festwertsolltemperatur
+      # Geschrieben wird Wert x 10.
+      - name: "WP Raumsolltemperatur setzen"
+        unique_id: dimplex_wpm_num_raumsoll
+        icon: mdi:home-thermometer
+        availability: "{{ has_value('sensor.wp_raumsolltemperatur') }}"
+        state: "{{ states('sensor.wp_raumsolltemperatur') }}"
+        min: 15
+        max: 30
+        step: 0.5
+        unit_of_measurement: "°C"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 46
+              value: "{{ (value | float * 10) | round(0) | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_raumsolltemperatur
+      # Geschrieben wird Wert x 10.
+      - name: "WP Heizkreis 1 Hysterese setzen"
+        unique_id: dimplex_wpm_num_hk1_hyst
+        icon: mdi:arrow-expand-vertical
+        availability: "{{ has_value('sensor.wp_heizkreis_1_hysterese') }}"
+        state: "{{ states('sensor.wp_heizkreis_1_hysterese') }}"
+        min: 0.5
+        max: 5
+        step: 0.1
+        unit_of_measurement: "K"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 47
+              value: "{{ (value | float * 10) | round(0) | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_heizkreis_1_hysterese
+      - name: "WP Partystunden setzen"
+        unique_id: dimplex_wpm_num_partystunden
+        icon: mdi:party-popper
+        availability: "{{ has_value('sensor.wp_partystunden') }}"
+        state: "{{ states('sensor.wp_partystunden') }}"
+        min: 0
+        max: 72
+        step: 1
+        unit_of_measurement: "h"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 223
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_partystunden
+      - name: "WP Urlaubstage setzen"
+        unique_id: dimplex_wpm_num_urlaubstage
+        icon: mdi:beach
+        availability: "{{ has_value('sensor.wp_urlaubstage') }}"
+        state: "{{ states('sensor.wp_urlaubstage') }}"
+        min: 0
+        max: 150
+        step: 1
+        unit_of_measurement: "d"
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: dimplex
+              slave: 1
+              address: 224
+              value: "{{ value | int }}"
+          - action: homeassistant.update_entity
+            target:
+              entity_id: sensor.wp_urlaubstage

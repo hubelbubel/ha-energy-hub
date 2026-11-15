@@ -1,0 +1,241 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Heat pump",
+        "description": "Which entities carry the heat pump values? The suggestions match packages/dimplex_wpm.yaml. Empty fields are left out of the panel.",
+        "data": {
+          "ent_flow": "Flow temperature",
+          "ent_return": "Return temperature",
+          "ent_return_target": "Return target temperature",
+          "ent_dhw": "Hot water temperature",
+          "ent_dhw_target": "Hot water target temperature",
+          "ent_outdoor": "Outdoor temperature",
+          "ent_status": "Operating status (text)",
+          "ent_compressor": "Compressor running",
+          "ent_power_el": "Electrical power",
+          "ent_power_heat": "Heat output"
+        },
+        "data_description": {
+          "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
+          "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\"."
+        }
+      },
+      "pv": {
+        "title": "Photovoltaics",
+        "description": "The control follows these values. Without a surplus sensor the heating stays in normal operation.",
+        "data": {
+          "ent_pv_surplus": "PV surplus",
+          "surplus_sign": "Sign of the sensor",
+          "ent_forecast_today": "PV forecast for the rest of today",
+          "ent_forecast_tomorrow": "PV forecast for tomorrow"
+        },
+        "data_description": {
+          "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export.",
+          "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering in the morning.",
+          "ent_forecast_tomorrow": "Display only."
+        }
+      },
+      "rules": {
+        "title": "Rules",
+        "description": "The heating is raised when enough own power is left over. It is lowered in the morning when the forecast promises enough sun later.",
+        "data": {
+          "boost_on_w": "Raise from surplus",
+          "boost_on_min": "… once it has lasted",
+          "boost_off_w": "Stop raising below",
+          "boost_off_min": "… once it has stayed below for",
+          "min_hold_min": "Minimum hold time per state",
+          "setback_enabled": "Lower in the morning when sun is forecast",
+          "setback_start": "Lowering window from",
+          "setback_end": "Lowering window until",
+          "setback_min_forecast_kwh": "Lower from forecast (rest of today)",
+          "setback_min_outdoor_c": "Do not lower below outdoor temperature",
+          "setback_min_dhw_c": "Do not lower below hot water temperature"
+        },
+        "data_description": {
+          "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
+          "setback_min_outdoor_c": "Clear the field to switch the condition off.",
+          "setback_min_dhw_c": "Clear the field to switch the condition off."
+        }
+      },
+      "actuator": {
+        "title": "Action on the heat pump",
+        "description": "What is used to raise and lower? In trial mode the control only logs what it would do.",
+        "data": {
+          "actuator": "Actuator",
+          "ent_smart_grid": "Smart grid select",
+          "opt_normal": "Option for normal operation",
+          "opt_boost": "Option for raising",
+          "opt_setback": "Option for lowering",
+          "ent_shift": "Parallel shift",
+          "shift_boost_k": "Raise by",
+          "shift_setback_k": "Lower by"
+        },
+        "data_description": {
+          "ent_smart_grid": "Select entity that writes the smart grid state of the heat pump.",
+          "opt_normal": "Must be spelled exactly as in the select entity.",
+          "ent_shift": "Number entity for the parallel shift of the heating curve. The value before the action is remembered and restored afterwards."
+        }
+      }
+    },
+    "error": {
+      "thresholds": "The threshold to stop must be below the threshold to raise.",
+      "entity_required": "This actuator needs an entity."
+    },
+    "abort": {
+      "single_instance_allowed": "WP Leitstand is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure WP Leitstand",
+        "menu_options": {
+          "heatpump": "Heat pump",
+          "pv": "Photovoltaics",
+          "rules": "Rules",
+          "actuator": "Action on the heat pump"
+        }
+      },
+      "heatpump": {
+        "title": "Heat pump",
+        "description": "Which entities carry the heat pump values? The suggestions match packages/dimplex_wpm.yaml. Empty fields are left out of the panel.",
+        "data": {
+          "ent_flow": "Flow temperature",
+          "ent_return": "Return temperature",
+          "ent_return_target": "Return target temperature",
+          "ent_dhw": "Hot water temperature",
+          "ent_dhw_target": "Hot water target temperature",
+          "ent_outdoor": "Outdoor temperature",
+          "ent_status": "Operating status (text)",
+          "ent_compressor": "Compressor running",
+          "ent_power_el": "Electrical power",
+          "ent_power_heat": "Heat output"
+        },
+        "data_description": {
+          "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
+          "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\"."
+        }
+      },
+      "pv": {
+        "title": "Photovoltaics",
+        "description": "The control follows these values. Without a surplus sensor the heating stays in normal operation.",
+        "data": {
+          "ent_pv_surplus": "PV surplus",
+          "surplus_sign": "Sign of the sensor",
+          "ent_forecast_today": "PV forecast for the rest of today",
+          "ent_forecast_tomorrow": "PV forecast for tomorrow"
+        },
+        "data_description": {
+          "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export.",
+          "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering in the morning.",
+          "ent_forecast_tomorrow": "Display only."
+        }
+      },
+      "rules": {
+        "title": "Rules",
+        "description": "The heating is raised when enough own power is left over. It is lowered in the morning when the forecast promises enough sun later.",
+        "data": {
+          "boost_on_w": "Raise from surplus",
+          "boost_on_min": "… once it has lasted",
+          "boost_off_w": "Stop raising below",
+          "boost_off_min": "… once it has stayed below for",
+          "min_hold_min": "Minimum hold time per state",
+          "setback_enabled": "Lower in the morning when sun is forecast",
+          "setback_start": "Lowering window from",
+          "setback_end": "Lowering window until",
+          "setback_min_forecast_kwh": "Lower from forecast (rest of today)",
+          "setback_min_outdoor_c": "Do not lower below outdoor temperature",
+          "setback_min_dhw_c": "Do not lower below hot water temperature"
+        },
+        "data_description": {
+          "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
+          "setback_min_outdoor_c": "Clear the field to switch the condition off.",
+          "setback_min_dhw_c": "Clear the field to switch the condition off."
+        }
+      },
+      "actuator": {
+        "title": "Action on the heat pump",
+        "description": "What is used to raise and lower? In trial mode the control only logs what it would do.",
+        "data": {
+          "actuator": "Actuator",
+          "ent_smart_grid": "Smart grid select",
+          "opt_normal": "Option for normal operation",
+          "opt_boost": "Option for raising",
+          "opt_setback": "Option for lowering",
+          "ent_shift": "Parallel shift",
+          "shift_boost_k": "Raise by",
+          "shift_setback_k": "Lower by"
+        },
+        "data_description": {
+          "ent_smart_grid": "Select entity that writes the smart grid state of the heat pump.",
+          "opt_normal": "Must be spelled exactly as in the select entity.",
+          "ent_shift": "Number entity for the parallel shift of the heating curve. The value before the action is remembered and restored afterwards."
+        }
+      }
+    },
+    "error": {
+      "thresholds": "The threshold to stop must be below the threshold to raise.",
+      "entity_required": "This actuator needs an entity."
+    }
+  },
+  "selector": {
+    "surplus_sign": {
+      "options": {
+        "surplus_positive": "Positive means surplus",
+        "export_negative": "Negative means export (grid power sensor)"
+      }
+    },
+    "actuator": {
+      "options": {
+        "dry_run": "Trial mode: log only",
+        "smart_grid": "Smart grid (SG Ready) of the heat pump",
+        "parallel_shift": "Parallel shift of the heating curve"
+      }
+    },
+    "mode": {
+      "options": {
+        "normal": "Normal operation",
+        "boost": "Raise",
+        "setback": "Lower"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "mode": {
+        "name": "Control state",
+        "state": {
+          "normal": "Normal operation",
+          "boost": "Raised",
+          "setback": "Lowered"
+        }
+      }
+    },
+    "switch": {
+      "automation": {
+        "name": "Automatic control"
+      }
+    }
+  },
+  "services": {
+    "set_override": {
+      "name": "Start manual mode",
+      "description": "Holds the heating in one state regardless of the rules.",
+      "fields": {
+        "mode": {
+          "name": "State",
+          "description": "Normal operation, raise or lower."
+        },
+        "minutes": {
+          "name": "Duration",
+          "description": "Leave empty to keep manual mode until it is ended."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "End manual mode",
+      "description": "Hands the heating back to the automatic control."
+    }
+  }
+}

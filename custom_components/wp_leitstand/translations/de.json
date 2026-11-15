@@ -1,0 +1,241 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Wärmepumpe",
+        "description": "Welche Entitäten zeigen die Werte der Wärmepumpe? Die Vorschläge passen zu packages/dimplex_wpm.yaml. Leere Felder werden im Panel weggelassen.",
+        "data": {
+          "ent_flow": "Vorlauftemperatur",
+          "ent_return": "Rücklauftemperatur",
+          "ent_return_target": "Rücklauf-Solltemperatur",
+          "ent_dhw": "Warmwassertemperatur",
+          "ent_dhw_target": "Warmwasser-Solltemperatur",
+          "ent_outdoor": "Außentemperatur",
+          "ent_status": "Betriebsstatus (Text)",
+          "ent_compressor": "Verdichter läuft",
+          "ent_power_el": "Elektrische Leistung",
+          "ent_power_heat": "Heizleistung"
+        },
+        "data_description": {
+          "ent_outdoor": "Wird auch für die Bedingung „nicht absenken, wenn es zu kalt ist“ benutzt.",
+          "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt."
+        }
+      },
+      "pv": {
+        "title": "Photovoltaik",
+        "description": "Nach diesen Werten richtet sich die Regelung. Ohne Überschuss-Sensor bleibt die Heizung im Normalbetrieb.",
+        "data": {
+          "ent_pv_surplus": "PV-Überschuss",
+          "surplus_sign": "Vorzeichen des Sensors",
+          "ent_forecast_today": "PV-Prognose für den Rest des heutigen Tages",
+          "ent_forecast_tomorrow": "PV-Prognose für morgen"
+        },
+        "data_description": {
+          "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss.",
+          "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken am Morgen gebraucht.",
+          "ent_forecast_tomorrow": "Wird nur angezeigt."
+        }
+      },
+      "rules": {
+        "title": "Regeln",
+        "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird morgens, wenn die Prognose später genug Sonne verspricht.",
+        "data": {
+          "boost_on_w": "Anheben ab Überschuss",
+          "boost_on_min": "… wenn er so lange anliegt",
+          "boost_off_w": "Anheben beenden unter",
+          "boost_off_min": "… wenn er so lange darunter liegt",
+          "min_hold_min": "Mindesthaltezeit je Zustand",
+          "setback_enabled": "Morgens absenken, wenn Sonne vorhergesagt ist",
+          "setback_start": "Absenkfenster von",
+          "setback_end": "Absenkfenster bis",
+          "setback_min_forecast_kwh": "Absenken ab Prognose (Rest heute)",
+          "setback_min_outdoor_c": "Nicht absenken unter Außentemperatur",
+          "setback_min_dhw_c": "Nicht absenken unter Warmwassertemperatur"
+        },
+        "data_description": {
+          "min_hold_min": "Schützt den Verdichter vor häufigem Umschalten. Handbetrieb und fehlende Messwerte wirken sofort.",
+          "setback_min_outdoor_c": "Feld leeren, um die Bedingung abzuschalten.",
+          "setback_min_dhw_c": "Feld leeren, um die Bedingung abzuschalten."
+        }
+      },
+      "actuator": {
+        "title": "Eingriff an der Wärmepumpe",
+        "description": "Womit wird angehoben und abgesenkt? Im Probebetrieb wird nur protokolliert, was die Regelung tun würde.",
+        "data": {
+          "actuator": "Stellgröße",
+          "ent_smart_grid": "Smart-Grid-Auswahl",
+          "opt_normal": "Option für Normalbetrieb",
+          "opt_boost": "Option für Anheben",
+          "opt_setback": "Option für Absenken",
+          "ent_shift": "Parallelverschiebung",
+          "shift_boost_k": "Anheben um",
+          "shift_setback_k": "Absenken um"
+        },
+        "data_description": {
+          "ent_smart_grid": "Auswahl-Entität, die den Smart-Grid-Zustand der Wärmepumpe schreibt.",
+          "opt_normal": "Muss genau so heißen wie in der Auswahl-Entität.",
+          "ent_shift": "Zahl-Entität für die Parallelverschiebung der Heizkurve. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt."
+        }
+      }
+    },
+    "error": {
+      "thresholds": "Die Schwelle zum Beenden muss unter der Schwelle zum Anheben liegen.",
+      "entity_required": "Für diese Stellgröße wird eine Entität gebraucht."
+    },
+    "abort": {
+      "single_instance_allowed": "WP Leitstand ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "WP Leitstand einstellen",
+        "menu_options": {
+          "heatpump": "Wärmepumpe",
+          "pv": "Photovoltaik",
+          "rules": "Regeln",
+          "actuator": "Eingriff an der Wärmepumpe"
+        }
+      },
+      "heatpump": {
+        "title": "Wärmepumpe",
+        "description": "Welche Entitäten zeigen die Werte der Wärmepumpe? Die Vorschläge passen zu packages/dimplex_wpm.yaml. Leere Felder werden im Panel weggelassen.",
+        "data": {
+          "ent_flow": "Vorlauftemperatur",
+          "ent_return": "Rücklauftemperatur",
+          "ent_return_target": "Rücklauf-Solltemperatur",
+          "ent_dhw": "Warmwassertemperatur",
+          "ent_dhw_target": "Warmwasser-Solltemperatur",
+          "ent_outdoor": "Außentemperatur",
+          "ent_status": "Betriebsstatus (Text)",
+          "ent_compressor": "Verdichter läuft",
+          "ent_power_el": "Elektrische Leistung",
+          "ent_power_heat": "Heizleistung"
+        },
+        "data_description": {
+          "ent_outdoor": "Wird auch für die Bedingung „nicht absenken, wenn es zu kalt ist“ benutzt.",
+          "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt."
+        }
+      },
+      "pv": {
+        "title": "Photovoltaik",
+        "description": "Nach diesen Werten richtet sich die Regelung. Ohne Überschuss-Sensor bleibt die Heizung im Normalbetrieb.",
+        "data": {
+          "ent_pv_surplus": "PV-Überschuss",
+          "surplus_sign": "Vorzeichen des Sensors",
+          "ent_forecast_today": "PV-Prognose für den Rest des heutigen Tages",
+          "ent_forecast_tomorrow": "PV-Prognose für morgen"
+        },
+        "data_description": {
+          "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss.",
+          "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken am Morgen gebraucht.",
+          "ent_forecast_tomorrow": "Wird nur angezeigt."
+        }
+      },
+      "rules": {
+        "title": "Regeln",
+        "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird morgens, wenn die Prognose später genug Sonne verspricht.",
+        "data": {
+          "boost_on_w": "Anheben ab Überschuss",
+          "boost_on_min": "… wenn er so lange anliegt",
+          "boost_off_w": "Anheben beenden unter",
+          "boost_off_min": "… wenn er so lange darunter liegt",
+          "min_hold_min": "Mindesthaltezeit je Zustand",
+          "setback_enabled": "Morgens absenken, wenn Sonne vorhergesagt ist",
+          "setback_start": "Absenkfenster von",
+          "setback_end": "Absenkfenster bis",
+          "setback_min_forecast_kwh": "Absenken ab Prognose (Rest heute)",
+          "setback_min_outdoor_c": "Nicht absenken unter Außentemperatur",
+          "setback_min_dhw_c": "Nicht absenken unter Warmwassertemperatur"
+        },
+        "data_description": {
+          "min_hold_min": "Schützt den Verdichter vor häufigem Umschalten. Handbetrieb und fehlende Messwerte wirken sofort.",
+          "setback_min_outdoor_c": "Feld leeren, um die Bedingung abzuschalten.",
+          "setback_min_dhw_c": "Feld leeren, um die Bedingung abzuschalten."
+        }
+      },
+      "actuator": {
+        "title": "Eingriff an der Wärmepumpe",
+        "description": "Womit wird angehoben und abgesenkt? Im Probebetrieb wird nur protokolliert, was die Regelung tun würde.",
+        "data": {
+          "actuator": "Stellgröße",
+          "ent_smart_grid": "Smart-Grid-Auswahl",
+          "opt_normal": "Option für Normalbetrieb",
+          "opt_boost": "Option für Anheben",
+          "opt_setback": "Option für Absenken",
+          "ent_shift": "Parallelverschiebung",
+          "shift_boost_k": "Anheben um",
+          "shift_setback_k": "Absenken um"
+        },
+        "data_description": {
+          "ent_smart_grid": "Auswahl-Entität, die den Smart-Grid-Zustand der Wärmepumpe schreibt.",
+          "opt_normal": "Muss genau so heißen wie in der Auswahl-Entität.",
+          "ent_shift": "Zahl-Entität für die Parallelverschiebung der Heizkurve. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt."
+        }
+      }
+    },
+    "error": {
+      "thresholds": "Die Schwelle zum Beenden muss unter der Schwelle zum Anheben liegen.",
+      "entity_required": "Für diese Stellgröße wird eine Entität gebraucht."
+    }
+  },
+  "selector": {
+    "surplus_sign": {
+      "options": {
+        "surplus_positive": "Positiv bedeutet Überschuss",
+        "export_negative": "Negativ bedeutet Einspeisung (Netzleistungs-Sensor)"
+      }
+    },
+    "actuator": {
+      "options": {
+        "dry_run": "Probebetrieb: nur protokollieren",
+        "smart_grid": "Smart Grid (SG Ready) der Wärmepumpe",
+        "parallel_shift": "Parallelverschiebung der Heizkurve"
+      }
+    },
+    "mode": {
+      "options": {
+        "normal": "Normalbetrieb",
+        "boost": "Anheben",
+        "setback": "Absenken"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "mode": {
+        "name": "Regelzustand",
+        "state": {
+          "normal": "Normalbetrieb",
+          "boost": "Angehoben",
+          "setback": "Abgesenkt"
+        }
+      }
+    },
+    "switch": {
+      "automation": {
+        "name": "Automatik"
+      }
+    }
+  },
+  "services": {
+    "set_override": {
+      "name": "Handbetrieb starten",
+      "description": "Hält die Heizung unabhängig von den Regeln in einem Zustand.",
+      "fields": {
+        "mode": {
+          "name": "Zustand",
+          "description": "Normalbetrieb, Anheben oder Absenken."
+        },
+        "minutes": {
+          "name": "Dauer",
+          "description": "Leer lassen, damit der Handbetrieb bis zum Beenden gilt."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "Handbetrieb beenden",
+      "description": "Übergibt die Heizung wieder an die Automatik."
+    }
+  }
+}

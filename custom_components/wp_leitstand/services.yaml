@@ -1,0 +1,20 @@
+set_override:
+  fields:
+    mode:
+      required: true
+      selector:
+        select:
+          translation_key: mode
+          options:
+            - normal
+            - boost
+            - setback
+    minutes:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 10080
+          unit_of_measurement: min
+          mode: box
+clear_override:
