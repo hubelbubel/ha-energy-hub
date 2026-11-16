@@ -39,7 +39,9 @@ class Settings:
     setback_min_forecast_kwh: float = 10
     setback_min_outdoor_c: float | None = 3
     setback_min_dhw_c: float | None = 42
-    # Speicher (Kamin): ab dieser Temperatur gilt er als bereit; None = kein Speicher hinterlegt
+    # Speicher (Kamin): bereit ab Rücklaufsoll + Differenz. storage_ready_c ist die feste
+    # Ersatz-Schwelle ohne Rücklaufsoll; None = kein Speicher hinterlegt
+    storage_ready_delta_k: float = 5
     storage_ready_c: float | None = None
     storage_blocks_boost: bool = True
 
@@ -54,6 +56,7 @@ class Inputs:
     outdoor_c: float | None = None
     dhw_c: float | None = None
     storage_c: float | None = None
+    return_target_c: float | None = None
 
 
 @dataclass(frozen=True)
@@ -126,22 +129,44 @@ def update_timers(timers: Timers, inputs: Inputs, settings: Settings) -> Timers:
     return Timers(above_since=above, below_since=below)
 
 
+def ready_threshold(return_target_c: float | None, delta_k: float, fallback_c: float) -> float:
+    """Ab welcher Temperatur der Speicher die Heizung versorgen kann.
+
+    Gerechnet wird wie im Regler der Wärmepumpe: Rücklauf-Solltemperatur plus
+    Differenz. Liegt keine Solltemperatur vor, gilt die feste Ersatz-Schwelle.
+    """
+    if return_target_c is None:
+        return fallback_c
+    return return_target_c + delta_k
+
+
+def storage_threshold(inputs: Inputs, s: Settings) -> float | None:
+    """Aktuelle Bereit-Schwelle; None, wenn kein Speicher hinterlegt ist."""
+    if s.storage_ready_c is None:
+        return None
+    return ready_threshold(inputs.return_target_c, s.storage_ready_delta_k, s.storage_ready_c)
+
+
 def storage_ready(inputs: Inputs, s: Settings) -> bool:
     """Hat der Speicher genug Temperatur, um die Heizung zu versorgen?"""
-    return (
-        s.storage_ready_c is not None
-        and inputs.storage_c is not None
-        and inputs.storage_c >= s.storage_ready_c
-    )
+    threshold = storage_threshold(inputs, s)
+    return threshold is not None and inputs.storage_c is not None and inputs.storage_c >= threshold
 
 
 def _storage_block(inputs: Inputs, s: Settings) -> str | None:
     """Begründung, warum wegen des Speichers nicht angehoben wird, sonst None."""
     if not (s.storage_blocks_boost and storage_ready(inputs, s)):
         return None
+    threshold = storage_threshold(inputs, s)
+    basis = f"bereit ab {fmt_num(threshold, '°C')}"
+    if inputs.return_target_c is not None:
+        basis += (
+            f": Rücklaufsoll {fmt_num(inputs.return_target_c, '°C')} plus "
+            f"{fmt_num(s.storage_ready_delta_k, 'K')}"
+        )
     return (
         f"Der Speicher hat {fmt_num(inputs.storage_c, '°C')} und kann die Heizung versorgen "
-        f"(bereit ab {fmt_num(s.storage_ready_c, '°C')}). Deshalb wird nicht angehoben."
+        f"({basis}). Deshalb wird nicht angehoben."
     )
 
 

@@ -10,7 +10,7 @@ Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Dunkles Design
 
 ## Stand
 
-Version 0.3.0. Die Regellogik und die Abläufe im Regler sind durch 36 automatische Tests abgedeckt, die beiden Exporte durch 15 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.3.1. Die Regellogik und die Abläufe im Regler sind durch 38 automatische Tests abgedeckt, die beiden Exporte durch 15 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Was sie macht
 
@@ -72,7 +72,8 @@ Für Anlagen mit wasserführendem Kamin und einem Speicher, aus dem sich die Hei
 | Einstellung | Wofür | Beispiel |
 |---|---|---|
 | Temperatur im Speicher | Anzeige, „bereit“, Regel | `sensor.wp_regenerativspeicher_temperatur` (Fühler R13, Modbus-Register 10) |
-| Speicher gilt als bereit ab | Schwelle für „bereit“ | 40 °C |
+| Bereit ab Rücklauf-Solltemperatur plus | Differenz für „bereit“ | 5 K |
+| Ersatz-Schwelle | gilt nur ohne Rücklauf-Solltemperatur | 40 °C |
 | Sperre der Wärmepumpe | erkennt, wann der Speicher liefert | `sensor.wp_sperre` mit dem Wert „Regenerativ“ |
 | Temperatur am Kamin | Anzeige, „brennt“ | Abgastemperatur einer Spartherm S-Thermatik NEO über [esphome-thermatik](https://github.com/vk496/esphome-thermatik) |
 | Kamin gilt als an ab | Schwelle für „brennt“ | 80 °C |
@@ -82,7 +83,9 @@ Im Panel erscheint dann:
 
 - im Anlagenschema eine zweite Reihe mit Kamin und Speicher; die Leitungen färben sich, wenn der Kamin brennt und wenn der Speicher liefert
 - bei den Kennwerten Speicher- und Kamintemperatur sowie „Wärme aus dem Speicher heute“ mit Anzahl, Dauer und der Anzahl der letzten sieben Tage
-- im Verlauf die Speichertemperatur mit der Bereit-Schwelle und drei Balkenzeilen: Kamin brennt, Speicher bereit, Speicher liefert
+- im Verlauf die Speichertemperatur mit der mitlaufenden Bereit-Schwelle (gestrichelt) und drei Balkenzeilen: Kamin brennt, Speicher bereit, Speicher liefert
+
+„Bereit“ wird so berechnet wie im Regler der Wärmepumpe: Der Speicher muss um die eingestellte Differenz wärmer sein als die aktuelle Rücklauf-Solltemperatur. Bei mildem Wetter reicht also ein kühlerer Speicher als bei Frost. Trage als Differenz denselben Wert ein, der am Wärmepumpenmanager als Übertemperatur für den regenerativen Speicher eingestellt ist (bei Dimplex 2 bis 20 K). Der Regler vergleicht außerdem mit der jeweils anstehenden Anforderung, bei Warmwasser also mit dessen Sollwert; die Integration rechnet nur mit dem Rücklaufsoll der Heizung.
 
 „Wärme aus dem Speicher geholt“ heißt: Die Wärmepumpe meldet die Sperre „Regenerativ“. Gezählt wird jeder zusammenhängende Abschnitt.
 

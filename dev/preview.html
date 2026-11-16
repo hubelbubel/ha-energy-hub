@@ -91,7 +91,7 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.3.0",
+    version: "0.3.1",
     export_extra: scene === "empty" ? [] : extra,
     entities: scene === "empty"
       ? { ...ent, ent_pv_surplus: null, ent_forecast_today: null, ent_forecast_tomorrow: null,
@@ -103,7 +103,7 @@
       setback_min_forecast_kwh: 10, setback_min_outdoor_c: 3, setback_min_dhw_c: 42,
       actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_setback_k: 2,
       surplus_sign: "surplus_positive",
-      storage_ready_c: 40, storage_blocks_boost: true, fireplace_on_c: 80, lock_regen_value: "Regenerativ",
+      storage_ready_delta_k: 5, storage_ready_c: 40, storage_blocks_boost: true, fireplace_on_c: 80, lock_regen_value: "Regenerativ",
     },
     state: {
       mode, since: iso(now - 38 * 60e3), automation: true, dry_run: scene === "empty",

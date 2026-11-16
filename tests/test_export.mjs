@@ -276,6 +276,15 @@ test("analyseEfficiency: Kamin, Speicher und Entnahmen", () => {
   assert.equal(d(drawRows[1], "speicher_start_c"), 38);
   assert.equal(d(drawRows[1], "hinweis"), "läuft bei Exportende noch");
 
+  // Bereit wie im Regler: Speicher mindestens Rücklaufsoll + Differenz
+  const rel = m.analyseEfficiency(
+    { storage: [[at(-5), "38"]], retTarget: [[at(-5), "30"], [at(20), "36"], [at(50), "unavailable"]] },
+    {}, T0, at(60), 3600e3, { storageReadyC: 40, storageReadyDeltaK: 5 });
+  // 0-20 min: 38 >= 30 + 5 bereit; 20-50 min: 38 < 36 + 5 nicht; 50-60 min: ohne Sollwert gilt 40, nicht bereit
+  assert.equal(col(rel.hourRows[0], "speicher_bereit_min"), 20);
+  const fixed = m.analyseEfficiency({ storage: [[at(-5), "41"]], retTarget: [[at(-5), "39"]] }, {}, T0, at(60), 3600e3, { storageReadyC: 40 });
+  assert.equal(col(fixed.hourRows[0], "speicher_bereit_min"), 60);
+
   // Ohne hinterlegten Kamin und Speicher bleiben die Spalten leer
   const bare = m.analyseEfficiency({ comp: data.comp }, {}, T0, at(120));
   assert.equal(col(bare.hourRows[0], "kamin_min"), null);

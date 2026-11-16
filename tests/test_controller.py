@@ -310,7 +310,9 @@ def test_ready_storage_blocks_and_ends_boost():
         state = ctrl.snapshot()["state"]
         assert ctrl.mode == "normal" and state["rule"] == "storage"
         assert "55,0 °C" in state["reason"] and "40,0 °C" in state["reason"]
-        assert state["storage"] == {"temp": 55.0, "ready": True, "ready_c": 40.0, "drawing": True}
+        assert state["storage"] == {
+            "temp": 55.0, "ready": True, "ready_c": 40.0, "basis": "fixed", "drawing": True,
+        }  # ohne Rücklaufsoll gilt die feste Ersatz-Schwelle
         assert state["fireplace"] == {"temp": 240.0, "on": True, "on_c": 80.0, "status": None}
 
         hass.states.set(STORAGE, 32)  # Speicher leer: jetzt darf angehoben werden
@@ -364,3 +366,38 @@ def test_without_storage_nothing_changes():
         assert state["storage"]["drawing"] is None and state["fireplace"]["on"] is None
 
     asyncio.run(run())
+
+
+def test_ready_follows_return_target_like_the_heat_pump_controller():
+    target = "sensor.wp_rucklaufsolltemperatur"
+
+    async def run():
+        hass, ctrl = make(
+            c.ACT_DRY_RUN,
+            **{c.CONF_ENT_STORAGE: STORAGE, c.CONF_ENT_RETURN_TARGET: target, c.CONF_STORAGE_READY_DELTA_K: 6},
+        )
+        hass.states.set(target, 31.5)
+        hass.states.set(STORAGE, 37)  # über der festen Ersatz-Schwelle wäre das noch nicht, hier zählt 31,5 + 6
+        await ctrl.async_start()
+        await tick(ctrl)
+        storage = ctrl.snapshot()["state"]["storage"]
+        assert storage["ready_c"] == 37.5 and storage["basis"] == "return_target" and storage["ready"] is False
+
+        hass.states.set(STORAGE, 38)
+        await sunny_until_boost(hass, ctrl)
+        state = ctrl.snapshot()["state"]
+        assert ctrl.mode == "normal" and state["rule"] == "storage"
+        assert "37,5 °C" in state["reason"] and "Rücklaufsoll 31,5 °C plus 6,0 K" in state["reason"]
+
+        hass.states.set(target, 45)  # kalter Tag: höherer Sollwert, derselbe Speicher reicht nicht mehr
+        await tick(ctrl, 1)
+        assert ctrl.snapshot()["state"]["storage"]["ready"] is False
+        assert ctrl.mode == "boost"
+
+        hass.states.set(target, "unavailable")  # Sollwert fällt aus: zurück zur Ersatz-Schwelle 40 °C
+        await tick(ctrl, 1)
+        storage = ctrl.snapshot()["state"]["storage"]
+        assert storage["ready_c"] == 40.0 and storage["basis"] == "fixed" and storage["ready"] is False
+
+    asyncio.run(run())
+

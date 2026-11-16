@@ -73,6 +73,7 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
     ],
     STEP_STORAGE: [
         (c.CONF_ENT_STORAGE, _entity("sensor"), False),
+        (c.CONF_STORAGE_READY_DELTA_K, _number(2, 20, 0.5, "K"), True),
         (c.CONF_STORAGE_READY_C, _number(10, 95, 0.5, "°C"), True),
         (c.CONF_STORAGE_BLOCKS_BOOST, selector.BooleanSelector(), True),
         (c.CONF_ENT_LOCK, _entity("sensor"), False),

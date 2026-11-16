@@ -352,7 +352,8 @@ const dominant = (map) => [...map.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
 export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3, opts = {}) {
   const regen = opts.regen || (() => false);
   const fireOn = opts.fireplaceOnC ?? null;
-  const readyAt = opts.storageReadyC ?? null;
+  const readyFixed = opts.storageReadyC ?? null;
+  const readyDelta = opts.storageReadyDeltaK ?? null;
   const I = Object.fromEntries(EFF_KEYS.map((key, i) => [key, i]));
   const series = EFF_KEYS.map((key) => data[key] || []);
   const has = Object.fromEntries(EFF_KEYS.map((key) => [key, Boolean(data[key])]));
@@ -459,7 +460,12 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3, opts =
     add(h.storage, storage, dt);
     add(h.fireplace, fireplace, dt);
     if (fireplace !== null && fireOn !== null) h.fireMs = (h.fireMs ?? 0) + (fireplace >= fireOn ? dt : 0);
-    if (storage !== null && readyAt !== null) h.readyMs = (h.readyMs ?? 0) + (storage >= readyAt ? dt : 0);
+    if (storage !== null && readyFixed !== null) {
+      // Bereit wie im Regler: Rücklaufsoll plus Differenz, sonst die feste Ersatz-Schwelle
+      const target = readyDelta === null ? null : num(values, "retTarget");
+      const limit = target === null ? readyFixed : target + readyDelta;
+      h.readyMs = (h.readyMs ?? 0) + (storage >= limit ? dt : 0);
+    }
     if (!isGap(lock)) {
       const active = Boolean(regen(lock));
       if (active && !draw) {
@@ -555,7 +561,8 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
     "_zaehler_kwh: Zunahme des Zähler-Sensors in der Stunde",
     "pv_ueberschuss_kwh: aufsummierter positiver Anteil des Überschuss-Sensors; netzbezug_kwh: aufsummierter negativer Anteil",
     "verdichterlaeufe: eine Zeile je Lauf; betriebsart = Betriebsstatus mit dem größten Zeitanteil; strom_kwh und waerme_kwh aus den Leistungs-Sensoren",
-    "kamin_min: Minuten mit Kamin über der Schwelle; speicher_bereit_min: Minuten mit Speicher über der Bereit-Temperatur",
+    "kamin_min: Minuten mit Kamin über der Schwelle",
+    "speicher_bereit_min: Minuten mit Speicher mindestens einstellung.storage_ready_delta_k über ruecklauf_soll; ohne Rücklaufsoll gilt einstellung.storage_ready_c",
     "sperre_regenerativ_min: Minuten, in denen die Wärmepumpe gesperrt war, weil der Speicher liefert; speicher_entnahmen: Beginne solcher Abschnitte",
     "speicherentnahmen: eine Zeile je Abschnitt mit Sperre Regenerativ. Wärme aus dem Speicher steht nicht in den Wärmemengen der Wärmepumpe",
     ...Object.entries(entities || {}).map(([k, v]) => `entitaet.${k}: ${v || "nicht hinterlegt"}`),
@@ -717,6 +724,7 @@ select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; ba
 .plots .line.thin { stroke-width: 1.5; }
 .plots .area { fill: var(--c-pv); opacity: 0.12; stroke: none; }
 .plots .ref { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 4; }
+.plots path.ref { fill: none; }
 .plots .ref-label { fill: var(--ink-2); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
 .plots .block { fill: var(--ink); opacity: 0.72; }
 .plots .lane { stroke: var(--rule); stroke-width: 1; }
@@ -1141,9 +1149,14 @@ class WpLeitstandPanel extends HTMLElement {
     const fireTemp = this._value("ent_fireplace");
     const lock = this._state("ent_lock")?.state;
     const status = this._state("ent_fireplace_status")?.state;
+    // Bereit wie im Regler der Wärmepumpe: Rücklaufsoll plus Differenz, sonst die feste Ersatz-Schwelle
+    const retTarget = this._value("ent_return_target");
+    const readyAt = isNum(retTarget) ? retTarget + Number(set.storage_ready_delta_k) : Number(set.storage_ready_c);
     return {
       storeTemp,
-      ready: isNum(storeTemp) ? storeTemp >= Number(set.storage_ready_c) : null,
+      readyAt,
+      relative: isNum(retTarget),
+      ready: isNum(storeTemp) ? storeTemp >= readyAt : null,
       fireTemp,
       fireOn: isNum(fireTemp) ? fireTemp >= Number(set.fireplace_on_c) : null,
       fireStatus: status && !isGap(status) ? status : "",
@@ -1174,7 +1187,8 @@ class WpLeitstandPanel extends HTMLElement {
     const live = this._liveAux();
     if (cfg.ent_storage) {
       const hint = live.drawing ? "liefert gerade Wärme"
-        : live.ready === null ? "" : `${live.ready ? "bereit" : "noch nicht bereit"}, Schwelle ${fmtC(Number(set.storage_ready_c))}`;
+        : live.ready === null ? ""
+        : `${live.ready ? "bereit" : "noch nicht bereit"}, ab ${fmtC(live.readyAt)}${live.relative ? ` (Rücklaufsoll + ${nf0.format(set.storage_ready_delta_k)} K)` : ""}`;
       items.push(["Speicher", fmtC(live.storeTemp), hint]);
     }
     if (cfg.ent_fireplace) {
@@ -1211,7 +1225,9 @@ class WpLeitstandPanel extends HTMLElement {
       parts.push("Abgesenkt wird nicht.");
     }
     if (this._snap.entities.ent_storage && set.storage_blocks_boost) {
-      parts.push(`Solange der Speicher mindestens ${fmtC(Number(set.storage_ready_c))} hat, wird nicht angehoben. Dann kann der Kamin die Heizung versorgen.`);
+      parts.push(this._snap.entities.ent_return_target
+        ? `Der Speicher gilt als bereit, wenn er mindestens ${nf0.format(set.storage_ready_delta_k)} K über der Rücklauf-Solltemperatur liegt. So rechnet auch der Regler der Wärmepumpe. Solange er bereit ist, wird nicht angehoben.`
+        : `Solange der Speicher mindestens ${fmtC(Number(set.storage_ready_c))} hat, wird nicht angehoben. Dann kann der Kamin die Heizung versorgen.`);
     }
     parts.push(`Jeder Zustand wird mindestens ${nf0.format(set.min_hold_min)} min gehalten. Handbetrieb wirkt sofort.`);
     parts.push({
@@ -1543,6 +1559,7 @@ class WpLeitstandPanel extends HTMLElement {
       regen: matcher(snap.settings.lock_regen_value),
       fireplaceOnC: source.fireplace ? Number(snap.settings.fireplace_on_c) : null,
       storageReadyC: source.storage ? Number(snap.settings.storage_ready_c) : null,
+      storageReadyDeltaK: source.storage ? Number(snap.settings.storage_ready_delta_k) : null,
     });
     const built = buildEfficiencyExport({
       version: snap.version, created, t0, step, analysis, settings: snap.settings, entities: source,
@@ -1615,6 +1632,7 @@ class WpLeitstandPanel extends HTMLElement {
     const numeric = [
       { key: "surplus", id: cfg.ent_pv_surplus }, ...SERIES.map((x) => ({ key: x.key, id: cfg[x.ent] })),
       { key: "storage", id: cfg.ent_storage }, { key: "fireplace", id: cfg.ent_fireplace },
+      { key: "retTarget", id: cfg.ent_storage ? cfg.ent_return_target : null },
     ].filter((x) => x.id);
     const lockId = cfg.ent_lock;
     const modeId = snap.state.state_entity_id;
@@ -1687,9 +1705,15 @@ class WpLeitstandPanel extends HTMLElement {
       chart.drawCount = episodes(raw[lockId] || [], active, t0, t1).length;
     }
     const onC = Number(snap.settings.fireplace_on_c);
-    const readyC = Number(snap.settings.storage_ready_c);
     if (chart.series.fireplace) chart.fire = chart.series.fireplace.map((v) => (v === null ? null : v >= onC));
-    if (chart.series.storage) chart.ready = chart.series.storage.map((v) => (v === null ? null : v >= readyC));
+    if (chart.series.storage) {
+      const target = chart.series.retTarget;
+      const delta = Number(snap.settings.storage_ready_delta_k);
+      const fixedC = Number(snap.settings.storage_ready_c);
+      chart.readyAt = chart.series.storage.map((_v, b) => (target && target[b] !== null ? target[b] + delta : fixedC));
+      chart.readyRelative = Boolean(target && target.some((v) => v !== null));
+      chart.ready = chart.series.storage.map((v, b) => (v === null ? null : v >= chart.readyAt[b]));
+    }
     this._chart = chart;
     this.$.plots.classList.remove("loading");
     this._drawPlots();
@@ -1813,19 +1837,21 @@ class WpLeitstandPanel extends HTMLElement {
       }));
     }
 
-    // 3. Speicher: Temperatur mit Bereit-Schwelle
+    // 3. Speicher: Temperatur und die Schwelle, ab der er als bereit gilt
     const store = chart.series.storage;
     if (store && store.some((v) => v !== null)) {
-      const vals = store.filter((v) => v !== null);
-      const readyC = Number(set.storage_ready_c);
-      const lo = Math.floor((Math.min(...vals, readyC) - 2) / 5) * 5;
-      const hi = Math.ceil((Math.max(...vals, readyC) + 2) / 5) * 5;
+      const all = [...store.filter((v) => v !== null), ...chart.readyAt];
+      const lo = Math.floor((Math.min(...all) - 2) / 5) * 5;
+      const hi = Math.ceil((Math.max(...all) + 2) / 5) * 5;
+      const label = chart.readyRelative
+        ? `bereit ab Rücklaufsoll + ${nf0.format(set.storage_ready_delta_k)} K`
+        : `bereit ab ${fmtC(Number(set.storage_ready_c))}`;
       nodes.push(h("div", { class: "plot-title" }, h("b", {}, "Speicher in °C"),
-        h("span", { class: "key s-store" }, h("i", {}), h("span", {}, `Speicher ${fmtC(store.at(-1))}`))));
+        h("span", { class: "key s-store" }, h("i", {}), h("span", {}, `Speicher ${fmtC(store.at(-1))}`)),
+        h("span", {}, `Gestrichelt: ${label}, zuletzt ${fmtC(chart.readyAt.at(-1))}`)));
       nodes.push(plot(130, lo, hi, 3, (svg, y) => {
         svg.append(
-          s("line", { x1: M.l, x2: W - M.r, y1: y(readyC), y2: y(readyC), class: "ref" }),
-          s("text", { x: W - M.r, y: y(readyC) - 5, class: "ref-label", "text-anchor": "end" }, `bereit ab ${fmtC(readyC)}`),
+          s("path", { d: path(chart.readyAt, y), class: "ref" }),
           s("path", { d: path(store, y), class: "line s-store" }));
       }));
     }

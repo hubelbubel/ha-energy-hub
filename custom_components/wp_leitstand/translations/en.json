@@ -41,7 +41,8 @@
         "description": "For systems with a water-jacket fireplace and a storage tank the heating draws from. Everything is optional; without a tank leave this step empty.",
         "data": {
           "ent_storage": "Temperature in the storage tank",
-          "storage_ready_c": "Tank counts as ready from",
+          "storage_ready_delta_k": "Tank counts as ready from return target temperature plus",
+          "storage_ready_c": "Fallback threshold when no return target temperature is available",
           "storage_blocks_boost": "Do not raise while the tank is ready",
           "ent_lock": "Heat pump lock (text or code)",
           "lock_regen_value": "Lock value while the tank supplies heat",
@@ -51,6 +52,8 @@
         },
         "data_description": {
           "ent_storage": "With Dimplex the sensor R13 in the renewable storage tank.",
+          "storage_ready_delta_k": "This is how the Dimplex controller decides as well. Enter the value set on the heat pump manager as excess temperature for the renewable storage tank (2 to 20 K).",
+          "storage_ready_c": "Only applies while no return target temperature is configured under \"Heat pump\" or it is unavailable.",
           "storage_blocks_boost": "In smart grid state green a Dimplex does not discharge the tank. Without this rule the heat pump would run although heat from the fireplace is available.",
           "ent_lock": "Used to detect when and how often heat was drawn from the tank.",
           "lock_regen_value": "With Dimplex \"Regenerativ\" (text) or 14 (code). Separate several values with commas.",
@@ -179,7 +182,8 @@
         "description": "For systems with a water-jacket fireplace and a storage tank the heating draws from. Everything is optional; without a tank leave this step empty.",
         "data": {
           "ent_storage": "Temperature in the storage tank",
-          "storage_ready_c": "Tank counts as ready from",
+          "storage_ready_delta_k": "Tank counts as ready from return target temperature plus",
+          "storage_ready_c": "Fallback threshold when no return target temperature is available",
           "storage_blocks_boost": "Do not raise while the tank is ready",
           "ent_lock": "Heat pump lock (text or code)",
           "lock_regen_value": "Lock value while the tank supplies heat",
@@ -189,6 +193,8 @@
         },
         "data_description": {
           "ent_storage": "With Dimplex the sensor R13 in the renewable storage tank.",
+          "storage_ready_delta_k": "This is how the Dimplex controller decides as well. Enter the value set on the heat pump manager as excess temperature for the renewable storage tank (2 to 20 K).",
+          "storage_ready_c": "Only applies while no return target temperature is configured under \"Heat pump\" or it is unavailable.",
           "storage_blocks_boost": "In smart grid state green a Dimplex does not discharge the tank. Without this rule the heat pump would run although heat from the fireplace is available.",
           "ent_lock": "Used to detect when and how often heat was drawn from the tank.",
           "lock_regen_value": "With Dimplex \"Regenerativ\" (text) or 14 (code). Separate several values with commas.",

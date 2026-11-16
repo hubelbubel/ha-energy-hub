@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "wp_leitstand"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 TITLE = "WP Leitstand"
 
 PANEL_URL_PATH = "wp-leitstand"
@@ -61,6 +61,7 @@ CONF_ENT_FORECAST_TOMORROW = "ent_forecast_tomorrow"
 
 # --- Kamin und Speicher ----------------------------------------------------
 CONF_ENT_STORAGE = "ent_storage"
+CONF_STORAGE_READY_DELTA_K = "storage_ready_delta_k"
 CONF_STORAGE_READY_C = "storage_ready_c"
 CONF_STORAGE_BLOCKS_BOOST = "storage_blocks_boost"
 CONF_ENT_LOCK = "ent_lock"
@@ -139,6 +140,7 @@ DEFAULTS: dict[str, object] = {
     CONF_SETBACK_MIN_FORECAST: 10,
     CONF_SETBACK_MIN_OUTDOOR: 3,
     CONF_SETBACK_MIN_DHW: 42,
+    CONF_STORAGE_READY_DELTA_K: 5,
     CONF_STORAGE_READY_C: 40,
     CONF_STORAGE_BLOCKS_BOOST: True,
     CONF_LOCK_REGEN_VALUE: "Regenerativ",

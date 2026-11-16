@@ -202,3 +202,23 @@ def test_storage_does_not_stop_setback():
     d = run(Inputs(MORNING, surplus_w=0, forecast_kwh=18, outdoor_c=6, dhw_c=47, storage_c=60), settings=s)
     assert d.mode == SETBACK
 
+
+def test_storage_threshold_follows_return_target():
+    s = Settings(storage_ready_c=40, storage_ready_delta_k=5)
+    assert logic.ready_threshold(30.5, 5, 40) == 35.5
+    assert logic.ready_threshold(None, 5, 40) == 40
+    assert logic.storage_threshold(Inputs(NOON, return_target_c=30.5), s) == 35.5
+    assert logic.storage_threshold(Inputs(NOON), s) == 40
+    assert logic.storage_threshold(Inputs(NOON, return_target_c=30.5), Settings()) is None
+
+    sunny = Timers(above_since=NOON - timedelta(minutes=30))
+    # 37 °C reichen bei Rücklaufsoll 30,5 °C (Schwelle 35,5), nicht aber bei 34 °C (Schwelle 39)
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=37, return_target_c=30.5), sunny, settings=s)
+    assert (d.mode, d.rule) == (NORMAL, "storage")
+    assert "bereit ab 35,5 °C: Rücklaufsoll 30,5 °C plus 5,0 K" in d.reason
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=37, return_target_c=34), sunny, settings=s)
+    assert d.mode == BOOST
+    # über der festen Ersatz-Schwelle, aber unter Rücklaufsoll + Differenz: nicht bereit
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=42, return_target_c=38), sunny, settings=s)
+    assert d.mode == BOOST
+

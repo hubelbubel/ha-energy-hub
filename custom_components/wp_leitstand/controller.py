@@ -29,6 +29,7 @@ from .logic import (
     Settings,
     Timers,
     decide,
+    ready_threshold,
     update_timers,
 )
 
@@ -81,6 +82,7 @@ SETTING_KEYS = (
     c.CONF_SHIFT_BOOST_K,
     c.CONF_SHIFT_SETBACK_K,
     c.CONF_SURPLUS_SIGN,
+    c.CONF_STORAGE_READY_DELTA_K,
     c.CONF_STORAGE_READY_C,
     c.CONF_STORAGE_BLOCKS_BOOST,
     c.CONF_LOCK_REGEN_VALUE,
@@ -169,6 +171,7 @@ class Controller:
             setback_min_forecast_kwh=float(o[c.CONF_SETBACK_MIN_FORECAST]),
             setback_min_outdoor_c=opt_float(c.CONF_SETBACK_MIN_OUTDOOR),
             setback_min_dhw_c=opt_float(c.CONF_SETBACK_MIN_DHW),
+            storage_ready_delta_k=float(o[c.CONF_STORAGE_READY_DELTA_K]),
             storage_ready_c=float(o[c.CONF_STORAGE_READY_C]) if o.get(c.CONF_ENT_STORAGE) else None,
             storage_blocks_boost=bool(o[c.CONF_STORAGE_BLOCKS_BOOST]),
         )
@@ -259,6 +262,7 @@ class Controller:
             outdoor_c=self._number(c.CONF_ENT_OUTDOOR)[0],
             dhw_c=self._number(c.CONF_ENT_DHW)[0],
             storage_c=self._aux["storage"]["temp"],
+            return_target_c=self._aux["return_target"],
         )
 
     def _text(self, key: str) -> str | None:
@@ -272,16 +276,21 @@ class Controller:
         """Kamin und Speicher: Temperaturen und die daraus abgeleiteten Zustände."""
         o = self.options
         storage = self._number(c.CONF_ENT_STORAGE)[0]
-        ready_c = float(o[c.CONF_STORAGE_READY_C])
+        return_target = self._number(c.CONF_ENT_RETURN_TARGET)[0]
+        ready_c = ready_threshold(
+            return_target, float(o[c.CONF_STORAGE_READY_DELTA_K]), float(o[c.CONF_STORAGE_READY_C])
+        )
         fireplace = self._number(c.CONF_ENT_FIREPLACE)[0]
         on_c = float(o[c.CONF_FIREPLACE_ON_C])
         lock = self._text(c.CONF_ENT_LOCK)
         wanted = {v.strip().casefold() for v in str(o[c.CONF_LOCK_REGEN_VALUE]).split(",") if v.strip()}
         return {
+            "return_target": return_target,
             "storage": {
                 "temp": storage,
                 "ready": None if storage is None else storage >= ready_c,
                 "ready_c": ready_c,
+                "basis": "fixed" if return_target is None else "return_target",
                 "drawing": None if lock is None else lock.strip().casefold() in wanted,
             },
             "fireplace": {
