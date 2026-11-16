@@ -53,6 +53,12 @@ ENTITY_KEYS = (
     c.CONF_ENT_FORECAST_TOMORROW,
     c.CONF_ENT_SMART_GRID,
     c.CONF_ENT_SHIFT,
+    c.CONF_ENT_ENERGY_EL,
+    c.CONF_ENT_ENERGY_HEAT,
+    c.CONF_ENT_ENERGY_DHW,
+    c.CONF_ENT_ENERGY_ENV,
+    c.CONF_ENT_HEATER,
+    c.CONF_ENT_SECOND_HEAT,
 )
 
 SETTING_KEYS = (
@@ -497,6 +503,7 @@ class Controller:
         data: dict[str, Any] = {
             "version": c.VERSION,
             "entities": {key: o.get(key) or None for key in ENTITY_KEYS},
+            "export_extra": list(o.get(c.CONF_EXPORT_EXTRA) or []),
             "settings": {key: o.get(key) for key in SETTING_KEYS},
             "state": {
                 "mode": self.mode,
@@ -522,5 +529,5 @@ class Controller:
             "log_rev": self.log_rev,
         }
         if with_log:
-            data["log"] = list(reversed(self._data["log"]))[:300]
+            data["log"] = list(reversed(self._data["log"]))
         return data

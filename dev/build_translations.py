@@ -90,6 +90,24 @@ DE = {
                 "ent_shift": "Zahl-Entität für die Parallelverschiebung der Heizkurve. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt.",
             },
         },
+        "export": {
+            "title": "Effizienz und Export",
+            "description": "Zähler und Zusatzheizungen für die Effizienz-Auswertung, dazu weitere Sensoren, die in den Verlauf-Export aufgenommen werden. Alles ist freiwillig; was fehlt, bleibt im Export leer.",
+            "data": {
+                "ent_energy_el": "Stromzähler der Wärmepumpe",
+                "ent_energy_heat": "Wärmemenge Heizen",
+                "ent_energy_dhw": "Wärmemenge Warmwasser",
+                "ent_energy_env": "Umweltenergie",
+                "ent_heater": "Heizstab oder Flanschheizung läuft",
+                "ent_second_heat": "Zweiter Wärmeerzeuger läuft",
+                "export_extra": "Weitere Sensoren für den Verlauf-Export",
+            },
+            "data_description": {
+                "ent_energy_el": "Zählerstand in kWh, zum Beispiel von einem eigenen Stromzähler. Ohne Zähler wird der Strom aus der elektrischen Leistung aufsummiert.",
+                "ent_energy_heat": "Zählerstand in kWh aus dem Wärmemengenzähler.",
+                "export_extra": "Zum Beispiel Statuscodes, Sollwerte, Laufzeiten oder Pumpen.",
+            },
+        },
     },
     "menu_title": "WP Leitstand einstellen",
     "errors": {
@@ -219,6 +237,24 @@ EN = {
                 "ent_shift": "Number entity for the parallel shift of the heating curve. The value before the action is remembered and restored afterwards.",
             },
         },
+        "export": {
+            "title": "Efficiency and export",
+            "description": "Meters and auxiliary heaters for the efficiency analysis, plus further sensors to include in the history export. Everything is optional; whatever is missing stays empty in the export.",
+            "data": {
+                "ent_energy_el": "Electricity meter of the heat pump",
+                "ent_energy_heat": "Heat quantity heating",
+                "ent_energy_dhw": "Heat quantity hot water",
+                "ent_energy_env": "Environmental energy",
+                "ent_heater": "Immersion or flange heater running",
+                "ent_second_heat": "Second heat generator running",
+                "export_extra": "Further sensors for the history export",
+            },
+            "data_description": {
+                "ent_energy_el": "Meter reading in kWh, for example from a dedicated electricity meter. Without a meter the electricity is summed from the electrical power.",
+                "ent_energy_heat": "Meter reading in kWh from the heat meter.",
+                "export_extra": "For example status codes, setpoints, runtimes or pumps.",
+            },
+        },
     },
     "menu_title": "Configure WP Leitstand",
     "errors": {
@@ -280,6 +316,7 @@ def build(src: dict) -> dict:
                 "pv": steps["pv"],
                 "rules": steps["rules"],
                 "actuator": steps["actuator"],
+                "export": steps["export"],
             },
             "error": src["errors"],
             "abort": src["abort"],

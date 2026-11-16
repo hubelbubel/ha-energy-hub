@@ -265,3 +265,27 @@ def test_cleared_optional_guards_stay_off():
     settings = ctrl._settings()
     assert settings.setback_min_outdoor_c is None and settings.setback_min_dhw_c is None
     assert settings.setback_start.hour == 5 and settings.boost_on_w == 1500
+
+
+def test_snapshot_lists_export_entities_and_full_log():
+    extra = ["sensor.wp_statuscode", "binary_sensor.wp_heizungspumpe_m13"]
+    hass, ctrl = make(
+        c.ACT_DRY_RUN,
+        **{c.CONF_EXPORT_EXTRA: extra, c.CONF_ENT_ENERGY_HEAT: "sensor.wp_warmemenge_heizen", c.CONF_ENT_HEATER: "binary_sensor.wp_flanschheizung_e9"},
+    )
+
+    async def run():
+        await ctrl.async_start()
+        for i in range(c.LOG_LIMIT + 20):
+            ctrl._log("info", f"Eintrag {i}")
+        snap = ctrl.snapshot()
+        assert snap["export_extra"] == extra
+        assert snap["entities"]["ent_energy_heat"] == "sensor.wp_warmemenge_heizen"
+        assert snap["entities"]["ent_heater"] == "binary_sensor.wp_flanschheizung_e9"
+        assert snap["entities"]["ent_energy_el"] is None
+        assert len(snap["log"]) == c.LOG_LIMIT  # das ganze Logbuch, neueste zuerst
+        assert snap["log"][0]["text"] == f"Eintrag {c.LOG_LIMIT + 19}"
+        assert snap["version"] == "0.2.0"
+        json.dumps(snap)
+
+    asyncio.run(run())

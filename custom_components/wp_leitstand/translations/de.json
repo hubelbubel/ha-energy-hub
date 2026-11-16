@@ -76,6 +76,24 @@
           "opt_normal": "Muss genau so heißen wie in der Auswahl-Entität.",
           "ent_shift": "Zahl-Entität für die Parallelverschiebung der Heizkurve. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt."
         }
+      },
+      "export": {
+        "title": "Effizienz und Export",
+        "description": "Zähler und Zusatzheizungen für die Effizienz-Auswertung, dazu weitere Sensoren, die in den Verlauf-Export aufgenommen werden. Alles ist freiwillig; was fehlt, bleibt im Export leer.",
+        "data": {
+          "ent_energy_el": "Stromzähler der Wärmepumpe",
+          "ent_energy_heat": "Wärmemenge Heizen",
+          "ent_energy_dhw": "Wärmemenge Warmwasser",
+          "ent_energy_env": "Umweltenergie",
+          "ent_heater": "Heizstab oder Flanschheizung läuft",
+          "ent_second_heat": "Zweiter Wärmeerzeuger läuft",
+          "export_extra": "Weitere Sensoren für den Verlauf-Export"
+        },
+        "data_description": {
+          "ent_energy_el": "Zählerstand in kWh, zum Beispiel von einem eigenen Stromzähler. Ohne Zähler wird der Strom aus der elektrischen Leistung aufsummiert.",
+          "ent_energy_heat": "Zählerstand in kWh aus dem Wärmemengenzähler.",
+          "export_extra": "Zum Beispiel Statuscodes, Sollwerte, Laufzeiten oder Pumpen."
+        }
       }
     },
     "error": {
@@ -94,7 +112,8 @@
           "heatpump": "Wärmepumpe",
           "pv": "Photovoltaik",
           "rules": "Regeln",
-          "actuator": "Eingriff an der Wärmepumpe"
+          "actuator": "Eingriff an der Wärmepumpe",
+          "export": "Effizienz und Export"
         }
       },
       "heatpump": {
@@ -171,6 +190,24 @@
           "ent_smart_grid": "Auswahl-Entität, die den Smart-Grid-Zustand der Wärmepumpe schreibt.",
           "opt_normal": "Muss genau so heißen wie in der Auswahl-Entität.",
           "ent_shift": "Zahl-Entität für die Parallelverschiebung der Heizkurve. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt."
+        }
+      },
+      "export": {
+        "title": "Effizienz und Export",
+        "description": "Zähler und Zusatzheizungen für die Effizienz-Auswertung, dazu weitere Sensoren, die in den Verlauf-Export aufgenommen werden. Alles ist freiwillig; was fehlt, bleibt im Export leer.",
+        "data": {
+          "ent_energy_el": "Stromzähler der Wärmepumpe",
+          "ent_energy_heat": "Wärmemenge Heizen",
+          "ent_energy_dhw": "Wärmemenge Warmwasser",
+          "ent_energy_env": "Umweltenergie",
+          "ent_heater": "Heizstab oder Flanschheizung läuft",
+          "ent_second_heat": "Zweiter Wärmeerzeuger läuft",
+          "export_extra": "Weitere Sensoren für den Verlauf-Export"
+        },
+        "data_description": {
+          "ent_energy_el": "Zählerstand in kWh, zum Beispiel von einem eigenen Stromzähler. Ohne Zähler wird der Strom aus der elektrischen Leistung aufsummiert.",
+          "ent_energy_heat": "Zählerstand in kWh aus dem Wärmemengenzähler.",
+          "export_extra": "Zum Beispiel Statuscodes, Sollwerte, Laufzeiten oder Pumpen."
         }
       }
     },

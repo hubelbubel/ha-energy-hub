@@ -45,7 +45,11 @@
     ent_pv_surplus: "sensor.pv_ueberschuss", ent_forecast_today: "sensor.pv_prognose_rest_heute",
     ent_forecast_tomorrow: "sensor.pv_prognose_morgen",
     ent_smart_grid: "select.wp_smart_grid_setzen", ent_shift: null,
+    ent_energy_el: null, ent_energy_heat: "sensor.wp_warmemenge_heizen",
+    ent_energy_dhw: "sensor.wp_warmemenge_warmwasser", ent_energy_env: null,
+    ent_heater: "binary_sensor.wp_flanschheizung_e9", ent_second_heat: null,
   };
+  const extra = ["sensor.wp_statuscode", "binary_sensor.wp_heizungspumpe_m13"];
   const st = (state, unit) => ({ state: String(state), attributes: { unit_of_measurement: unit } });
   const running = scene !== "normal";
   const states = {
@@ -82,7 +86,8 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.1.0",
+    version: "0.2.0",
+    export_extra: scene === "empty" ? [] : extra,
     entities: scene === "empty" ? { ...ent, ent_pv_surplus: null, ent_forecast_today: null, ent_forecast_tomorrow: null } : ent,
     settings: {
       boost_on_w: 1500, boost_on_min: 10, boost_off_w: 300, boost_off_min: 15, min_hold_min: 20,
@@ -125,6 +130,20 @@
       else if (id === ent.ent_return) v = (boost ? 31.5 : setback ? 25.5 : 28.3) + 1.6 * cyc;
       else if (id === ent.ent_dhw) v = boost ? 44 + (hour - 11.2) * 2.6 : 50.5 - ((hour + 24 - 15.4) % 24) * 0.42;
       else if (id === snapshot.state.state_entity_id) v = boost ? "boost" : setback ? "setback" : "normal";
+      else if (id === ent.ent_compressor) v = cyc > -0.3 ? "on" : "off";
+      else if (id === ent.ent_status) v = cyc > -0.3 ? (hour > 12 && hour < 13 ? "Warmwasser" : "Heizen") : "Aus";
+      else if (id === ent.ent_power_el) v = cyc > -0.3 ? 1800 + 300 * cyc : 40;
+      else if (id === ent.ent_power_heat) v = cyc > -0.3 ? 7200 + 800 * cyc : 0;
+      else if (id === ent.ent_heater) v = hour >= 13 && hour < 13.2 ? "on" : "off";
+      else if (id === ent.ent_energy_heat) v = 5000 + Math.floor((t / 3600e3) * 3.1) % 100000;
+      else if (id === ent.ent_energy_dhw) v = 900 + Math.floor((t / 86400e3) * 6) % 10000;
+      else if (id === ent.ent_return_target) v = boost ? 33 : setback ? 27 : 30.5;
+      else if (id === ent.ent_dhw_target) v = boost ? 55 : 48;
+      else if (id === ent.ent_forecast_today) v = Math.max(0, 19 - hour * 1.2);
+      else if (id === ent.ent_forecast_tomorrow) v = 19.4;
+      else if (id === ent.ent_smart_grid) v = boost ? "Verstärkter Betrieb (grün)" : setback ? "Abgesenkter Betrieb (rot)" : "Normalbetrieb (gelb)";
+      else if (id === "sensor.wp_statuscode") v = cyc > -0.3 ? 2 : 0;
+      else if (id === "binary_sensor.wp_heizungspumpe_m13") v = "on";
       else continue;
       rows.push({ s: String(typeof v === "number" ? Math.round(v * 10) / 10 : v), lu: t / 1000 });
     }

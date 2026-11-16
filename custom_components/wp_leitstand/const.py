@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "wp_leitstand"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 TITLE = "WP Leitstand"
 
 PANEL_URL_PATH = "wp-leitstand"
@@ -44,6 +44,15 @@ CONF_ENT_COMPRESSOR = "ent_compressor"
 CONF_ENT_POWER_EL = "ent_power_el"
 CONF_ENT_POWER_HEAT = "ent_power_heat"
 
+# --- Effizienz und Export --------------------------------------------------
+CONF_ENT_ENERGY_EL = "ent_energy_el"
+CONF_ENT_ENERGY_HEAT = "ent_energy_heat"
+CONF_ENT_ENERGY_DHW = "ent_energy_dhw"
+CONF_ENT_ENERGY_ENV = "ent_energy_env"
+CONF_ENT_HEATER = "ent_heater"
+CONF_ENT_SECOND_HEAT = "ent_second_heat"
+CONF_EXPORT_EXTRA = "export_extra"
+
 # --- Photovoltaik ----------------------------------------------------------
 CONF_ENT_SURPLUS = "ent_pv_surplus"
 CONF_SURPLUS_SIGN = "surplus_sign"
@@ -74,7 +83,7 @@ CONF_SHIFT_BOOST_K = "shift_boost_k"
 CONF_SHIFT_SETBACK_K = "shift_setback_k"
 
 # Vorschläge passend zu packages/dimplex_wpm.yaml
-SUGGESTED_ENTITIES: dict[str, str] = {
+SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
     CONF_ENT_FLOW: "sensor.wp_vorlauftemperatur",
     CONF_ENT_RETURN: "sensor.wp_rucklauftemperatur",
     CONF_ENT_RETURN_TARGET: "sensor.wp_rucklaufsolltemperatur",
@@ -87,6 +96,22 @@ SUGGESTED_ENTITIES: dict[str, str] = {
     CONF_ENT_POWER_HEAT: "sensor.wp_heizleistung",
     CONF_ENT_SMART_GRID: "select.wp_smart_grid_setzen",
     CONF_ENT_SHIFT: "number.wp_parallelverschiebung_setzen",
+    CONF_ENT_ENERGY_HEAT: "sensor.wp_warmemenge_heizen",
+    CONF_ENT_ENERGY_DHW: "sensor.wp_warmemenge_warmwasser",
+    CONF_ENT_ENERGY_ENV: "sensor.wp_umweltenergie",
+    CONF_ENT_HEATER: "binary_sensor.wp_flanschheizung_e9",
+    CONF_ENT_SECOND_HEAT: "binary_sensor.wp_2_warmeerzeuger",
+    CONF_EXPORT_EXTRA: [
+        "sensor.wp_statuscode",
+        "sensor.wp_sperrcode",
+        "sensor.wp_fehlercode",
+        "sensor.wp_betriebsmodus_code",
+        "sensor.wp_smart_grid_code",
+        "sensor.wp_warmwasser_solltemperatur",
+        "sensor.wp_laufzeit_verdichter_1",
+        "binary_sensor.wp_heizungspumpe_m13",
+        "binary_sensor.wp_warmwasserpumpe_m18",
+    ],
 }
 
 DEFAULTS: dict[str, object] = {

@@ -90,6 +90,407 @@ function niceTicks(min, max, count = 4) {
   return ticks;
 }
 
+/* ---------------------------------------------------------------- Export */
+
+export const EXPORT_RANGES = [
+  { hours: 24, step: 60e3, label: "24 Stunden", detail: "ein Wert je Minute" },
+  { hours: 168, step: 300e3, label: "7 Tage", detail: "ein Wert je 5 Minuten" },
+  { hours: 720, step: 900e3, label: "30 Tage", detail: "ein Wert je 15 Minuten" },
+];
+
+const GAP_STATES = new Set(["", "unknown", "unavailable", "none", "None"]);
+const isGap = (raw) => raw === null || raw === undefined || GAP_STATES.has(String(raw));
+
+/**
+ * Zeitgewichteter Mittelwert je Raster. Home Assistant speichert nur Änderungen,
+ * deshalb gilt ein Wert so lange, bis der nächste kommt. Zeiten ohne gültigen
+ * Wert (unbekannt, nicht verfügbar) zählen nicht mit.
+ * rows: [[Millisekunden, Rohzustand]] aufsteigend; tEnd: bis wann Daten vorliegen.
+ */
+export function stepSeries(rows, t0, step, n, tEnd, toNumber = Number) {
+  const out = new Array(n).fill(null);
+  const read = (raw) => {
+    if (isGap(raw)) return null;
+    const v = toNumber(raw);
+    return Number.isFinite(v) ? v : null;
+  };
+  let i = 0;
+  let value = null;
+  while (i < rows.length && rows[i][0] <= t0) value = read(rows[i++][1]);
+  for (let b = 0; b < n; b++) {
+    const start = t0 + b * step;
+    const end = Math.min(start + step, tEnd);
+    if (end <= start) break;
+    let cursor = start;
+    let area = 0;
+    let covered = 0;
+    while (i < rows.length && rows[i][0] < end) {
+      const t = rows[i][0];
+      if (value !== null) {
+        area += value * (t - cursor);
+        covered += t - cursor;
+      }
+      cursor = t;
+      value = read(rows[i++][1]);
+    }
+    if (value !== null) {
+      area += value * (end - cursor);
+      covered += end - cursor;
+    }
+    if (covered > 0) out[b] = area / covered;
+  }
+  return out;
+}
+
+/** Textzustand am Ende jedes Rasters. */
+export function stepText(rows, t0, step, n, tEnd) {
+  const out = new Array(n).fill(null);
+  let i = 0;
+  let value = null;
+  for (let b = 0; b < n; b++) {
+    const start = t0 + b * step;
+    if (start >= tEnd) break;
+    const end = Math.min(start + step, tEnd);
+    while (i < rows.length && rows[i][0] <= end) {
+      const raw = rows[i++][1];
+      value = isGap(raw) ? null : String(raw);
+    }
+    out[b] = value;
+  }
+  return out;
+}
+
+/** Für Ein/Aus-Zustände: Anteil der Zeit "on" (0 bis 1) und Einschaltvorgänge je Raster. */
+export function stepBinary(rows, t0, step, n, tEnd) {
+  const share = stepSeries(rows, t0, step, n, tEnd, (raw) => (raw === "on" ? 1 : raw === "off" ? 0 : NaN));
+  const starts = share.map((v) => (v === null ? null : 0));
+  let prev = null;
+  for (const [t, raw] of rows) {
+    if (raw === "on" && prev === "off" && t > t0) {
+      const b = Math.floor((t - t0) / step);
+      if (b < n && starts[b] !== null) starts[b] += 1;
+    }
+    if (raw === "on" || raw === "off") prev = raw;
+  }
+  return { share, starts };
+}
+
+/** Ortszeit mit Zeitzonenversatz, z. B. 2026-11-16T12:05:00+01:00. */
+export function isoLocal(ms) {
+  const d = new Date(ms);
+  const p = (v, l = 2) => String(v).padStart(l, "0");
+  const off = -d.getTimezoneOffset();
+  const sign = off < 0 ? "-" : "+";
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    + `${sign}${p(Math.floor(Math.abs(off) / 60))}:${p(Math.abs(off) % 60)}`;
+}
+
+export function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number") return Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : "";
+  const text = String(v);
+  return /[",\r\n]/.test(text) || text !== text.trim() ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+export function entryTitle(e) {
+  if (e.kind === "switch") {
+    if (e.to === "boost") return "Angehoben";
+    if (e.to === "setback") return "Abgesenkt";
+    if (e.from === "boost") return "Anheben beendet";
+    if (e.from === "setback") return "Absenken beendet";
+    return "Normalbetrieb";
+  }
+  return { override: "Handbetrieb", automation: "Automatik", error: "Fehler", reapply: "Erneut gesetzt" }[e.kind] || "Hinweis";
+}
+
+const RESULT_TEXT = { sent: "gesendet", simulated: "nur protokolliert", failed: "fehlgeschlagen" };
+
+/**
+ * Baut die CSV-Datei: Kopfzeilen mit "#" (Regeln, Zuordnung der Spalten), dann
+ * eine Zeile je Raster. Logbuch-Einträge stehen in der Spalte "ereignisse" der
+ * Zeile, in deren Raster sie fallen. Leere Zeilen am Anfang und Ende entfallen.
+ * columns: [{ name, entity, unit, values: [n Werte] }]
+ */
+export function buildExport({ version, created, t0, step, n, columns, log, settings }) {
+  const events = new Array(n).fill(null);
+  for (const e of [...(log || [])].sort((a, b) => a.ts.localeCompare(b.ts))) {
+    const t = new Date(e.ts).getTime();
+    const b = Math.floor((t - t0) / step);
+    if (!(b >= 0 && b < n)) continue;
+    const result = RESULT_TEXT[e.result] ? ` [${RESULT_TEXT[e.result]}]` : "";
+    const detail = e.detail ? ` (${e.detail})` : "";
+    const line = `${isoLocal(t).slice(11, 19)} ${entryTitle(e)}${result}: ${e.text}${detail}`;
+    events[b] = events[b] ? `${events[b]} | ${line}` : line;
+  }
+  const filled = (b) => events[b] !== null || columns.some((col) => col.values[b] !== null && col.values[b] !== undefined);
+  let first = 0;
+  let last = n - 1;
+  while (first < n && !filled(first)) first++;
+  while (last >= first && !filled(last)) last--;
+  const rowCount = Math.max(0, last - first + 1);
+
+  const meta = [
+    "WP Leitstand Export",
+    `version: ${version}`,
+    `erstellt: ${isoLocal(created)}`,
+    `von: ${rowCount ? isoLocal(t0 + first * step) : ""}`,
+    `bis: ${rowCount ? isoLocal(Math.min(created, t0 + (last + 1) * step)) : ""}`,
+    `raster_sekunden: ${step / 1000}`,
+    "zeit: Beginn des Rasters in Ortszeit",
+    "zahlen: zeitgewichteter Mittelwert im Raster, Dezimalpunkt; leer = kein Wert aufgezeichnet",
+    "texte: Zustand am Ende des Rasters",
+    "_anteil: Anteil der Zeit im Zustand Ein (0 bis 1); _starts: Einschaltvorgänge im Raster",
+    "pv_ueberschuss_w: positiv = Überschuss",
+    "regelzustand: normal, boost (angehoben) oder setback (abgesenkt)",
+    "ereignisse: Logbuch-Einträge im Raster, mehrere durch | getrennt",
+    ...Object.entries(settings || {}).map(([k, v]) => `einstellung.${k}: ${v ?? ""}`),
+    ...columns.map((col) => `spalte.${col.name}: ${col.entity || "nicht hinterlegt"}${col.unit ? ` [${col.unit}]` : ""}`),
+  ];
+  const lines = meta.map((m) => `# ${m.replace(/[\r\n]+/g, " ")}`);
+  lines.push(["zeit", ...columns.map((col) => col.name), "ereignisse"].map(csvCell).join(","));
+  for (let b = first; b <= last; b++) {
+    lines.push([isoLocal(t0 + b * step), ...columns.map((col) => col.values[b]), events[b]].map(csvCell).join(","));
+  }
+  return { csv: `﻿${lines.join("\r\n")}\r\n`, rows: rowCount, columns: columns.length + 2 };
+}
+
+/* ------------------------------------------------------- Effizienz-Export */
+
+/**
+ * Läuft über mehrere Zustandsverläufe gleichzeitig und ruft onSegment für jeden
+ * Abschnitt auf, in dem sich kein Wert ändert. Abschnitte enden außerdem an den
+ * Rastergrenzen. values[i] ist der Rohzustand der i-ten Reihe (null = unbekannt).
+ */
+export function sweep(series, t0, tEnd, step, onSegment) {
+  const k = series.length;
+  const idx = new Array(k).fill(0);
+  const values = new Array(k).fill(null);
+  const advance = (limit) => {
+    for (let i = 0; i < k; i++) {
+      const rows = series[i];
+      while (idx[i] < rows.length && rows[idx[i]][0] <= limit) values[i] = rows[idx[i]++][1];
+    }
+  };
+  advance(t0);
+  let cursor = t0;
+  while (cursor < tEnd) {
+    const bucket = Math.floor((cursor - t0) / step);
+    let next = Math.min(tEnd, t0 + (bucket + 1) * step);
+    for (let i = 0; i < k; i++) {
+      const rows = series[i];
+      if (idx[i] < rows.length && rows[idx[i]][0] < next) next = rows[idx[i]][0];
+    }
+    onSegment(bucket, cursor, next, values);
+    advance(next);
+    cursor = next;
+  }
+}
+
+export const EFF_KEYS = [
+  "comp", "status", "mode", "outdoor", "flow", "ret", "retTarget", "dhw", "dhwTarget",
+  "pEl", "pHeat", "surplus", "heater", "second", "eEl", "eHeat", "eDhw", "eEnv",
+];
+const EFF_COUNTERS = ["eEl", "eHeat", "eDhw", "eEnv"];
+
+export const HOUR_HEADER = [
+  "zeit", "aussen_c", "vorlauf_lauf_c", "vorlauf_max_c", "ruecklauf_lauf_c", "ruecklauf_soll_c",
+  "warmwasser_c", "warmwasser_soll_c", "verdichter_min", "verdichter_starts", "status_min",
+  "heizstab_min", "zweiter_waermeerzeuger_min", "strom_aus_leistung_kwh", "waerme_aus_leistung_kwh",
+  "strom_zaehler_kwh", "waerme_heizen_zaehler_kwh", "waerme_warmwasser_zaehler_kwh",
+  "umweltenergie_zaehler_kwh", "pv_ueberschuss_kwh", "netzbezug_kwh", "angehoben_min", "abgesenkt_min",
+];
+export const CYCLE_HEADER = [
+  "start", "ende", "dauer_min", "pause_davor_min", "betriebsart", "status_min", "regelzustand",
+  "aussen_c", "vorlauf_c", "vorlauf_max_c", "ruecklauf_c", "warmwasser_start_c", "warmwasser_ende_c",
+  "strom_kwh", "waerme_kwh", "heizstab_min", "hinweis",
+];
+
+const minutes = (ms) => Math.round(ms / 6000) / 10;
+const mean = (pair) => (pair[1] > 0 ? pair[0] / pair[1] : null);
+const statusText = (map) => [...map.entries()].sort((a, b) => b[1] - a[1])
+  .map(([name, ms]) => `${name}=${minutes(ms)}`).join(";") || null;
+const dominant = (map) => [...map.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+/**
+ * Wertet die Zustandsverläufe für die Effizienz aus.
+ * data: { comp: [[ms, Zustand]], ... } mit den Schlüsseln aus EFF_KEYS (fehlende = nicht hinterlegt)
+ * factors: Umrechnung je Schlüssel in W bzw. kWh (z. B. kW -> 1000)
+ * Liefert Stundenwerte und eine Zeile je Verdichterlauf.
+ */
+export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3) {
+  const I = Object.fromEntries(EFF_KEYS.map((key, i) => [key, i]));
+  const series = EFF_KEYS.map((key) => data[key] || []);
+  const has = Object.fromEntries(EFF_KEYS.map((key) => [key, Boolean(data[key])]));
+  const num = (values, key) => {
+    const raw = values[I[key]];
+    if (isGap(raw)) return null;
+    const v = Number(raw) * (factors?.[key] ?? 1);
+    return Number.isFinite(v) ? v : null;
+  };
+  const add = (pair, v, dt) => {
+    if (v === null) return;
+    pair[0] += v * dt;
+    pair[1] += dt;
+  };
+  const n = Math.max(0, Math.ceil((tEnd - t0) / step));
+  const hours = Array.from({ length: n }, () => ({
+    outdoor: [0, 0], dhw: [0, 0], retTarget: [0, 0], dhwTarget: [0, 0], flowOn: [0, 0], retOn: [0, 0],
+    flowMax: null, compMs: null, starts: null, status: new Map(), heaterMs: null, secondMs: null,
+    elWh: null, heatWh: null, pvWh: null, gridWh: null, boostMs: null, setbackMs: null, end: {}, first: {},
+  }));
+  const cycles = [];
+  let cycle = null;
+  let compState = null;
+  let lastEnd = null;
+
+  const closeCycle = (end, note) => {
+    const c = cycle;
+    cycle = null;
+    lastEnd = end;
+    cycles.push([
+      isoLocal(c.start), isoLocal(end), minutes(end - c.start),
+      c.pause === null ? null : minutes(c.pause), dominant(c.status), statusText(c.status), dominant(c.mode),
+      mean(c.outdoor), mean(c.flow), c.flowMax, mean(c.ret), c.dhwStart, c.dhwEnd,
+      c.elWh === null ? null : c.elWh / 1000, c.heatWh === null ? null : c.heatWh / 1000,
+      c.heaterMs === null ? null : minutes(c.heaterMs), [c.note, note].filter(Boolean).join("; ") || null,
+    ]);
+  };
+
+  sweep(series, t0, tEnd, step, (b, a, e, values) => {
+    const dt = e - a;
+    const h = hours[b];
+    const raw = values[I.comp];
+    if (raw === "on" || raw === "off") {
+      if (raw === "on" && !cycle) {
+        if (compState === "off") h.starts = (h.starts ?? 0) + 1;
+        cycle = {
+          start: a, pause: lastEnd === null ? null : a - lastEnd, note: compState === null ? "Beginn vor dem Exportzeitraum" : null,
+          outdoor: [0, 0], flow: [0, 0], ret: [0, 0], flowMax: null, status: new Map(), mode: new Map(),
+          dhwStart: null, dhwEnd: null, elWh: null, heatWh: null, heaterMs: null,
+        };
+      }
+      if (raw === "off" && cycle) closeCycle(a, null);
+      compState = raw;
+    }
+    const on = compState === "on";
+    if (compState !== null) {
+      h.compMs = (h.compMs ?? 0) + (on ? dt : 0);
+      h.starts ??= 0;
+    }
+    const outdoor = num(values, "outdoor");
+    const flow = num(values, "flow");
+    const ret = num(values, "ret");
+    const dhw = num(values, "dhw");
+    const pEl = num(values, "pEl");
+    const pHeat = num(values, "pHeat");
+    const surplus = num(values, "surplus");
+    const status = values[I.status];
+    const mode = values[I.mode];
+    const heater = values[I.heater];
+    const second = values[I.second];
+
+    add(h.outdoor, outdoor, dt);
+    add(h.dhw, dhw, dt);
+    add(h.retTarget, num(values, "retTarget"), dt);
+    add(h.dhwTarget, num(values, "dhwTarget"), dt);
+    if (!isGap(status)) h.status.set(status, (h.status.get(status) || 0) + dt);
+    if (heater === "on" || heater === "off") h.heaterMs = (h.heaterMs ?? 0) + (heater === "on" ? dt : 0);
+    if (second === "on" || second === "off") h.secondMs = (h.secondMs ?? 0) + (second === "on" ? dt : 0);
+    if (pEl !== null) h.elWh = (h.elWh ?? 0) + (pEl * dt) / 3.6e6;
+    if (pHeat !== null) h.heatWh = (h.heatWh ?? 0) + (pHeat * dt) / 3.6e6;
+    if (surplus !== null) {
+      h.pvWh = (h.pvWh ?? 0) + (Math.max(0, surplus) * dt) / 3.6e6;
+      h.gridWh = (h.gridWh ?? 0) + (Math.max(0, -surplus) * dt) / 3.6e6;
+    }
+    if (!isGap(mode)) {
+      h.boostMs = (h.boostMs ?? 0) + (mode === "boost" ? dt : 0);
+      h.setbackMs = (h.setbackMs ?? 0) + (mode === "setback" ? dt : 0);
+    }
+    for (const key of EFF_COUNTERS) {
+      const v = num(values, key);
+      if (v === null) continue;
+      h.first[key] ??= v;
+      h.end[key] = v;
+    }
+    if (on) {
+      add(h.flowOn, flow, dt);
+      add(h.retOn, ret, dt);
+      if (flow !== null) h.flowMax = h.flowMax === null ? flow : Math.max(h.flowMax, flow);
+    }
+    if (on && cycle) {
+      const c = cycle;
+      add(c.outdoor, outdoor, dt);
+      add(c.flow, flow, dt);
+      add(c.ret, ret, dt);
+      if (flow !== null) c.flowMax = c.flowMax === null ? flow : Math.max(c.flowMax, flow);
+      if (!isGap(status)) c.status.set(status, (c.status.get(status) || 0) + dt);
+      if (!isGap(mode)) c.mode.set(mode, (c.mode.get(mode) || 0) + dt);
+      if (dhw !== null) {
+        c.dhwStart ??= dhw;
+        c.dhwEnd = dhw;
+      }
+      if (pEl !== null) c.elWh = (c.elWh ?? 0) + (pEl * dt) / 3.6e6;
+      if (pHeat !== null) c.heatWh = (c.heatWh ?? 0) + (pHeat * dt) / 3.6e6;
+      if (heater === "on" || heater === "off") c.heaterMs = (c.heaterMs ?? 0) + (heater === "on" ? dt : 0);
+    }
+  });
+  if (cycle) closeCycle(tEnd, "läuft bei Exportende noch");
+
+  const delta = (b, key) => {
+    const end = hours[b].end[key];
+    const before = b > 0 ? hours[b - 1].end[key] ?? hours[b].first[key] : hours[b].first[key];
+    return end === undefined || before === undefined || end < before ? null : end - before;
+  };
+  const kwh = (wh) => (wh === null ? null : wh / 1000);
+  const min = (ms) => (ms === null ? null : minutes(ms));
+  const hourRows = hours.map((h, b) => [
+    isoLocal(t0 + b * step), mean(h.outdoor), mean(h.flowOn), h.flowMax, mean(h.retOn), mean(h.retTarget),
+    mean(h.dhw), mean(h.dhwTarget), min(h.compMs), h.starts, statusText(h.status),
+    min(h.heaterMs), min(h.secondMs), kwh(h.elWh), kwh(h.heatWh),
+    delta(b, "eEl"), delta(b, "eHeat"), delta(b, "eDhw"), delta(b, "eEnv"),
+    kwh(h.pvWh), kwh(h.gridWh), min(h.boostMs), min(h.setbackMs),
+  ]);
+  return { hourRows, cycleRows: cycles, has };
+}
+
+/** CSV mit zwei Tabellen: Stundenwerte und Verdichterläufe. Leere Stunden am Rand entfallen. */
+export function buildEfficiencyExport({ version, created, t0, step, analysis, settings, entities }) {
+  const { hourRows, cycleRows } = analysis;
+  const filled = (row) => row.slice(1).some((v) => v !== null && v !== undefined);
+  let first = 0;
+  let last = hourRows.length - 1;
+  while (first <= last && !filled(hourRows[first])) first++;
+  while (last >= first && !filled(hourRows[last])) last--;
+  const rows = hourRows.slice(first, last + 1);
+  const meta = [
+    "WP Leitstand Effizienz-Export",
+    `version: ${version}`,
+    `erstellt: ${isoLocal(created)}`,
+    `von: ${rows.length ? isoLocal(t0 + first * step) : ""}`,
+    `bis: ${rows.length ? isoLocal(Math.min(created, t0 + (last + 1) * step)) : ""}`,
+    "aufbau: zwei Tabellen, jede beginnt mit einer Zeile '# tabelle: name'",
+    "zahlen: Dezimalpunkt; leer = kein Wert aufgezeichnet oder Sensor nicht hinterlegt",
+    "mittelwerte: zeitgewichtet; _lauf_ = nur während der Verdichter läuft",
+    "_min: Minuten in der Stunde; status_min: Minuten je Betriebsstatus als name=minuten, getrennt durch ;",
+    "strom_aus_leistung_kwh, waerme_aus_leistung_kwh: aus den Leistungs-Sensoren aufsummiert",
+    "_zaehler_kwh: Zunahme des Zähler-Sensors in der Stunde",
+    "pv_ueberschuss_kwh: aufsummierter positiver Anteil des Überschuss-Sensors; netzbezug_kwh: aufsummierter negativer Anteil",
+    "verdichterlaeufe: eine Zeile je Lauf; betriebsart = Betriebsstatus mit dem größten Zeitanteil; strom_kwh und waerme_kwh aus den Leistungs-Sensoren",
+    ...Object.entries(entities || {}).map(([k, v]) => `entitaet.${k}: ${v || "nicht hinterlegt"}`),
+    ...Object.entries(settings || {}).map(([k, v]) => `einstellung.${k}: ${v ?? ""}`),
+  ];
+  const line = (cells) => cells.map(csvCell).join(",");
+  const lines = [
+    ...meta.map((m) => `# ${m.replace(/[\r\n]+/g, " ")}`),
+    "# tabelle: stundenwerte",
+    line(HOUR_HEADER), ...rows.map(line),
+    "",
+    "# tabelle: verdichterlaeufe",
+    line(CYCLE_HEADER), ...cycleRows.map(line),
+  ];
+  return { csv: `﻿${lines.join("\r\n")}\r\n`, rows: rows.length, cycles: cycleRows.length };
+}
+
 /* ------------------------------------------------------------------ Stile */
 
 const STYLE = `
@@ -135,8 +536,8 @@ button, select { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--rule);
 }
 .bar h1 { flex: 1; margin: 0 0 0 8px; font-size: 20px; font-weight: 400; }
-.bar a { color: inherit; font-size: 14px; text-decoration: none; padding: 8px; border-radius: 6px; }
-.bar a:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.bar a, .bar button { color: inherit; font-size: 14px; text-decoration: none; padding: 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.bar a:hover, .bar button:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 
 main { max-width: 1240px; margin: 0 auto; padding: 28px 24px 64px; }
 section + section { margin-top: 36px; }
@@ -239,6 +640,26 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-nu
 th, td { padding: 6px 10px 6px 0; text-align: right; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 400; }
 th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
+
+/* ---- Export ---- */
+dialog { width: min(460px, calc(100vw - 32px)); padding: 22px 24px 20px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+dialog h2 { margin-bottom: 8px; font-size: 20px; font-weight: 400; }
+dialog p { margin: 0 0 14px; color: var(--ink-2); font-size: 14px; }
+dialog a { color: inherit; }
+dialog fieldset { margin: 0 0 16px; padding: 0; border: 0; display: grid; gap: 4px; }
+dialog legend { padding: 0; margin-bottom: 6px; font-size: 14px; }
+dialog label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 0; cursor: pointer; }
+dialog input[type="radio"] { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ink); }
+.opt { display: flex; flex-wrap: wrap; gap: 0 10px; }
+.opt .sub { color: var(--ink-2); }
+.opt.stack .sub { flex-basis: 100%; font-size: 14px; }
+.dlg-status { min-height: 1.45em; color: var(--ink); }
+.dlg-status.error { color: var(--c-warn); }
+.dlg-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.solid { padding: 8px 14px; border: 1px solid var(--ink); border-radius: 8px; background: var(--ink); color: var(--surface); cursor: pointer; font-size: 14px; }
+.solid:disabled { opacity: 0.5; cursor: default; }
+.solid[hidden] { display: none; }
 
 /* ---- Logbuch und Regeln ---- */
 .lower { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 48px; align-items: start; }
@@ -424,6 +845,7 @@ class WpLeitstandPanel extends HTMLElement {
     root.append(
       h("style", {}, STYLE),
       h("header", { class: "bar" }, this._menu, h("h1", {}, "Wärmepumpe"),
+        h("button", { onclick: () => this._openExport() }, "Export"),
         h("a", { href: settingsHref, onclick: nav }, "Einstellungen")),
       h("main", {},
         h("section", { class: "lage" },
@@ -444,6 +866,8 @@ class WpLeitstandPanel extends HTMLElement {
           h("div", {}, h("h2", {}, "Logbuch"), $.log, $.more),
           h("div", {}, h("h2", {}, "So wird geregelt"), $.rules)))
     );
+
+    root.append(this._buildExportDialog(settingsHref, nav));
 
     this._resize = new ResizeObserver(() => this._drawPlots());
     this._resize.observe($.plots);
@@ -635,14 +1059,7 @@ class WpLeitstandPanel extends HTMLElement {
   /* ------------------------------------------------------------ Logbuch */
 
   _entryTitle(e) {
-    if (e.kind === "switch") {
-      if (e.to === "boost") return "Angehoben";
-      if (e.to === "setback") return "Abgesenkt";
-      if (e.from === "boost") return "Anheben beendet";
-      if (e.from === "setback") return "Absenken beendet";
-      return "Normalbetrieb";
-    }
-    return { override: "Handbetrieb", automation: "Automatik", error: "Fehler", reapply: "Erneut gesetzt" }[e.kind] || "Hinweis";
+    return entryTitle(e);
   }
 
   _entryGlyph(e) {
@@ -700,6 +1117,283 @@ class WpLeitstandPanel extends HTMLElement {
     }
     $.log.replaceChildren(...nodes);
     $.more.hidden = log.length <= this._logShown;
+  }
+
+  /* ------------------------------------------------------------- Export */
+
+  _buildExportDialog(settingsHref, nav) {
+    const $ = this.$;
+    this._exportRange = EXPORT_RANGES[1];
+    this._exportKind = "verlauf";
+    $.expStatus = h("p", { class: "dlg-status", role: "status" });
+    $.expMake = h("button", { class: "solid", onclick: () => this._runExport() }, "Export erstellen");
+    $.expSave = h("button", { class: "solid", hidden: true, onclick: () => this._saveExport() }, "Herunterladen");
+    $.expShare = h("button", { class: "plain", hidden: true, onclick: () => this._shareExport() }, "Teilen");
+    $.expExtra = h("p", {});
+    $.expDetails = [];
+    const kinds = [
+      ["verlauf", "Verlauf und Entscheidungen", "Messwerte im Zeitraster, Regelzustand, Logbuch"],
+      ["effizienz", "Effizienz", "Stundenwerte und eine Zeile je Verdichterlauf"],
+    ];
+    $.expDialog = h("dialog", { "aria-labelledby": "exp-title" },
+      h("h2", { id: "exp-title" }, "Daten exportieren"),
+      h("p", {}, "Eine CSV-Datei zum Auswerten. Die Regeln und die Zuordnung der Sensoren stehen im Kopf der Datei."),
+      h("fieldset", {},
+        h("legend", {}, "Inhalt"),
+        kinds.map(([kind, label, detail]) => h("label", {},
+          h("input", {
+            type: "radio", name: "exp-kind", checked: kind === this._exportKind,
+            onchange: () => {
+              this._exportKind = kind;
+              for (const el of $.expDetails) el.hidden = kind !== "verlauf";
+              this._resetExport();
+            },
+          }),
+          h("span", { class: "opt stack" }, label, h("span", { class: "sub" }, detail))))),
+      h("fieldset", {},
+        h("legend", {}, "Zeitraum"),
+        EXPORT_RANGES.map((r) => {
+          const detail = h("span", { class: "sub" }, r.detail);
+          $.expDetails.push(detail);
+          return h("label", {},
+            h("input", {
+              type: "radio", name: "exp-range", checked: r === this._exportRange,
+              onchange: () => { this._exportRange = r; this._resetExport(); },
+            }),
+            h("span", { class: "opt" }, r.label, detail));
+        })),
+      $.expExtra,
+      $.expStatus,
+      h("div", { class: "dlg-actions" },
+        h("button", { class: "plain", onclick: () => $.expDialog.close() }, "Schließen"),
+        $.expShare, $.expSave, $.expMake));
+    $.expExtraLink = h("a", { href: settingsHref, onclick: (e) => { $.expDialog.close(); nav(e); } }, "Sensoren für den Export wählen");
+    return $.expDialog;
+  }
+
+  _openExport() {
+    if (!this._snap) return;
+    const count = (this._snap.export_extra || []).length;
+    this.$.expExtra.replaceChildren(
+      count
+        ? `Im Verlauf werden zusätzlich ${count} weitere Sensoren exportiert. `
+        : "Zähler, Heizstab und weitere Sensoren lassen sich in den Einstellungen hinzufügen. ",
+      this.$.expExtraLink);
+    this._resetExport();
+    this.$.expDialog.showModal();
+  }
+
+  _resetExport() {
+    const $ = this.$;
+    this._export = null;
+    this._exportToken = (this._exportToken || 0) + 1;
+    $.expStatus.textContent = "";
+    $.expStatus.classList.remove("error");
+    $.expMake.hidden = false;
+    $.expMake.disabled = false;
+    $.expSave.hidden = true;
+    $.expShare.hidden = true;
+  }
+
+  /** Welche Spalten exportiert werden. Das Schema ist fest; nicht hinterlegte Spalten bleiben leer. */
+  _exportPlan() {
+    const snap = this._snap;
+    const cfg = snap.entities;
+    const unitOf = (id) => String(this._hass.states?.[id]?.attributes?.unit_of_measurement || "");
+    const power = (id) => ({ kw: 1000, mw: 1e6 }[unitOf(id).toLowerCase()] || 1);
+    const energy = (id) => ({ wh: 0.001, mwh: 1000 }[unitOf(id).toLowerCase()] || 1);
+    const plan = [];
+    const num = (name, id, factor = 1, unit = "") => plan.push({ name, id, type: "num", factor, unit });
+    const surplusFactor = power(cfg.ent_pv_surplus) * (snap.settings.surplus_sign === "export_negative" ? -1 : 1);
+    num("pv_ueberschuss_w", cfg.ent_pv_surplus, surplusFactor, "W");
+    num("pv_prognose_rest_heute_kwh", cfg.ent_forecast_today, energy(cfg.ent_forecast_today), "kWh");
+    num("pv_prognose_morgen_kwh", cfg.ent_forecast_tomorrow, energy(cfg.ent_forecast_tomorrow), "kWh");
+    num("aussen_c", cfg.ent_outdoor, 1, "°C");
+    num("vorlauf_c", cfg.ent_flow, 1, "°C");
+    num("ruecklauf_c", cfg.ent_return, 1, "°C");
+    num("ruecklauf_soll_c", cfg.ent_return_target, 1, "°C");
+    num("warmwasser_c", cfg.ent_dhw, 1, "°C");
+    num("warmwasser_soll_c", cfg.ent_dhw_target, 1, "°C");
+    num("strom_wp_w", cfg.ent_power_el, power(cfg.ent_power_el), "W");
+    num("heizleistung_w", cfg.ent_power_heat, power(cfg.ent_power_heat), "W");
+    plan.push({ name: "verdichter", id: cfg.ent_compressor, type: "binary", starts: true });
+    plan.push({ name: "wp_status", id: cfg.ent_status, type: "text" });
+    plan.push({ name: "regelzustand", id: snap.state.state_entity_id, type: "text" });
+    plan.push({ name: "smart_grid", id: cfg.ent_smart_grid, type: "text" });
+    num("parallelverschiebung_k", cfg.ent_shift, 1, "K");
+    plan.push({ name: "heizstab", id: cfg.ent_heater, type: "binary" });
+    plan.push({ name: "zweiter_waermeerzeuger", id: cfg.ent_second_heat, type: "binary" });
+    num("strom_zaehler_kwh", cfg.ent_energy_el, energy(cfg.ent_energy_el), "kWh");
+    num("waerme_heizen_zaehler_kwh", cfg.ent_energy_heat, energy(cfg.ent_energy_heat), "kWh");
+    num("waerme_warmwasser_zaehler_kwh", cfg.ent_energy_dhw, energy(cfg.ent_energy_dhw), "kWh");
+    num("umweltenergie_zaehler_kwh", cfg.ent_energy_env, energy(cfg.ent_energy_env), "kWh");
+
+    const used = new Set(plan.map((col) => col.id).filter(Boolean));
+    for (const id of snap.export_extra || []) {
+      if (used.has(id)) continue;
+      used.add(id);
+      const st = this._hass.states?.[id];
+      if (id.startsWith("binary_sensor.")) plan.push({ name: id, id, type: "binary" });
+      else if (unitOf(id) || (st && !isGap(st.state) && Number.isFinite(Number(st.state)))) num(id, id, 1, unitOf(id));
+      else plan.push({ name: id, id, type: "text" });
+    }
+    return plan;
+  }
+
+  async _history(id, t0, t1) {
+    const hist = await this._hass.callWS({
+      type: "history/history_during_period",
+      start_time: new Date(t0).toISOString(), end_time: new Date(t1).toISOString(),
+      entity_ids: [id], minimal_response: true, no_attributes: true, significant_changes_only: false,
+    });
+    return (hist?.[id] || []).map((r) => [((r.lu ?? r.lc) || 0) * 1000, r.s]);
+  }
+
+  async _runExport() {
+    const $ = this.$;
+    const range = this._exportRange;
+    const kind = this._exportKind;
+    const token = this._exportToken;
+    const say = (text, error = false) => {
+      if (token !== this._exportToken) return;
+      $.expStatus.textContent = text;
+      $.expStatus.classList.toggle("error", error);
+    };
+    $.expMake.disabled = true;
+    const created = Date.now();
+    let built;
+    let summary;
+    try {
+      built = kind === "effizienz"
+        ? await this._buildEfficiency(range, created, say, token)
+        : await this._buildHistory(range, created, say, token);
+    } catch (err) {
+      say(`Der Export ist fehlgeschlagen: ${err?.message || err}`, true);
+      $.expMake.disabled = false;
+      return;
+    }
+    if (!built || token !== this._exportToken) return;
+    if (!built.rows) {
+      say("Für diesen Zeitraum ist noch nichts aufgezeichnet. Es gibt nichts zu exportieren.", true);
+      $.expMake.disabled = false;
+      return;
+    }
+    const stamp = isoLocal(created);
+    const filename = `wp-leitstand_${kind}_${stamp.slice(0, 10)}_${stamp.slice(11, 16).replace(":", "")}_${range.hours}h.csv`;
+    const bytes = new Blob([built.csv]).size;
+    const size = bytes > 1e6 ? `${nf1.format(bytes / 1e6)} MB` : `${nf0.format(Math.max(1, bytes / 1000))} kB`;
+    this._export = { csv: built.csv, filename };
+    summary = kind === "effizienz"
+      ? `Fertig: ${nf0.format(built.rows)} Stunden, ${nf0.format(built.cycles)} Verdichterläufe, ${size}.`
+      : `Fertig: ${nf0.format(built.rows)} Zeilen, ${built.columns} Spalten, ${size}.`;
+    say(built.note ? `${summary} ${built.note}` : summary);
+    $.expMake.hidden = true;
+    $.expSave.hidden = false;
+    let canShare = false;
+    try {
+      canShare = Boolean(navigator.canShare?.({ files: [new File([""], filename, { type: "text/csv" })] }));
+    } catch (_err) {
+      canShare = false;
+    }
+    $.expShare.hidden = !canShare;
+  }
+
+  async _buildHistory(range, created, say, token) {
+    const snap = this._snap;
+    const step = range.step;
+    const t1 = Math.ceil(created / step) * step;
+    const t0 = t1 - range.hours * 3600e3;
+    const n = Math.round((t1 - t0) / step);
+    const plan = this._exportPlan();
+    const total = plan.filter((col) => col.id).length;
+    const columns = [];
+    let done = 0;
+    for (const col of plan) {
+      let rows = [];
+      if (col.id) {
+        say(`Lade ${++done} von ${total}: ${col.name}`);
+        rows = await this._history(col.id, t0, created);
+        if (token !== this._exportToken) return null;
+      }
+      if (col.type === "num") {
+        const values = stepSeries(rows, t0, step, n, created).map((v) => (v === null ? null : v * col.factor));
+        columns.push({ name: col.name, entity: col.id, unit: col.unit, values });
+      } else if (col.type === "binary") {
+        const { share, starts } = stepBinary(rows, t0, step, n, created);
+        columns.push({ name: `${col.name}_anteil`, entity: col.id, values: share });
+        if (col.starts) columns.push({ name: `${col.name}_starts`, entity: col.id, values: starts });
+      } else {
+        columns.push({ name: col.name, entity: col.id, values: stepText(rows, t0, step, n, created) });
+      }
+    }
+    return buildExport({ version: snap.version, created, t0, step, n, columns, log: snap.log, settings: snap.settings });
+  }
+
+  async _buildEfficiency(range, created, say, token) {
+    const snap = this._snap;
+    const cfg = snap.entities;
+    const step = 3600e3;
+    const top = new Date(created);
+    top.setMinutes(0, 0, 0);
+    const t0 = top.getTime() + step - range.hours * 3600e3;
+    const unitOf = (id) => String(this._hass.states?.[id]?.attributes?.unit_of_measurement || "").toLowerCase();
+    const power = (id) => ({ kw: 1000, mw: 1e6 }[unitOf(id)] || 1);
+    const energy = (id) => ({ wh: 0.001, mwh: 1000 }[unitOf(id)] || 1);
+    const source = {
+      comp: cfg.ent_compressor, status: cfg.ent_status, mode: snap.state.state_entity_id,
+      outdoor: cfg.ent_outdoor, flow: cfg.ent_flow, ret: cfg.ent_return, retTarget: cfg.ent_return_target,
+      dhw: cfg.ent_dhw, dhwTarget: cfg.ent_dhw_target, pEl: cfg.ent_power_el, pHeat: cfg.ent_power_heat,
+      surplus: cfg.ent_pv_surplus, heater: cfg.ent_heater, second: cfg.ent_second_heat,
+      eEl: cfg.ent_energy_el, eHeat: cfg.ent_energy_heat, eDhw: cfg.ent_energy_dhw, eEnv: cfg.ent_energy_env,
+    };
+    const factors = {
+      pEl: power(source.pEl), pHeat: power(source.pHeat),
+      surplus: power(source.surplus) * (snap.settings.surplus_sign === "export_negative" ? -1 : 1),
+      eEl: energy(source.eEl), eHeat: energy(source.eHeat), eDhw: energy(source.eDhw), eEnv: energy(source.eEnv),
+    };
+    const wanted = EFF_KEYS.filter((key) => source[key]);
+    const data = {};
+    let done = 0;
+    for (const key of wanted) {
+      say(`Lade ${++done} von ${wanted.length}: ${source[key]}`);
+      data[key] = await this._history(source[key], t0, created);
+      if (token !== this._exportToken) return null;
+    }
+    say("Werte aus …");
+    const analysis = analyseEfficiency(data, factors, t0, created, step);
+    const built = buildEfficiencyExport({
+      version: snap.version, created, t0, step, analysis, settings: snap.settings, entities: source,
+    });
+    const missing = [];
+    if (!source.comp) missing.push("Verdichter");
+    if (!source.pEl && !source.eEl) missing.push("Strom der Wärmepumpe");
+    if (!source.pHeat && !source.eHeat) missing.push("Wärme");
+    if (missing.length) built.note = `Nicht hinterlegt und deshalb leer: ${missing.join(", ")}.`;
+    return built;
+  }
+
+  _saveExport() {
+    if (!this._export) return;
+    const { csv, filename } = this._export;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = h("a", { href: url, download: filename, hidden: true });
+    this.shadowRoot.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    this.$.expStatus.textContent = `Gespeichert als ${filename}.`;
+  }
+
+  async _shareExport() {
+    if (!this._export) return;
+    const { csv, filename } = this._export;
+    try {
+      await navigator.share({ files: [new File([csv], filename, { type: "text/csv" })], title: "WP Leitstand Export" });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      this.$.expStatus.textContent = `Teilen hat nicht geklappt (${err?.message || err}). Nimm „Herunterladen“.`;
+      this.$.expStatus.classList.add("error");
+    }
   }
 
   /* ------------------------------------------------------------ Verlauf */

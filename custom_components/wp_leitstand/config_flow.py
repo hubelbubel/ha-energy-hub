@@ -15,6 +15,7 @@ STEP_HEATPUMP = "heatpump"
 STEP_PV = "pv"
 STEP_RULES = "rules"
 STEP_ACTUATOR = "actuator"
+STEP_EXPORT = "export"
 
 
 def _entity(*domains: str) -> selector.EntitySelector:
@@ -92,6 +93,19 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_SHIFT_BOOST_K, _number(0, 10, 1, "K"), True),
         (c.CONF_SHIFT_SETBACK_K, _number(0, 10, 1, "K"), True),
     ],
+    STEP_EXPORT: [
+        (c.CONF_ENT_ENERGY_EL, _entity("sensor"), False),
+        (c.CONF_ENT_ENERGY_HEAT, _entity("sensor"), False),
+        (c.CONF_ENT_ENERGY_DHW, _entity("sensor"), False),
+        (c.CONF_ENT_ENERGY_ENV, _entity("sensor"), False),
+        (c.CONF_ENT_HEATER, _entity("binary_sensor"), False),
+        (c.CONF_ENT_SECOND_HEAT, _entity("binary_sensor"), False),
+        (
+            c.CONF_EXPORT_EXTRA,
+            selector.EntitySelector(selector.EntitySelectorConfig(multiple=True)),
+            False,
+        ),
+    ],
 }
 
 
@@ -116,7 +130,7 @@ def merge_step(step: str, values: dict[str, Any], user_input: dict[str, Any]) ->
     """Übernimmt einen Schritt vollständig: geleerte Felder verschwinden."""
     keys = {key for key, _sel, _req in FIELDS[step]}
     merged = {k: v for k, v in values.items() if k not in keys}
-    merged.update({k: v for k, v in user_input.items() if v not in (None, "")})
+    merged.update({k: v for k, v in user_input.items() if v not in (None, "", [])})
     return merged
 
 
@@ -170,7 +184,10 @@ class WPLeitstandConfigFlow(ConfigFlow, domain=c.DOMAIN):
         return await self._step(STEP_RULES, STEP_RULES, user_input, STEP_ACTUATOR)
 
     async def async_step_actuator(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return await self._step(STEP_ACTUATOR, STEP_ACTUATOR, user_input, None)
+        return await self._step(STEP_ACTUATOR, STEP_ACTUATOR, user_input, STEP_EXPORT)
+
+    async def async_step_export(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_EXPORT, STEP_EXPORT, user_input, None)
 
     @staticmethod
     @callback
@@ -184,7 +201,7 @@ class WPLeitstandOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=[STEP_HEATPUMP, STEP_PV, STEP_RULES, STEP_ACTUATOR],
+            menu_options=[STEP_HEATPUMP, STEP_PV, STEP_RULES, STEP_ACTUATOR, STEP_EXPORT],
         )
 
     async def _step(self, step: str, user_input: dict[str, Any] | None) -> ConfigFlowResult:
@@ -212,3 +229,6 @@ class WPLeitstandOptionsFlow(OptionsFlow):
 
     async def async_step_actuator(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_ACTUATOR, user_input)
+
+    async def async_step_export(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_EXPORT, user_input)

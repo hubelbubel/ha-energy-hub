@@ -57,6 +57,28 @@ with sync_playwright() as p:
             problems.append(f"{name}: Seite ist {overflow}px breiter als das Fenster")
         page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
         page.close()
+    # Export: Dialog öffnen, beide Exporte erstellen und die heruntergeladenen Dateien ablegen
+    DIALOG = "document.querySelector('wp-leitstand-panel').shadowRoot"
+    for name, w, h in (("export-desktop", 1360, 900), ("export-mobile", 390, 844)):
+        page = browser.new_page(viewport={"width": w, "height": h}, accept_downloads=True)
+        page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))
+        page.goto(base + "?mode=boost")
+        page.wait_for_timeout(500)
+        page.get_by_role("button", name="Export", exact=True).click()
+        page.screenshot(path=str(OUT / f"{name}-dialog.png"))
+        for kind, label in (("verlauf", "Verlauf und Entscheidungen"), ("effizienz", "Effizienz")):
+            page.get_by_label(label).check()
+            page.get_by_role("button", name="Export erstellen").click()
+            page.get_by_role("button", name="Herunterladen").wait_for(timeout=20000)
+            status = page.evaluate(f"() => {DIALOG}.querySelector('.dlg-status').textContent")
+            if name == "export-desktop":
+                with page.expect_download() as info:
+                    page.get_by_role("button", name="Herunterladen").click()
+                info.value.save_as(str(OUT / f"{kind}.csv"))
+                print(f"{kind}: {info.value.suggested_filename} | {status}")
+            else:
+                page.screenshot(path=str(OUT / f"{name}-{kind}-fertig.png"))
+        page.close()
     browser.close()
 server.shutdown()
 
