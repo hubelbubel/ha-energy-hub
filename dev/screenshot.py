@@ -12,6 +12,8 @@ import sys
 import threading
 from pathlib import Path
 
+import datetime
+
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parents[1]
@@ -19,11 +21,18 @@ OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/shots")
 OUT.mkdir(parents=True, exist_ok=True)
 
 SHOTS = [
-    ("desktop-light-boost", 1360, 900, "?mode=boost"),
-    ("desktop-dark-setback", 1360, 900, "?mode=setback&theme=dark"),
-    ("desktop-light-empty", 1360, 900, "?mode=empty"),
-    ("mobile-light-override", 390, 844, "?mode=override"),
-    ("mobile-dark-normal", 390, 844, "?mode=normal&theme=dark"),
+    ("overview-desktop-light", 1360, 900, "?tab=overview&mode=boost"),
+    ("overview-desktop-dark", 1360, 900, "?tab=overview&mode=setback&theme=dark"),
+    ("overview-mobile-light", 390, 844, "?tab=overview&mode=boost"),
+    ("power-desktop-light", 1360, 900, "?tab=power&mode=boost"),
+    ("power-desktop-dark", 1360, 900, "?tab=power&mode=setback&theme=dark"),
+    ("power-mobile-dark", 390, 844, "?tab=power&mode=normal&theme=dark"),
+    ("overview-desktop-empty", 1360, 900, "?tab=overview&mode=empty"),
+    ("desktop-light-boost", 1360, 900, "?tab=heat&mode=boost"),
+    ("desktop-dark-setback", 1360, 900, "?tab=heat&mode=setback&theme=dark"),
+    ("desktop-light-empty", 1360, 900, "?tab=heat&mode=empty"),
+    ("mobile-light-override", 390, 844, "?tab=heat&mode=override"),
+    ("mobile-dark-normal", 390, 844, "?tab=heat&mode=normal&theme=dark"),
 ]
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -37,18 +46,23 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{server.server_address[1]}/dev/preview.html"
 
 problems = []
+# Feste Uhrzeit, damit die Bilder unabhängig von der Tageszeit einen gefüllten Tag zeigen
+FIXED = datetime.datetime.now().replace(hour=17, minute=40, second=0, microsecond=0)
+if FIXED > datetime.datetime.now():
+    FIXED -= datetime.timedelta(days=1)
 with sync_playwright() as p:
     browser = p.chromium.launch(channel="chrome")
     for name, w, h, query in SHOTS:
         page = browser.new_page(viewport={"width": w, "height": h}, device_scale_factor=1)
+        page.clock.set_fixed_time(FIXED)
         page.on("console", lambda m, n=name: m.type == "error" and "404" not in m.text and problems.append(f"{n}: {m.text}"))
         page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))
         page.goto(base + query)
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(900)
         if name.startswith("desktop-light-boost"):
             box = page.evaluate(
                 "() => { const r = document.querySelector('energy-hub-panel').shadowRoot"
-                ".querySelector('.plots').getBoundingClientRect(); return [r.left, r.top, r.width]; }"
+                ".querySelector('main:not([hidden]) .plots').getBoundingClientRect(); return [r.left, r.top, r.width]; }"
             )
             page.mouse.move(box[0] + box[2] * 0.62, box[1] + 120)
             page.wait_for_timeout(100)
@@ -61,8 +75,9 @@ with sync_playwright() as p:
     DIALOG = "document.querySelector('energy-hub-panel').shadowRoot"
     for name, w, h in (("export-desktop", 1360, 900), ("export-mobile", 390, 844)):
         page = browser.new_page(viewport={"width": w, "height": h}, accept_downloads=True)
+        page.clock.set_fixed_time(FIXED)
         page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))
-        page.goto(base + "?mode=boost")
+        page.goto(base + "?tab=heat&mode=boost")
         page.wait_for_timeout(500)
         page.get_by_role("button", name="Export", exact=True).click()
         page.screenshot(path=str(OUT / f"{name}-dialog.png"))

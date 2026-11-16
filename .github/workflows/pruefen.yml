@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node --test tests/test_export.mjs
+      - run: node --test tests/test_export.mjs tests/test_energy.mjs
 
   hassfest:
     name: Hassfest (Home-Assistant-Vorgaben)

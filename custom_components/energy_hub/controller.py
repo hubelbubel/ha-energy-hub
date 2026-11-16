@@ -64,6 +64,12 @@ ENTITY_KEYS = (
     c.CONF_ENT_LOCK,
     c.CONF_ENT_FIREPLACE,
     c.CONF_ENT_FIREPLACE_STATUS,
+    c.CONF_ENT_GRID,
+    c.CONF_ENT_PV,
+    c.CONF_ENT_BATTERY,
+    c.CONF_ENT_BATTERY_SOC,
+    c.CONF_ENT_HOUSE,
+    c.CONF_ENT_WALLBOX,
 )
 
 SETTING_KEYS = (
@@ -87,6 +93,8 @@ SETTING_KEYS = (
     c.CONF_STORAGE_BLOCKS_BOOST,
     c.CONF_LOCK_REGEN_VALUE,
     c.CONF_FIREPLACE_ON_C,
+    c.CONF_GRID_SIGN,
+    c.CONF_BATTERY_SIGN,
 )
 
 
@@ -558,6 +566,7 @@ class Controller:
             "version": c.VERSION,
             "entities": {key: o.get(key) or None for key in ENTITY_KEYS},
             "export_extra": list(o.get(c.CONF_EXPORT_EXTRA) or []),
+            "consumers": list(o.get(c.CONF_CONSUMERS) or []),
             "settings": {key: o.get(key) for key in SETTING_KEYS},
             "state": {
                 "mode": self.mode,

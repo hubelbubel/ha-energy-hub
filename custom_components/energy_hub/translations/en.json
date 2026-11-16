@@ -21,6 +21,26 @@
           "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\"."
         }
       },
+      "power": {
+        "title": "Electricity",
+        "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed; daily energy is calculated from them.",
+        "data": {
+          "ent_grid_power": "Power at the grid connection",
+          "grid_sign": "Sign at the grid connection",
+          "ent_pv_power": "Power of the PV system",
+          "ent_battery_power": "Power of the battery",
+          "battery_sign": "Sign of the battery",
+          "ent_battery_soc": "Battery state of charge",
+          "ent_house_power": "House consumption",
+          "ent_wallbox_power": "Power of the wallbox",
+          "consumers": "Further consumers"
+        },
+        "data_description": {
+          "ent_grid_power": "One signed sensor: import and export.",
+          "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
+          "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\"."
+        }
+      },
       "pv": {
         "title": "Photovoltaics",
         "description": "The control follows these values. Without a surplus sensor the heating stays in normal operation.",
@@ -135,6 +155,7 @@
         "title": "Configure Energy Hub",
         "menu_options": {
           "heatpump": "Heat pump",
+          "power": "Electricity",
           "pv": "Photovoltaics",
           "storage": "Fireplace and storage tank",
           "rules": "Rules",
@@ -160,6 +181,26 @@
         "data_description": {
           "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
           "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\"."
+        }
+      },
+      "power": {
+        "title": "Electricity",
+        "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed; daily energy is calculated from them.",
+        "data": {
+          "ent_grid_power": "Power at the grid connection",
+          "grid_sign": "Sign at the grid connection",
+          "ent_pv_power": "Power of the PV system",
+          "ent_battery_power": "Power of the battery",
+          "battery_sign": "Sign of the battery",
+          "ent_battery_soc": "Battery state of charge",
+          "ent_house_power": "House consumption",
+          "ent_wallbox_power": "Power of the wallbox",
+          "consumers": "Further consumers"
+        },
+        "data_description": {
+          "ent_grid_power": "One signed sensor: import and export.",
+          "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
+          "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\"."
         }
       },
       "pv": {
@@ -268,6 +309,18 @@
     }
   },
   "selector": {
+    "grid_sign": {
+      "options": {
+        "import_positive": "Positive means import from the grid",
+        "export_positive": "Positive means export"
+      }
+    },
+    "battery_sign": {
+      "options": {
+        "discharge_positive": "Positive means discharging",
+        "charge_positive": "Positive means charging"
+      }
+    },
     "surplus_sign": {
       "options": {
         "surplus_positive": "Positive means surplus",

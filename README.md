@@ -1,18 +1,79 @@
 # Energy Hub
 
-Eine Integration für Home Assistant, die eine Wärmepumpe in der Seitenleiste zeigt und die Heizung nach PV-Überschuss und PV-Prognose anhebt oder absenkt. Jede Schaltung steht mit Uhrzeit und Begründung im Logbuch.
+Eine Integration für Home Assistant, die Strom und Wärme eines Hauses in der Seitenleiste zusammenführt: woher der Strom kommt und wohin er geht, was die Wärmepumpe tut, und was in der letzten Woche gut lief und was auffiel. Die Heizung wird nach PV-Überschuss und PV-Prognose angehoben oder abgesenkt; jede Schaltung steht mit Uhrzeit und Begründung im Logbuch.
 
-Entstanden für eine Dimplex HPL 12S-TUW (Wärmepumpenmanager mit Software M) über Modbus RTU. Die Integration selbst ist herstellerneutral: Sie arbeitet mit beliebigen Entitäten, die du bei der Einrichtung auswählst.
+Entstanden für ein Haus mit Dimplex-Wärmepumpe (Modbus RTU), wasserführendem Kamin, PV, Batterie und Wallbox. Die Integration selbst ist herstellerneutral: Sie arbeitet mit beliebigen Entitäten, die du bei der Einrichtung auswählst.
 
-![Panel im hellen Design mit Beispieldaten](docs/panel-hell.png)
+![Übersicht mit Beispieldaten](docs/uebersicht.png)
 
-Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Dunkles Design: [docs/panel-dunkel.png](docs/panel-dunkel.png).
+Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Weitere: [Strom](docs/strom.png), [Wärme hell](docs/panel-hell.png), [Wärme dunkel](docs/panel-dunkel.png).
+
+## Die drei Bereiche
+
+**Übersicht**
+
+- der Tag in einem Satz: wie weit sich das Haus heute selbst mit Strom versorgt hat, was es gerade verbraucht, was die Heizung tut
+- Strombilanz von heute als zwei Balken auf gleicher Skala: woher der Strom kam (Dach, Batterie, Netz) und wohin er ging (Wärmepumpe, Wallbox, weitere Verbraucher, übriges Haus, Batterie, Einspeisung)
+- „Heute, Stunde für Stunde“: Verbrauch je Stunde nach Herkunft, dazu die Erzeugung vom Dach als Linie
+- Auswertung der letzten sieben Tage in drei Spalten: fällt auf, läuft gut, zur Einordnung
+
+**Strom** – nur Anzeige, hier wird nichts geregelt. Batterie und Wallbox steuern sich weiter selbst.
+
+- Bilanz jetzt und Kennwerte von heute: Verbrauch, Erzeugung, Eigenverbrauch, Autarkie, Netzbezug, Einspeisung, Batterie, Wärmepumpe, Wallbox
+- Verlauf über 24 Stunden, 48 Stunden oder 7 Tage: Erzeugung und Verbrauch, Netz, Batterie, Ladestand, Verbraucher
+- Rangliste der Verbraucher von heute
+
+**Wärme** – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch, Regeln, Handbetrieb und Export. Alles Weitere dazu steht unten.
+
+## Strom: was hinterlegt wird und wie gerechnet wird
+
+Im Schritt „Strom“ wählst du Leistungs-Sensoren (W oder kW). Energie in kWh braucht die Integration nicht; sie summiert die Leistung aus der Statistik von Home Assistant in 5-Minuten-Schritten auf.
+
+| Einstellung | Hinweis |
+|---|---|
+| Leistung am Netzanschluss | ein Sensor mit Vorzeichen; welche Richtung positiv ist, stellst du ein |
+| Leistung der PV-Anlage | |
+| Leistung der Batterie | ein Sensor mit Vorzeichen, zum Beispiel aus der Integration deiner Batterie |
+| Ladestand der Batterie | in Prozent |
+| Verbrauch des Hauses | freiwillig; ohne ihn gilt Verbrauch = PV + Bezug − Einspeisung + Entladen − Laden |
+| Leistung der Wallbox | zum Beispiel aus der go-e-Integration |
+| Weitere Verbraucher | beliebig viele Leistungs-Sensoren, etwa Badheizung, Waschmaschine, Trockner, Spülmaschine |
+
+Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“ (elektrische Leistung).
+
+- **Eigenverbrauch** ist der Anteil des Solarstroms, der nicht eingespeist wurde. Laden der Batterie zählt dazu.
+- **Autarkie** ist der Anteil des Verbrauchs, der nicht aus dem Netz kam.
+- **Übriges Haus** ist der Verbrauch abzüglich Wärmepumpe, Wallbox und der hinterlegten Verbraucher.
+- Die Werte von heute hinken bis zu zehn Minuten nach, weil Home Assistant die Statistik in 5-Minuten-Blöcken schreibt.
+- Sensoren ohne Statistik (ohne `state_class: measurement`) werden aus dem Verlauf gelesen; das ist langsamer.
+
+## Auswertung der letzten sieben Tage
+
+Die Aussagen in der Übersicht sind feste Regeln mit Zahlen, kein Sprachmodell. Jede erscheint nur, wenn die nötigen Sensoren hinterlegt sind. Die Schwellen sind Setzungen dieses Projekts.
+
+| Aussage | Bedingung |
+|---|---|
+| Das Haus versorgt sich überwiegend selbst | Autarkie mindestens 60 %; darunter steht der Wert unter „zur Einordnung“ |
+| Fast aller Solarstrom bleibt im Haus / Viel Solarstrom geht ins Netz | Eigenverbrauch mindestens 80 % / unter 50 %, bei mindestens 1 kWh Erzeugung |
+| Eingespeist, obwohl die Batterie nicht voll war | mindestens 1 kWh und 20 % der Einspeisung bei Ladestand unter 95 % |
+| Netzbezug, obwohl die Batterie geladen war | mindestens 1 kWh und 20 % des Bezugs bei Ladestand über 20 % |
+| Grundlast nachts | Median des Verbrauchs zwischen 1 und 5 Uhr ohne Wärmepumpe und Wallbox; ohne Bewertung |
+| Wärmepumpe: Anteil Solarstrom | Anteil, den das Dach zeitgleich liefern konnte; „überwiegend bei Sonne“ ab 50 % |
+| … läuft meist mit Netzstrom | Verbraucher mit mindestens 1 kWh, davon mindestens 60 % zeitgleich mit Netzbezug, während mindestens halb so viel eingespeist wurde; höchstens drei |
+| Die Wärmepumpe taktet / läuft in langen Zügen | mittlere Laufzeit unter 10 min / mindestens 30 min, bei mindestens fünf vollständigen Läufen |
+| Arbeitszahl | Wärme durch Strom aus den Leistungs-Sensoren; gut ab 3,5, auffällig unter 2,5 |
+| Der Heizstab lief | jede Laufzeit über null |
+| Der Kamin-Speicher hat mitgeheizt | mindestens eine Entnahme |
+| PV-Überschuss floss in die Heizung | Zeit im Zustand „angehoben“ über null |
+| Die Regelung läuft im Probebetrieb | solange kein Eingriff gewählt ist |
+
+„Bis zu“ in einer Aussage heißt: zeitgleich gemessen, nicht einzeln zugeordnet. Läuft die Spülmaschine, während das Haus Strom aus dem Netz bezieht, zählt ihr Verbrauch bis zur Höhe des Bezugs als Netzstrom.
 
 ## Stand
 
-Version 0.3.1. Die Regellogik und die Abläufe im Regler sind durch 38 automatische Tests abgedeckt, die beiden Exporte durch 15 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.4.0. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Exporte durch 15 und die Rechnungen für Strom und Auswertung durch 9 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
-## Was sie macht
+## Wärme: was der Bereich macht
 
 - **Lage:** ein Satz, was die Heizung gerade tut und warum, daneben ein Anlagenschema mit Außen-, Vorlauf-, Rücklauf- und Warmwassertemperatur.
 - **Kennwerte:** PV-Überschuss, Prognose für den Rest des Tages und für morgen, Stromaufnahme, Heizleistung, Leistungszahl.
@@ -36,7 +97,7 @@ Version 0.3.1. Die Regellogik und die Abläufe im Regler sind durch 38 automatis
 
 **Von Hand:** den Ordner `custom_components/energy_hub` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
-Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“. Die Einrichtung fragt in sechs Schritten nach Wärmepumpe, Photovoltaik, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. In der Seitenleiste erscheint anschließend „Wärmepumpe“.
+Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“. Die Einrichtung fragt in sieben Schritten nach Wärmepumpe, Strom, Photovoltaik, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
 
 ## Wie geregelt wird
 
@@ -93,7 +154,7 @@ Im Panel erscheint dann:
 
 ## Export
 
-Oben im Panel öffnet „Export“ einen Dialog mit Inhalt und Zeitraum (24 Stunden, 7 Tage, 30 Tage). Die Datei wird im Browser aus dem Verlauf von Home Assistant berechnet und dann heruntergeladen; wo der Browser es unterstützt, erscheint zusätzlich „Teilen“.
+Im Bereich Wärme öffnet „Export“ oben einen Dialog mit Inhalt und Zeitraum (24 Stunden, 7 Tage, 30 Tage). Die Datei wird im Browser aus dem Verlauf von Home Assistant berechnet und dann heruntergeladen; wo der Browser es unterstützt, erscheint zusätzlich „Teilen“.
 
 ![Export-Dialog mit Auswahl von Inhalt und Zeitraum](docs/export-dialog.png)
 
@@ -143,7 +204,7 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 
 ```bash
 pytest tests                       # Regellogik und Abläufe im Regler, ohne Home Assistant
-node --test tests/test_export.mjs  # Rechenfunktionen der beiden Exporte
+node --test tests/test_export.mjs tests/test_energy.mjs   # Rechenfunktionen für Exporte, Strom und Auswertung
 python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
 python3 dev/screenshot.py /tmp/shots   # Panel rendern und beide Exporte erzeugen (braucht Playwright und Chrome)
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
@@ -157,6 +218,6 @@ Aufbau:
 | `controller.py` | Messwerte lesen, entscheiden lassen, stellen, nachführen, Logbuch führen |
 | `config_flow.py` | Einrichtung und Einstellungen |
 | `websocket_api.py` | Schnittstelle zwischen Panel und Regler |
-| `frontend/energy-hub-panel.js` | Panel und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
+| `frontend/energy-hub-panel.js` | Panel mit den drei Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 
 Vor der Veröffentlichung in `manifest.json` den Platzhalter `OWNER` in den beiden Adressen durch den GitHub-Namen ersetzen.

@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "energy_hub"
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"
@@ -43,6 +43,22 @@ CONF_ENT_STATUS = "ent_status"
 CONF_ENT_COMPRESSOR = "ent_compressor"
 CONF_ENT_POWER_EL = "ent_power_el"
 CONF_ENT_POWER_HEAT = "ent_power_heat"
+
+# --- Strom (nur Anzeige) ---------------------------------------------------
+CONF_ENT_GRID = "ent_grid_power"
+CONF_GRID_SIGN = "grid_sign"
+CONF_ENT_PV = "ent_pv_power"
+CONF_ENT_BATTERY = "ent_battery_power"
+CONF_BATTERY_SIGN = "battery_sign"
+CONF_ENT_BATTERY_SOC = "ent_battery_soc"
+CONF_ENT_HOUSE = "ent_house_power"
+CONF_ENT_WALLBOX = "ent_wallbox_power"
+CONF_CONSUMERS = "consumers"
+
+GRID_IMPORT_POSITIVE = "import_positive"
+GRID_EXPORT_POSITIVE = "export_positive"
+BATTERY_DISCHARGE_POSITIVE = "discharge_positive"
+BATTERY_CHARGE_POSITIVE = "charge_positive"
 
 # --- Effizienz und Export --------------------------------------------------
 CONF_ENT_ENERGY_EL = "ent_energy_el"
@@ -129,6 +145,8 @@ SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
 
 DEFAULTS: dict[str, object] = {
     CONF_SURPLUS_SIGN: SIGN_SURPLUS_POSITIVE,
+    CONF_GRID_SIGN: GRID_IMPORT_POSITIVE,
+    CONF_BATTERY_SIGN: BATTERY_DISCHARGE_POSITIVE,
     CONF_BOOST_ON_W: 1500,
     CONF_BOOST_ON_MIN: 10,
     CONF_BOOST_OFF_W: 300,

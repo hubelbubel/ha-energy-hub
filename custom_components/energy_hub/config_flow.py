@@ -12,6 +12,7 @@ from homeassistant.helpers import selector
 from . import const as c
 
 STEP_HEATPUMP = "heatpump"
+STEP_POWER = "power"
 STEP_PV = "pv"
 STEP_STORAGE = "storage"
 STEP_RULES = "rules"
@@ -60,6 +61,29 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_ENT_COMPRESSOR, _entity("binary_sensor"), False),
         (c.CONF_ENT_POWER_EL, _entity("sensor"), False),
         (c.CONF_ENT_POWER_HEAT, _entity("sensor"), False),
+    ],
+    STEP_POWER: [
+        (c.CONF_ENT_GRID, _entity("sensor"), False),
+        (
+            c.CONF_GRID_SIGN,
+            _select((c.GRID_IMPORT_POSITIVE, c.GRID_EXPORT_POSITIVE), "grid_sign"),
+            True,
+        ),
+        (c.CONF_ENT_PV, _entity("sensor"), False),
+        (c.CONF_ENT_BATTERY, _entity("sensor"), False),
+        (
+            c.CONF_BATTERY_SIGN,
+            _select((c.BATTERY_DISCHARGE_POSITIVE, c.BATTERY_CHARGE_POSITIVE), "battery_sign"),
+            True,
+        ),
+        (c.CONF_ENT_BATTERY_SOC, _entity("sensor"), False),
+        (c.CONF_ENT_HOUSE, _entity("sensor"), False),
+        (c.CONF_ENT_WALLBOX, _entity("sensor"), False),
+        (
+            c.CONF_CONSUMERS,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor"], multiple=True)),
+            False,
+        ),
     ],
     STEP_PV: [
         (c.CONF_ENT_SURPLUS, _entity("sensor"), False),
@@ -187,7 +211,10 @@ class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
         )
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return await self._step(STEP_HEATPUMP, "user", user_input, STEP_PV)
+        return await self._step(STEP_HEATPUMP, "user", user_input, STEP_POWER)
+
+    async def async_step_power(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_POWER, STEP_POWER, user_input, STEP_PV)
 
     async def async_step_pv(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_PV, STEP_PV, user_input, STEP_STORAGE)
@@ -216,7 +243,7 @@ class EnergyHubOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=[STEP_HEATPUMP, STEP_PV, STEP_STORAGE, STEP_RULES, STEP_ACTUATOR, STEP_EXPORT],
+            menu_options=[STEP_HEATPUMP, STEP_POWER, STEP_PV, STEP_STORAGE, STEP_RULES, STEP_ACTUATOR, STEP_EXPORT],
         )
 
     async def _step(self, step: str, user_input: dict[str, Any] | None) -> ConfigFlowResult:
@@ -235,6 +262,9 @@ class EnergyHubOptionsFlow(OptionsFlow):
 
     async def async_step_heatpump(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_HEATPUMP, user_input)
+
+    async def async_step_power(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_POWER, user_input)
 
     async def async_step_pv(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_PV, user_input)

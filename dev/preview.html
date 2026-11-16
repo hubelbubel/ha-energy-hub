@@ -24,7 +24,7 @@
   Vorschau des Panels ohne Home Assistant, mit erfundenen Beispieldaten.
   Start:  python3 -m http.server 8000   (im Hauptordner des Repositories)
   Dann:   http://localhost:8000/dev/preview.html
-  Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty
+  Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty  ?tab=overview|power|heat
 -->
 <script type="module">
   import "../custom_components/energy_hub/frontend/energy-hub-panel.js";
@@ -52,6 +52,60 @@
     ent_fireplace: "sensor.kamin_exhaust_temperature", ent_fireplace_status: "sensor.kamin_status",
   };
   const fireNow = scene === "setback" || scene === "override";
+
+  // Strom: erfundene Anlage mit PV, Batterie (5 kWh, 2,5 kW), Wallbox und vier Geräten
+  const pw = {
+    ent_grid_power: "sensor.netz_leistung", ent_pv_power: "sensor.pv_leistung",
+    ent_battery_power: "sensor.venus_leistung", ent_battery_soc: "sensor.venus_ladestand",
+    ent_house_power: null, ent_wallbox_power: "sensor.goe_leistung",
+  };
+  const consumers = ["sensor.badheizung_leistung", "sensor.waschmaschine_leistung",
+    "sensor.trockner_leistung", "sensor.spuelmaschine_leistung"];
+  const friendly = {
+    "sensor.badheizung_leistung": "Badheizung Leistung", "sensor.waschmaschine_leistung": "Waschmaschine Leistung",
+    "sensor.trockner_leistung": "Trockner Leistung", "sensor.spuelmaschine_leistung": "Spülmaschine Leistung",
+  };
+  const STEP = 300e3;
+  function simulate(t0, t1) {
+    const out = {};
+    const ids = [pw.ent_grid_power, pw.ent_pv_power, pw.ent_battery_power, pw.ent_battery_soc, pw.ent_wallbox_power,
+      "sensor.wp_elektrische_leistung", ...consumers];
+    for (const id of ids) out[id] = [];
+    let soc = 2.0; // kWh im Speicher, nutzbar 0,55 bis 5,0
+    for (let t = t0; t < t1; t += STEP) {
+      const d = new Date(t);
+      const hour = d.getHours() + d.getMinutes() / 60;
+      const odd = Math.floor(t / 86400e3) % 2 === 1;
+      const sun = Math.max(0, Math.sin(((hour - 7.5) / 9.5) * Math.PI));
+      const cloud = 0.72 + 0.28 * Math.sin(t / 9e5) * Math.cos(t / 23e5);
+      const pv = sun * cloud * 6800;
+      const cyc = Math.sin(t / 26e5);
+      const wp = cyc > -0.3 ? 1800 + 300 * cyc : 40;
+      const bath = hour >= 6.2 && hour < 7 ? 900 : 0;
+      const wash = odd && hour >= 9.5 && hour < 10.7 ? 620 : 2;
+      const dry = odd && hour >= 19.5 && hour < 20.7 ? 1150 : 1;
+      const dish = hour >= 21.2 && hour < 22.4 ? 820 : 1;
+      const base = 290 + 70 * Math.sin(t / 5e5);
+      const house = base + wp + bath + wash + dry + dish;
+      // Wallbox im Überschuss-Modus: lädt nur, wenn nach dem Haus genug übrig ist
+      const wallbox = !odd && hour >= 10.5 && hour < 15 && pv - house > 1500 ? Math.min(3700, pv - house - 200) : 0;
+      const net = pv - house - wallbox;
+      let chg = 0;
+      let dis = 0;
+      if (net > 0) chg = Math.min(net, 2500, ((5.0 - soc) * 1000 * 3600e3) / STEP);
+      else dis = Math.min(-net, 2500, ((soc - 0.55) * 1000 * 3600e3) / STEP);
+      soc += ((chg * 0.95 - dis) * STEP) / 3600e3 / 1000;
+      out[pw.ent_pv_power].push(pv);
+      out[pw.ent_battery_power].push(dis - chg);
+      out[pw.ent_battery_soc].push((soc / 5.12) * 100);
+      out[pw.ent_grid_power].push(house + wallbox + chg - dis - pv);
+      out[pw.ent_wallbox_power].push(wallbox);
+      out["sensor.wp_elektrische_leistung"].push(wp);
+      [bath, wash, dry, dish].forEach((v, i) => out[consumers[i]].push(v));
+    }
+    return out;
+  }
+  const nowSim = simulate(Date.now() - 48 * 3600e3, Date.now());
   const extra = ["sensor.wp_statuscode", "binary_sensor.wp_heizungspumpe_m13"];
   const st = (state, unit) => ({ state: String(state), attributes: { unit_of_measurement: unit } });
   const running = scene !== "normal";
@@ -66,6 +120,12 @@
     [ent.ent_storage]: st(fireNow ? 58.4 : 36.2, "°C"), [ent.ent_lock]: st(fireNow ? "Regenerativ" : "Keine"),
     [ent.ent_fireplace]: st(fireNow ? 246 : 28, "°C"), [ent.ent_fireplace_status]: st(fireNow ? "Heizbetrieb" : "Standby"),
   };
+  for (const id of [...Object.values(pw).filter(Boolean), ...consumers]) {
+    const value = nowSim[id].at(-1);
+    states[id] = { state: String(Math.round(value * 10) / 10),
+      attributes: { unit_of_measurement: id.includes("ladestand") ? "%" : "W", friendly_name: friendly[id] } };
+  }
+  Object.assign(ent, pw);
 
   const log = scene === "empty" ? [] : [
     { ts: iso(now - 38 * 60e3), kind: "switch", from: "normal", to: "boost", result: "sent",
@@ -93,9 +153,11 @@
   const snapshot = {
     version: "0.3.1",
     export_extra: scene === "empty" ? [] : extra,
+    consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
       ? { ...ent, ent_pv_surplus: null, ent_forecast_today: null, ent_forecast_tomorrow: null,
-          ent_storage: null, ent_lock: null, ent_fireplace: null, ent_fireplace_status: null }
+          ent_storage: null, ent_lock: null, ent_fireplace: null, ent_fireplace_status: null,
+          ent_grid_power: null, ent_pv_power: null, ent_battery_power: null, ent_battery_soc: null, ent_wallbox_power: null }
       : ent,
     settings: {
       boost_on_w: 1500, boost_on_min: 10, boost_off_w: 300, boost_off_min: 15, min_hold_min: 20,
@@ -103,6 +165,7 @@
       setback_min_forecast_kwh: 10, setback_min_outdoor_c: 3, setback_min_dhw_c: 42,
       actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_setback_k: 2,
       surplus_sign: "surplus_positive",
+      grid_sign: "import_positive", battery_sign: "discharge_positive",
       storage_ready_delta_k: 5, storage_ready_c: 40, storage_blocks_boost: true, fireplace_on_c: 80, lock_regen_value: "Regenerativ",
     },
     state: {
@@ -177,12 +240,34 @@
         const t1 = new Date(msg.end_time).getTime();
         return Object.fromEntries(msg.entity_ids.map((id) => [id, scene === "empty" ? [] : history(id, t0, t1)]));
       }
-      if (msg.type === "recorder/statistics_during_period") return {};
+      if (msg.type === "recorder/statistics_during_period") {
+        // Statistik nur für die Strom-Sensoren; alles andere holt das Panel aus dem Verlauf
+        const t0 = new Date(msg.start_time).getTime();
+        const t1 = Math.min(new Date(msg.end_time).getTime(), Date.now());
+        const sim = scene === "empty" ? {} : simulate(t0, t1);
+        const per = msg.period === "hour" ? 12 : 1;
+        const res = {};
+        for (const id of msg.statistic_ids) {
+          const values = sim[id];
+          if (!values) continue;
+          res[id] = [];
+          for (let i = 0; i + per <= values.length; i += per) {
+            const chunk = values.slice(i, i + per);
+            res[id].push({ start: t0 + i * STEP, end: t0 + (i + per) * STEP, mean: chunk.reduce((a, b) => a + b, 0) / per });
+          }
+        }
+        return res;
+      }
       console.log("WS", msg);
       return null;
     },
   };
 
+  try {
+    localStorage.setItem("energy-hub-tab", q.get("tab") || "overview");
+  } catch (_err) {
+    // ohne Speicher startet das Panel in der Übersicht
+  }
   const panel = document.createElement("energy-hub-panel");
   document.body.append(panel);
   panel.narrow = innerWidth < 870;

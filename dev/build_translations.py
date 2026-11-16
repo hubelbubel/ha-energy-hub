@@ -34,6 +34,26 @@ DE = {
                 "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt.",
             },
         },
+        "power": {
+            "title": "Strom",
+            "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW; die Energie je Tag wird daraus berechnet.",
+            "data": {
+                "ent_grid_power": "Leistung am Netzanschluss",
+                "grid_sign": "Vorzeichen am Netzanschluss",
+                "ent_pv_power": "Leistung der PV-Anlage",
+                "ent_battery_power": "Leistung der Batterie",
+                "battery_sign": "Vorzeichen der Batterie",
+                "ent_battery_soc": "Ladestand der Batterie",
+                "ent_house_power": "Verbrauch des Hauses",
+                "ent_wallbox_power": "Leistung der Wallbox",
+                "consumers": "Weitere Verbraucher",
+            },
+            "data_description": {
+                "ent_grid_power": "Ein Sensor mit Vorzeichen: Bezug und Einspeisung.",
+                "ent_house_power": "Leer lassen, dann wird der Verbrauch aus PV, Netz und Batterie berechnet.",
+                "consumers": "Leistungs-Sensoren einzelner Geräte, zum Beispiel Badheizung, Waschmaschine, Trockner, Spülmaschine. Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“.",
+            },
+        },
         "pv": {
             "title": "Photovoltaik",
             "description": "Nach diesen Werten richtet sich die Regelung. Ohne Überschuss-Sensor bleibt die Heizung im Normalbetrieb.",
@@ -141,6 +161,18 @@ DE = {
     },
     "abort": {"single_instance_allowed": "Energy Hub ist bereits eingerichtet."},
     "selector": {
+        "grid_sign": {
+            "options": {
+                "import_positive": "Positiv bedeutet Bezug aus dem Netz",
+                "export_positive": "Positiv bedeutet Einspeisung",
+            }
+        },
+        "battery_sign": {
+            "options": {
+                "discharge_positive": "Positiv bedeutet Entladen",
+                "charge_positive": "Positiv bedeutet Laden",
+            }
+        },
         "surplus_sign": {
             "options": {
                 "surplus_positive": "Positiv bedeutet Überschuss",
@@ -204,6 +236,26 @@ EN = {
             "data_description": {
                 "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
                 "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\".",
+            },
+        },
+        "power": {
+            "title": "Electricity",
+            "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed; daily energy is calculated from them.",
+            "data": {
+                "ent_grid_power": "Power at the grid connection",
+                "grid_sign": "Sign at the grid connection",
+                "ent_pv_power": "Power of the PV system",
+                "ent_battery_power": "Power of the battery",
+                "battery_sign": "Sign of the battery",
+                "ent_battery_soc": "Battery state of charge",
+                "ent_house_power": "House consumption",
+                "ent_wallbox_power": "Power of the wallbox",
+                "consumers": "Further consumers",
+            },
+            "data_description": {
+                "ent_grid_power": "One signed sensor: import and export.",
+                "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
+                "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\".",
             },
         },
         "pv": {
@@ -313,6 +365,18 @@ EN = {
     },
     "abort": {"single_instance_allowed": "Energy Hub is already set up."},
     "selector": {
+        "grid_sign": {
+            "options": {
+                "import_positive": "Positive means import from the grid",
+                "export_positive": "Positive means export",
+            }
+        },
+        "battery_sign": {
+            "options": {
+                "discharge_positive": "Positive means discharging",
+                "charge_positive": "Positive means charging",
+            }
+        },
         "surplus_sign": {
             "options": {
                 "surplus_positive": "Positive means surplus",
@@ -363,6 +427,7 @@ def build(src: dict) -> dict:
         "config": {
             "step": {
                 "user": steps["heatpump"],
+                "power": steps["power"],
                 "pv": steps["pv"],
                 "storage": steps["storage"],
                 "rules": steps["rules"],

@@ -401,3 +401,29 @@ def test_ready_follows_return_target_like_the_heat_pump_controller():
 
     asyncio.run(run())
 
+
+def test_snapshot_carries_power_settings():
+    consumers = ["sensor.badheizung_leistung", "sensor.spuelmaschine_leistung"]
+    hass, ctrl = make(
+        c.ACT_DRY_RUN,
+        **{
+            c.CONF_ENT_GRID: "sensor.netz_leistung",
+            c.CONF_ENT_PV: "sensor.pv_leistung",
+            c.CONF_ENT_BATTERY: "sensor.venus_leistung",
+            c.CONF_BATTERY_SIGN: c.BATTERY_CHARGE_POSITIVE,
+            c.CONF_CONSUMERS: consumers,
+        },
+    )
+
+    async def run():
+        await ctrl.async_start()
+        snap = ctrl.snapshot()
+        assert snap["consumers"] == consumers
+        assert snap["entities"]["ent_grid_power"] == "sensor.netz_leistung"
+        assert snap["entities"]["ent_wallbox_power"] is None
+        assert snap["settings"]["grid_sign"] == c.GRID_IMPORT_POSITIVE  # Standardwert
+        assert snap["settings"]["battery_sign"] == c.BATTERY_CHARGE_POSITIVE
+        json.dumps(snap)
+
+    asyncio.run(run())
+

@@ -2,11 +2,10 @@
  * Energy Hub – Panel für die Seitenleiste von Home Assistant.
  * Reines JavaScript ohne Build-Schritt und ohne externe Abhängigkeiten.
  *
- * Aufbau der Seite:
- *   Lage      – ein Satz, was die Heizung gerade tut und warum; daneben das Anlagenschema
- *   Kennwerte – PV-Überschuss, Prognose, Leistung
- *   Verlauf   – Überschuss, Temperaturen und Eingriffe auf einer gemeinsamen Zeitachse
- *   Logbuch   – was wann und warum geschaltet wurde; daneben die Regeln in Klartext
+ * Bereiche:
+ *   Übersicht – der Tag in einem Satz, Strombilanz, Verbrauch je Stunde nach Herkunft, Auswertung der Woche
+ *   Strom     – Bilanz jetzt, Kennwerte von heute, Verlauf von Netz, Batterie und Verbrauchern, Rangliste
+ *   Wärme     – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch und Regeln, Export
  */
 
 const DOMAIN = "energy_hub";
@@ -583,6 +582,264 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
   return { csv: `\ufeff${lines.join("\r\n")}\r\n`, rows: rows.length, cycles: cycleRows.length, draws: drawRows.length };
 }
 
+/* ----------------------------------------------------------------- Strom */
+
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const fmtPct = (v) => (isNum(v) ? `${nf0.format(v * 100)} %` : "–");
+const fmtDur = (min) => (min >= 60 ? `${Math.floor(min / 60)} h ${Math.round(min % 60)} min` : `${Math.round(min)} min`);
+
+/** Verteilt Statistik-Zeilen [[Startzeit, Mittelwert]] auf ein festes Raster. */
+export function rowsToGrid(rows, t0, step, n) {
+  const sum = new Array(n).fill(0);
+  const cnt = new Array(n).fill(0);
+  for (const [t, v] of rows) {
+    const b = Math.floor((t - t0) / step);
+    if (b < 0 || b >= n || !isNum(v)) continue;
+    sum[b] += v;
+    cnt[b] += 1;
+  }
+  return sum.map((total, b) => (cnt[b] ? total / cnt[b] : null));
+}
+
+/**
+ * Strombilanz je Raster aus den Leistungs-Sensoren (alles in Watt).
+ * raw: { grid, pv, battery, house, wp, wallbox, consumers: [..] } als gleich lange Reihen, null = unbekannt.
+ * Liefert Bezug/Einspeisung, Laden/Entladen, Verbrauch und woher der Verbrauch gedeckt wurde.
+ * Ohne eigenen Verbrauchs-Sensor gilt: Verbrauch = PV + Bezug - Einspeisung + Entladen - Laden.
+ */
+export function energyBalance(raw, signs = {}) {
+  const lists = [raw.grid, raw.pv, raw.battery, raw.house, raw.wp, raw.wallbox, ...(raw.consumers || [])];
+  const n = Math.max(0, ...lists.filter(Boolean).map((a) => a.length));
+  const gs = signs.gridSign === "export_positive" ? -1 : 1;
+  const bs = signs.batterySign === "charge_positive" ? -1 : 1;
+  const at = (arr, b) => (arr && isNum(arr[b]) ? arr[b] : null);
+  const pos = (v) => (v === null ? null : Math.max(0, v));
+  const keys = ["imp", "exp", "pv", "dis", "chg", "cons", "fromPv", "fromBat", "fromGrid", "wp", "wallbox", "small", "rest"];
+  const out = Object.fromEntries(keys.map((k) => [k, new Array(n).fill(null)]));
+  out.consumers = (raw.consumers || []).map(() => new Array(n).fill(null));
+  for (let b = 0; b < n; b++) {
+    const g = at(raw.grid, b);
+    const bt = at(raw.battery, b);
+    const imp = pos(g === null ? null : gs * g);
+    const exp = pos(g === null ? null : -gs * g);
+    const pv = pos(at(raw.pv, b));
+    const dis = pos(bt === null ? null : bs * bt);
+    const chg = pos(bt === null ? null : -bs * bt);
+    let cons = pos(at(raw.house, b));
+    if (cons === null && (imp !== null || pv !== null || dis !== null)) {
+      cons = Math.max(0, (pv ?? 0) + (imp ?? 0) - (exp ?? 0) + (dis ?? 0) - (chg ?? 0));
+    }
+    const wp = pos(at(raw.wp, b));
+    const wallbox = pos(at(raw.wallbox, b));
+    let small = null;
+    (raw.consumers || []).forEach((arr, i) => {
+      const v = pos(at(arr, b));
+      out.consumers[i][b] = v;
+      if (v !== null) small = (small ?? 0) + v;
+    });
+    out.imp[b] = imp;
+    out.exp[b] = exp;
+    out.pv[b] = pv;
+    out.dis[b] = dis;
+    out.chg[b] = chg;
+    out.cons[b] = cons;
+    out.wp[b] = wp;
+    out.wallbox[b] = wallbox;
+    out.small[b] = small;
+    if (cons !== null) {
+      const fromBat = Math.min(dis ?? 0, cons);
+      const fromGrid = Math.min(imp ?? 0, cons - fromBat);
+      out.fromBat[b] = fromBat;
+      out.fromGrid[b] = fromGrid;
+      out.fromPv[b] = Math.max(0, cons - fromBat - fromGrid);
+      out.rest[b] = Math.max(0, cons - (wp ?? 0) - (wallbox ?? 0) - (small ?? 0));
+    }
+  }
+  return out;
+}
+
+/**
+ * Energie in kWh über die Raster i0 bis i1, dazu Eigenverbrauch und Autarkie.
+ * Eigenverbrauch = Anteil des Solarstroms, der nicht eingespeist wurde.
+ * Autarkie = Anteil des Verbrauchs, der nicht aus dem Netz kam.
+ */
+export function energyTotals(bal, stepMs, i0 = 0, i1 = bal.cons.length) {
+  const factor = stepMs / 3.6e9;
+  const sum = (arr) => {
+    let total = 0;
+    let known = false;
+    for (let b = Math.max(0, i0); b < Math.min(arr.length, i1); b++) {
+      if (!isNum(arr[b])) continue;
+      total += arr[b];
+      known = true;
+    }
+    return known ? total * factor : null;
+  };
+  const t = {};
+  for (const key of ["imp", "exp", "pv", "dis", "chg", "cons", "fromPv", "fromBat", "fromGrid", "wp", "wallbox", "small", "rest"]) {
+    t[key] = sum(bal[key]);
+  }
+  t.consumers = bal.consumers.map(sum);
+  t.selfUse = t.pv > 0 && t.exp !== null ? clamp01((t.pv - t.exp) / t.pv) : null;
+  t.autarky = t.cons > 0 && t.imp !== null ? clamp01(1 - t.imp / t.cons) : null;
+  return t;
+}
+
+/** Für einen Tag: je Stunde, woher der Verbrauch kam (kWh), dazu die PV-Erzeugung. */
+export function hourlyMix(bal, t0, stepMs, dayStart) {
+  const hours = Array.from({ length: 24 }, () => ({ fromPv: 0, fromBat: 0, fromGrid: 0, pv: 0, known: false }));
+  const factor = stepMs / 3.6e9;
+  for (let b = 0; b < bal.cons.length; b++) {
+    const t = t0 + b * stepMs;
+    if (t < dayStart || t >= dayStart + 86400e3 || bal.cons[b] === null) continue;
+    const h = hours[Math.min(23, Math.floor((t - dayStart) / 3600e3))];
+    h.known = true;
+    h.fromPv += bal.fromPv[b] * factor;
+    h.fromBat += bal.fromBat[b] * factor;
+    h.fromGrid += bal.fromGrid[b] * factor;
+    h.pv += (bal.pv[b] ?? 0) * factor;
+  }
+  return hours;
+}
+
+/**
+ * Auffälligkeiten beim Strom aus der Bilanz eines Zeitraums (gedacht für 7 Tage).
+ * Jede Aussage nennt ihre Zahlen. tone: "warn" = fällt auf, "good" = läuft gut, "info" = zur Einordnung.
+ * names: { consumers: [..], wallbox: "Wallbox" }
+ */
+export function powerFindings(bal, soc, names, stepMs, t0) {
+  const out = [];
+  const n = bal.cons.length;
+  const total = energyTotals(bal, stepMs);
+  const factor = stepMs / 3.6e9;
+  const kwh = (v) => `${nf1.format(v)} kWh`;
+  if (!(total.cons > 0)) return out;
+
+  if (total.autarky !== null) {
+    out.push(total.autarky >= 0.6
+      ? { tone: "good", area: "Strom", title: "Das Haus versorgt sich überwiegend selbst",
+          text: `${fmtPct(total.autarky)} des Verbrauchs kamen vom Dach oder aus der Batterie. Aus dem Netz kamen ${kwh(total.imp)} von ${kwh(total.cons)}.` }
+      : { tone: "info", area: "Strom", title: `Autarkie ${fmtPct(total.autarky)}`,
+          text: `Von ${kwh(total.cons)} Verbrauch kamen ${kwh(total.imp)} aus dem Netz.` });
+  }
+  if (total.selfUse !== null && total.pv >= 1) {
+    if (total.selfUse >= 0.8) {
+      out.push({ tone: "good", area: "Strom", title: "Fast aller Solarstrom bleibt im Haus",
+        text: `Von ${kwh(total.pv)} vom Dach wurden ${fmtPct(total.selfUse)} selbst genutzt oder gespeichert.` });
+    } else if (total.selfUse < 0.5) {
+      out.push({ tone: "warn", area: "Strom", title: "Viel Solarstrom geht ins Netz",
+        text: `Von ${kwh(total.pv)} vom Dach wurden ${kwh(total.exp)} eingespeist. Selbst genutzt wurden ${fmtPct(total.selfUse)}.` });
+    }
+  }
+
+  // Batterie: Einspeisung trotz Platz, Netzbezug trotz Ladung
+  if (soc && total.exp !== null && total.imp !== null) {
+    let exportLow = 0;
+    let importHigh = 0;
+    for (let b = 0; b < n; b++) {
+      if (!isNum(soc[b])) continue;
+      if (soc[b] < 95) exportLow += (bal.exp[b] ?? 0) * factor;
+      if (soc[b] > 20) importHigh += (bal.imp[b] ?? 0) * factor;
+    }
+    if (exportLow >= 1 && exportLow >= 0.2 * total.exp) {
+      out.push({ tone: "warn", area: "Strom", title: "Eingespeist, obwohl die Batterie nicht voll war",
+        text: `${kwh(exportLow)} gingen ins Netz, während der Ladestand unter 95 % lag. Das passiert, wenn mehr Überschuss da ist, als die Batterie aufnehmen kann, oder wenn ihre Regelung nachhinkt.` });
+    }
+    if (importHigh >= 1 && importHigh >= 0.2 * total.imp) {
+      out.push({ tone: "warn", area: "Strom", title: "Netzbezug, obwohl die Batterie geladen war",
+        text: `${kwh(importHigh)} kamen aus dem Netz, während der Ladestand über 20 % lag. Das passiert, wenn große Verbraucher mehr ziehen, als die Batterie abgeben kann.` });
+    }
+  }
+
+  // Grundlast: Verbrauch nachts ohne Wärmepumpe und Wallbox
+  const night = [];
+  for (let b = 0; b < n; b++) {
+    const hour = new Date(t0 + b * stepMs).getHours();
+    if (hour < 1 || hour >= 5 || bal.cons[b] === null) continue;
+    night.push(Math.max(0, bal.cons[b] - (bal.wp[b] ?? 0) - (bal.wallbox[b] ?? 0)));
+  }
+  if (night.length >= 12) {
+    night.sort((a, b) => a - b);
+    const base = night[Math.floor(night.length / 2)];
+    out.push({ tone: "info", area: "Strom", title: `Grundlast nachts ${nf0.format(base)} W`,
+      text: `Zwischen 1 und 5 Uhr braucht das Haus ohne Wärmepumpe und Wallbox im Mittel ${nf0.format(base)} W. Über den Tag sind das ${kwh((base * 24) / 1000)}.` });
+  }
+
+  // Wärmepumpe: wie viel davon das Dach zeitgleich liefern konnte
+  if (total.wp >= 1 && total.pv !== null) {
+    let solar = 0;
+    for (let b = 0; b < n; b++) solar += Math.min(bal.wp[b] ?? 0, bal.pv[b] ?? 0) * factor;
+    const share = clamp01(solar / total.wp);
+    out.push({ tone: share >= 0.5 ? "good" : "info", area: "Strom",
+      title: share >= 0.5 ? "Die Wärmepumpe läuft überwiegend bei Sonne" : `Wärmepumpe: bis zu ${fmtPct(share)} Solarstrom`,
+      text: `Die Wärmepumpe brauchte ${kwh(total.wp)}, das sind ${fmtPct(total.wp / total.cons)} des Verbrauchs. Bis zu ${fmtPct(share)} davon konnte das Dach zeitgleich liefern.` });
+  }
+
+  // Einzelne Verbraucher, die überwiegend mit Netzstrom laufen, obwohl Solarstrom eingespeist wurde
+  const single = [
+    ...(names?.consumers || []).map((name, i) => ({ name, arr: bal.consumers[i], e: total.consumers[i] })),
+    ...(total.wallbox !== null ? [{ name: names?.wallbox || "Wallbox", arr: bal.wallbox, e: total.wallbox }] : []),
+  ];
+  const flagged = [];
+  for (const c of single) {
+    if (!(c.e >= 1) || !(total.exp > 0)) continue;
+    let fromGrid = 0;
+    for (let b = 0; b < n; b++) fromGrid += Math.min(c.arr[b] ?? 0, bal.imp[b] ?? 0) * factor;
+    const share = clamp01(fromGrid / c.e);
+    if (share >= 0.6 && total.exp >= 0.5 * c.e) flagged.push({ ...c, share });
+  }
+  flagged.sort((a, b) => b.e * b.share - a.e * a.share);
+  for (const c of flagged.slice(0, 3)) {
+    out.push({ tone: "warn", area: "Strom", title: `${c.name} läuft meist mit Netzstrom`,
+      text: `${kwh(c.e)}, davon bis zu ${fmtPct(c.share)} aus dem Netz. Im selben Zeitraum wurden ${kwh(total.exp)} eingespeist.` });
+  }
+  return out;
+}
+
+/**
+ * Auffälligkeiten bei der Wärme aus den Summen eines Zeitraums.
+ * agg: { days, starts, cycles, meanRunMin, elKwh, heatKwh, heaterMin, draws, drawMin, boostMin, dryRun }
+ */
+export function heatFindings(agg) {
+  const out = [];
+  const kwh = (v) => `${nf1.format(v)} kWh`;
+  if (agg.dryRun) {
+    out.push({ tone: "warn", area: "Wärme", title: "Die Regelung läuft im Probebetrieb",
+      text: "Entscheidungen werden nur protokolliert. An die Wärmepumpe wird nichts gesendet, bis in den Einstellungen ein Eingriff gewählt ist." });
+  }
+  if (agg.cycles >= 5 && isNum(agg.meanRunMin) && agg.days > 0) {
+    const perDay = nf0.format(agg.starts / agg.days);
+    const text = `${perDay} Starts am Tag, ein Lauf dauert im Mittel ${fmtDur(agg.meanRunMin)}.`;
+    if (agg.meanRunMin < 10) {
+      out.push({ tone: "warn", area: "Wärme", title: "Die Wärmepumpe taktet",
+        text: `${text} Kurze Läufe kosten Effizienz und belasten den Verdichter.` });
+    } else if (agg.meanRunMin >= 30) {
+      out.push({ tone: "good", area: "Wärme", title: "Die Wärmepumpe läuft in langen Zügen", text });
+    } else {
+      out.push({ tone: "info", area: "Wärme", title: `Verdichter: ${perDay} Starts am Tag`, text });
+    }
+  }
+  if (agg.elKwh >= 2 && agg.heatKwh > 0) {
+    const cop = agg.heatKwh / agg.elKwh;
+    const text = `${kwh(agg.heatKwh)} Wärme aus ${kwh(agg.elKwh)} Strom, berechnet aus den Leistungs-Sensoren der Wärmepumpe. Heizen und Warmwasser zusammen.`;
+    out.push({ tone: cop >= 3.5 ? "good" : cop < 2.5 ? "warn" : "info", area: "Wärme",
+      title: `Arbeitszahl ${nf1.format(cop)}`, text });
+  }
+  if (agg.heaterMin > 0) {
+    out.push({ tone: "warn", area: "Wärme", title: `Der Heizstab lief ${fmtDur(agg.heaterMin)}`,
+      text: "Ein Heizstab macht aus einer Kilowattstunde Strom nur eine Kilowattstunde Wärme. Läuft er regelmäßig, lohnt ein Blick auf Warmwasser-Sollwert und Bivalenzpunkt." });
+  }
+  if (agg.draws > 0) {
+    out.push({ tone: "good", area: "Wärme", title: "Der Kamin-Speicher hat mitgeheizt",
+      text: `${agg.draws}-mal, zusammen ${fmtDur(agg.drawMin)}. In dieser Zeit stand die Wärmepumpe.` });
+  }
+  if (agg.boostMin > 0) {
+    out.push({ tone: "good", area: "Wärme", title: "PV-Überschuss floss in die Heizung",
+      text: `Die Heizung war ${fmtDur(agg.boostMin)} angehoben.` });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ Stile */
 
 const STYLE = `
@@ -618,6 +875,7 @@ const STYLE = `
   --c-warn: #e66767;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 button, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -641,6 +899,7 @@ h2 { margin: 0 0 14px; font-size: 16px; font-weight: 500; }
 .lage { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 40px; align-items: start; }
 .headline { margin: 4px 0 12px; font-size: 32px; line-height: 1.18; font-weight: 400; letter-spacing: -0.012em; max-width: 18em; text-wrap: balance; }
 .reason { margin: 0; color: var(--ink-2); font-size: 16px; max-width: 34em; }
+.reason + .reason { margin-top: 8px; }
 .note { margin: 14px 0 0; padding: 10px 12px; border-left: 3px solid var(--c-pv); background: color-mix(in srgb, var(--c-pv) 9%, transparent); font-size: 14px; max-width: 38em; }
 .note.error { border-left-color: var(--c-warn); background: color-mix(in srgb, var(--c-warn) 9%, transparent); }
 .note[hidden] { display: none; }
@@ -763,6 +1022,60 @@ dialog input[type="radio"] { width: 18px; height: 18px; margin: 2px 0 0; accent-
 .solid:disabled { opacity: 0.5; cursor: default; }
 .solid[hidden] { display: none; }
 
+/* ---- Bereiche ---- */
+.bar { height: auto; flex-wrap: wrap; }
+.bar h1 { line-height: var(--header-height, 56px); }
+.bar button[hidden] { display: none; }
+.bar .tabs { flex-basis: 100%; display: flex; gap: 4px; margin: -6px 0 0 4px; }
+.bar .tabs button { padding: 8px 12px 9px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 15px; opacity: 0.65; }
+.bar .tabs button:hover { background: transparent; opacity: 1; }
+.bar .tabs button[aria-selected="true"] { border-bottom-color: currentColor; opacity: 1; }
+main[hidden] { display: none; }
+
+/* ---- Strom und Übersicht ---- */
+.s-ink { color: var(--ink); stroke: var(--ink); }
+.s-grid { color: var(--ink-2); stroke: var(--ink-2); }
+.s-bat { color: var(--c-dhw); stroke: var(--c-dhw); }
+.plots .fillarea { fill: currentColor; stroke: none; opacity: 0.16; }
+.k-pv { background: var(--c-pv); }
+.k-bat { background: var(--c-dhw); }
+.k-wp { background: var(--c-flow); }
+.k-wb { background: var(--c-return); }
+.k-small { background: color-mix(in srgb, var(--ink) 62%, transparent); }
+.k-rest { background: color-mix(in srgb, var(--ink) 30%, transparent); }
+.k-grid { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-2); }
+.bal-row { display: grid; grid-template-columns: 50px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 10px; }
+.bal-row > span { color: var(--ink-2); font-size: 13px; }
+.bal-bar { display: flex; gap: 2px; height: 30px; min-width: 6px; }
+.bal-bar i { display: block; min-width: 3px; border-radius: 4px; }
+.bal-key { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 8px 0 0 60px; font-size: 14px; }
+.bal-key div { display: flex; align-items: center; gap: 7px; }
+.bal-key i, .key i.sw { width: 11px; height: 11px; border: 0; border-radius: 3px; flex: none; }
+.bal-key dt { color: var(--ink-2); }
+.bal-key dd { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+.plots .col-pv { fill: var(--c-pv); }
+.plots .col-bat { fill: var(--c-dhw); }
+.plots .col-grid { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
+.rank { max-width: 860px; }
+.rank-row { display: grid; grid-template-columns: minmax(110px, 200px) minmax(0, 1fr) 84px 48px; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--rule); }
+.rank-bar { height: 14px; }
+.rank-bar i { display: block; height: 100%; min-width: 3px; border-radius: 4px; }
+.rank-row b { font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+.rank-row small { color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
+.find { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 40px; }
+.find h3 { margin: 0 0 6px; font-size: 14px; font-weight: 400; color: var(--ink-2); }
+.fitem { padding: 12px 0; border-top: 1px solid var(--rule); }
+.fitem b { font-weight: 500; }
+.fitem p { margin: 3px 0 0; font-size: 14px; max-width: 46ch; }
+.fitem .none { margin: 0; color: var(--ink-2); }
+.foot { margin: 18px 0 0; color: var(--ink-2); font-size: 13px; max-width: 90ch; }
+@media (max-width: 900px) {
+  .find { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .rank-row { grid-template-columns: minmax(0, 1fr) auto 44px; }
+  .rank-bar { grid-column: 1 / -1; order: 3; }
+  .bal-key { margin-left: 0; }
+}
+
 /* ---- Logbuch und Regeln ---- */
 .lower { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 48px; align-items: start; }
 .day { margin: 22px 0 4px; color: var(--ink-2); font-size: 13px; }
@@ -825,7 +1138,12 @@ class EnergyHubPanel extends HTMLElement {
 
   connectedCallback() {
     this._clock = setInterval(() => this._queueRender(), 30000);
-    this._refresh = setInterval(() => { this._loadHistory(); this._loadDraws(); }, 5 * 60000);
+    this._refresh = setInterval(() => {
+      this._loadHistory();
+      this._loadDraws();
+      this._loadEnergy();
+      if (this._tab === "overview" && Date.now() - (this._analysisAt || 0) > 30 * 60000) this._loadAnalysis();
+    }, 5 * 60000);
     if (this._hass) this._subscribe();
   }
 
@@ -833,6 +1151,7 @@ class EnergyHubPanel extends HTMLElement {
     clearInterval(this._clock);
     clearInterval(this._refresh);
     this._resize?.disconnect();
+    this._resize2?.disconnect();
     if (this._unsub) this._unsub.then((unsub) => unsub()).catch(() => {});
     this._unsub = null;
   }
@@ -849,6 +1168,8 @@ class EnergyHubPanel extends HTMLElement {
         if (first) {
           this._loadHistory();
           this._loadDraws();
+          this._loadEnergy();
+          if (this._tab === "overview") this._loadAnalysis();
         }
       },
       { type: `${DOMAIN}/subscribe` }
@@ -947,12 +1268,31 @@ class EnergyHubPanel extends HTMLElement {
     $.more = h("button", { class: "plain more", hidden: true, onclick: () => { this._logShown += 40; this._renderLog(true); } }, "Ältere Einträge zeigen");
     $.rules = h("div", { class: "rules" });
 
+    $.exportBtn = h("button", { onclick: () => this._openExport() }, "Export");
+    $.tabs = {};
+    const order = [["overview", "Übersicht"], ["power", "Strom"], ["heat", "Wärme"]];
+    for (const [key, label] of order) {
+      $.tabs[key] = h("button", { role: "tab", "aria-selected": "false", onclick: () => this._showTab(key) }, label);
+    }
+    const tablist = h("nav", {
+      class: "tabs", role: "tablist", "aria-label": "Bereiche",
+      onkeydown: (e) => {
+        const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (!step) return;
+        const keys = order.map(([key]) => key);
+        const next = keys[(keys.indexOf(this._tab) + step + keys.length) % keys.length];
+        this._showTab(next);
+        $.tabs[next].focus();
+      },
+    }, Object.values($.tabs));
+    $.panes = { overview: this._buildOverview(settingsHref, nav), power: this._buildPower(settingsHref, nav) };
+
     root.append(
       h("style", {}, STYLE),
-      h("header", { class: "bar" }, this._menu, h("h1", {}, "Wärmepumpe"),
-        h("button", { onclick: () => this._openExport() }, "Export"),
-        h("a", { href: settingsHref, onclick: nav }, "Einstellungen")),
-      h("main", {},
+      h("header", { class: "bar" }, this._menu, h("h1", {}, "Energie"),
+        $.exportBtn, h("a", { href: settingsHref, onclick: nav }, "Einstellungen"), tablist),
+      $.panes.overview, $.panes.power,
+      ($.panes.heat = h("main", { hidden: true },
         h("section", { class: "lage" },
           h("div", {},
             $.headline, $.reason, $.dry, $.nopv, $.error,
@@ -969,13 +1309,26 @@ class EnergyHubPanel extends HTMLElement {
           $.plots, $.table),
         h("section", { class: "lower" },
           h("div", {}, h("h2", {}, "Logbuch"), $.log, $.more),
-          h("div", {}, h("h2", {}, "So wird geregelt"), $.rules)))
+          h("div", {}, h("h2", {}, "So wird geregelt"), $.rules))))
     );
 
     root.append(this._buildExportDialog(settingsHref, nav));
 
     this._resize = new ResizeObserver(() => this._drawPlots());
     this._resize.observe($.plots);
+    this._resize2 = new ResizeObserver(() => {
+      this._drawPower();
+      this._drawHours();
+    });
+    this._resize2.observe($.pPlots);
+    this._resize2.observe($.oHours);
+    let tab = "overview";
+    try {
+      tab = localStorage.getItem("energy-hub-tab") || tab;
+    } catch (_err) {
+      tab = "overview";
+    }
+    this._showTab($.panes[tab] ? tab : "overview");
   }
 
   _buildSchema() {
@@ -1068,21 +1421,7 @@ class EnergyHubPanel extends HTMLElement {
     const st = snap.state;
     const cfg = snap.entities;
 
-    // Lage: ein Satz, was gerade passiert
-    const since = fmtClock(st.since);
-    let headline;
-    if (st.override) {
-      const until = st.override.until ? `bis ${fmtClock(st.override.until)}` : "bis du ihn beendest";
-      headline = `Handbetrieb: ${MODE_NAME[st.override.mode]}, ${until}.`;
-    } else if (!st.automation) {
-      headline = "Die Automatik ist aus. Die Heizung läuft normal.";
-    } else if (st.mode === "boost") {
-      headline = `Die Heizung ist seit ${since} angehoben.`;
-    } else if (st.mode === "setback") {
-      headline = `Die Heizung ist seit ${since} abgesenkt.`;
-    } else {
-      headline = "Die Heizung läuft im Normalbetrieb.";
-    }
+    const headline = this._heatHeadline(st);
     $.headline.textContent = headline;
     $.reason.textContent = st.override ? "" : st.reason;
     $.dry.hidden = !st.dry_run;
@@ -1140,6 +1479,7 @@ class EnergyHubPanel extends HTMLElement {
     this._renderFacts();
     this._renderRules();
     this._renderLog(false);
+    this._renderLive();
   }
 
   /** Kamin und Speicher aus den aktuellen Zuständen: Temperaturen, brennt, bereit, liefert. */
@@ -1307,6 +1647,669 @@ class EnergyHubPanel extends HTMLElement {
     }
     $.log.replaceChildren(...nodes);
     $.more.hidden = log.length <= this._logShown;
+  }
+
+  /* ---------------------------------------------------------- Bereiche */
+
+  _showTab(name) {
+    const $ = this.$;
+    this._tab = name;
+    try {
+      localStorage.setItem("energy-hub-tab", name);
+    } catch (_err) {
+      // ohne Speicher merkt sich das Panel den Bereich nur bis zum Neuladen
+    }
+    for (const [key, pane] of Object.entries($.panes)) pane.hidden = key !== name;
+    for (const [key, btn] of Object.entries($.tabs)) {
+      btn.setAttribute("aria-selected", String(key === name));
+      btn.tabIndex = key === name ? 0 : -1;
+    }
+    $.exportBtn.hidden = name !== "heat";
+    if (name === "heat") this._drawPlots();
+    if (name === "power") this._drawPower();
+    if (name === "overview") {
+      this._drawHours();
+      if (!this._analysisAt && this._snap) this._loadAnalysis();
+    }
+  }
+
+  _buildOverview(settingsHref, nav) {
+    const $ = this.$;
+    $.oHeadline = h("p", { class: "headline", role: "status" }, "Die Übersicht wird geladen.");
+    $.oSub = h("p", { class: "reason" });
+    $.oNow = h("p", { class: "reason" });
+    $.oNote = h("p", { class: "note", hidden: true },
+      "Für Strom und Übersicht sind noch keine Sensoren hinterlegt. Gebraucht werden Netzanschluss und PV-Anlage, dazu nach Wunsch Batterie, Wallbox und einzelne Verbraucher. ",
+      h("a", { href: settingsHref, onclick: nav }, "Strom-Sensoren hinterlegen"));
+    $.oBalance = h("div", { class: "bal" });
+    $.oFacts = h("dl", { class: "facts" });
+    $.oHours = h("div", { class: "plots" });
+    $.oFind = h("div", {});
+    return h("main", { hidden: true },
+      h("section", { class: "lage" },
+        h("div", {}, $.oHeadline, $.oNow, $.oSub, $.oNote),
+        ($.oBalWrap = h("div", {}, h("h2", {}, "Strom heute: woher er kam, wohin er ging"), $.oBalance))),
+      ($.oFactsSec = h("section", {}, $.oFacts)),
+      ($.oHoursSec = h("section", { class: "sheet" },
+        h("div", { class: "sheet-head" }, h("h2", {}, "Heute, Stunde für Stunde")), $.oHours)),
+      h("section", {}, h("h2", {}, "Die letzten 7 Tage"), $.oFind));
+  }
+
+  _buildPower(settingsHref, nav) {
+    const $ = this.$;
+    this._pRange = 24;
+    $.pHeadline = h("p", { class: "headline", role: "status" }, "Die Stromdaten werden geladen.");
+    $.pSub = h("p", { class: "reason" });
+    $.pNote = h("p", { class: "note", hidden: true },
+      "Für den Bereich Strom sind noch keine Sensoren hinterlegt. ",
+      h("a", { href: settingsHref, onclick: nav }, "Strom-Sensoren hinterlegen"));
+    $.pBalance = h("div", { class: "bal" });
+    $.pFacts = h("dl", { class: "facts" });
+    $.pRanges = h("div", { class: "seg", role: "group", "aria-label": "Zeitraum" },
+      [[24, "24 Stunden"], [48, "48 Stunden"], [168, "7 Tage"]].map(([hours, label]) => h("button", {
+        "aria-pressed": String(hours === this._pRange),
+        onclick: (e) => {
+          this._pRange = hours;
+          for (const b of $.pRanges.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+          if (hours === 168 && !this._enWeek) this._loadEnergyWeek();
+          else this._drawPower();
+        },
+      }, label)));
+    $.pPlots = h("div", { class: "plots" });
+    $.pRank = h("div", { class: "rank" });
+    return h("main", { hidden: true },
+      h("section", { class: "lage" },
+        h("div", {}, $.pHeadline, $.pSub, $.pNote),
+        ($.pBalWrap = h("div", {}, h("h2", {}, "Strom jetzt: woher er kommt, wohin er geht"), $.pBalance))),
+      ($.pFactsSec = h("section", {}, $.pFacts)),
+      ($.pSheet = h("section", { class: "sheet" },
+        h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.pRanges), $.pPlots)),
+      ($.pRankSec = h("section", {}, h("h2", {}, "Verbraucher heute"), $.pRank)));
+  }
+
+  /* ------------------------------------------------------------- Strom */
+
+  _hasPower() {
+    const cfg = this._snap?.entities;
+    return Boolean(cfg && (cfg.ent_grid_power || cfg.ent_pv_power || cfg.ent_house_power));
+  }
+
+  _powerFactor(id) {
+    const unit = String(this._hass?.states?.[id]?.attributes?.unit_of_measurement || "").toLowerCase();
+    return { kw: 1000, mw: 1e6 }[unit] || 1;
+  }
+
+  _name(id) {
+    const name = this._hass?.states?.[id]?.attributes?.friendly_name || id.split(".").pop().replaceAll("_", " ");
+    return name.replace(/\s+(Leistung|Power|Wirkleistung|power)$/i, "");
+  }
+
+  _heatHeadline(st) {
+    const since = fmtClock(st.since);
+    if (st.override) {
+      const until = st.override.until ? `bis ${fmtClock(st.override.until)}` : "bis du ihn beendest";
+      return `Handbetrieb: ${MODE_NAME[st.override.mode]}, ${until}.`;
+    }
+    if (!st.automation) return "Die Automatik ist aus. Die Heizung läuft normal.";
+    if (st.mode === "boost") return `Die Heizung ist seit ${since} angehoben.`;
+    if (st.mode === "setback") return `Die Heizung ist seit ${since} abgesenkt.`;
+    return "Die Heizung läuft im Normalbetrieb.";
+  }
+
+  /** Strombilanz aus den aktuellen Zuständen (Watt). */
+  _liveBalance() {
+    const cfg = this._snap.entities;
+    const set = this._snap.settings;
+    const consumers = this._snap.consumers || [];
+    const one = (id) => {
+      if (!id) return null;
+      const st = this._hass?.states?.[id];
+      const v = st && !isGap(st.state) ? Number(st.state) : NaN;
+      return [Number.isFinite(v) ? v * this._powerFactor(id) : null];
+    };
+    const bal = energyBalance({
+      grid: one(cfg.ent_grid_power), pv: one(cfg.ent_pv_power), battery: one(cfg.ent_battery_power),
+      house: one(cfg.ent_house_power), wp: one(cfg.ent_power_el), wallbox: one(cfg.ent_wallbox_power),
+      consumers: consumers.map((id) => one(id) || [null]),
+    }, { gridSign: set.grid_sign, batterySign: set.battery_sign });
+    const live = {};
+    for (const [key, arr] of Object.entries(bal)) if (key !== "consumers") live[key] = arr[0] ?? null;
+    const socState = cfg.ent_battery_soc ? this._hass?.states?.[cfg.ent_battery_soc] : null;
+    live.soc = socState && !isGap(socState.state) && Number.isFinite(Number(socState.state)) ? Number(socState.state) : null;
+    return live;
+  }
+
+  /** Zwei Balken auf gleicher Skala: woher der Strom kommt und wohin er geht. */
+  _renderBalance(host, v, fmt) {
+    const sources = [["k-pv", "Dach", v.pv], ["k-bat", "Batterie", v.dis], ["k-grid", "Netz", v.imp]];
+    const sinks = [
+      ["k-wp", "Wärmepumpe", v.wp], ["k-wb", "Wallbox", v.wallbox], ["k-small", "Weitere Verbraucher", v.small],
+      ["k-rest", "Übriges Haus", v.rest], ["k-bat", "Batterie laden", v.chg], ["k-grid", "Einspeisung", v.exp],
+    ];
+    const total = (list) => list.reduce((sum, [, , value]) => sum + (isNum(value) ? value : 0), 0);
+    const max = Math.max(total(sources), total(sinks));
+    if (!(max > 0)) {
+      host.replaceChildren(h("p", { class: "empty" }, "Noch keine Werte."));
+      return;
+    }
+    const row = (label, list) => {
+      const shown = list.filter(([, , value]) => isNum(value) && value / max >= 0.004);
+      return [
+        h("div", { class: "bal-row" },
+          h("span", {}, label),
+          h("div", { class: "bal-bar", style: `width:${((total(list) / max) * 100).toFixed(2)}%`, role: "img",
+            "aria-label": `${label}: ${shown.map(([, name, value]) => `${name} ${fmt(value)}`).join(", ")}` },
+            shown.map(([cls, , value]) => h("i", { class: cls, style: `flex:${value} 1 0` })))),
+        h("dl", { class: "bal-key" }, shown.map(([cls, name, value]) =>
+          h("div", {}, h("i", { class: cls }), h("dt", {}, name), h("dd", {}, fmt(value))))),
+      ];
+    };
+    host.replaceChildren(...row("Woher", sources), ...row("Wohin", sinks));
+  }
+
+  _renderLive() {
+    const snap = this._snap;
+    const $ = this.$;
+    const has = this._hasPower();
+    $.pNote.hidden = has;
+    $.oNote.hidden = has;
+    for (const el of [$.oBalWrap, $.oFactsSec, $.oHoursSec, $.pBalWrap, $.pFactsSec, $.pSheet, $.pRankSec]) el.hidden = !has;
+    const heat = this._heatHeadline(snap.state);
+    const aux = this._liveAux();
+    const heatBits = [heat];
+    if (aux.fireOn) heatBits.push("Der Kamin brennt.");
+    if (aux.drawing) heatBits.push("Der Speicher liefert Wärme.");
+    else if (aux.ready) heatBits.push("Der Speicher ist bereit.");
+
+    if (!has) {
+      $.pHeadline.textContent = "Noch keine Stromdaten.";
+      $.pSub.textContent = "";
+      $.oHeadline.textContent = heat;
+      $.oNow.textContent = "";
+      $.oSub.textContent = heatBits.slice(1).join(" ");
+      return;
+    }
+    const v = this._liveBalance();
+    $.pHeadline.textContent = isNum(v.cons) ? `Das Haus verbraucht gerade ${fmtKw(v.cons)}.` : "Der Verbrauch ist gerade nicht bekannt.";
+    const bits = [];
+    if (v.pv > 30) bits.push(`Das Dach liefert ${fmtKw(v.pv)}.`);
+    else if (v.pv !== null) bits.push("Das Dach liefert nichts.");
+    if (v.dis > 30) bits.push(`Die Batterie gibt ${fmtKw(v.dis)} ab.`);
+    if (v.chg > 30) bits.push(`Die Batterie lädt mit ${fmtKw(v.chg)}.`);
+    if (v.imp > 30) bits.push(`Aus dem Netz kommen ${fmtKw(v.imp)}.`);
+    if (v.exp > 30) bits.push(`Ins Netz gehen ${fmtKw(v.exp)}.`);
+    if (isNum(v.soc)) bits.push(`Ladestand ${nf0.format(v.soc)} %.`);
+    $.pSub.textContent = bits.join(" ");
+    if (this._tab === "power") this._renderBalance($.pBalance, v, fmtKw);
+
+    const today = this._today;
+    $.oHeadline.textContent = today && today.autarky !== null
+      ? `Heute hat sich das Haus zu ${fmtPct(today.autarky)} selbst mit Strom versorgt.`
+      : "Die Stromdaten von heute werden geladen.";
+    $.oNow.textContent = [$.pHeadline.textContent, ...bits].join(" ");
+    $.oSub.textContent = heatBits.join(" ");
+  }
+
+  /** Kennwerte des heutigen Tages, gemeinsam für Übersicht und Strom. */
+  _renderToday() {
+    const $ = this.$;
+    const t = this._today;
+    if (!t) return;
+    const kwh = (v) => (isNum(v) ? `${nf1.format(v)} kWh` : "–");
+    const cfg = this._snap.entities;
+    const live = this._liveBalance();
+    const items = [["Verbrauch heute", kwh(t.cons)]];
+    if (cfg.ent_pv_power) items.push(["Vom Dach", kwh(t.pv), t.selfUse !== null ? `${fmtPct(t.selfUse)} selbst genutzt` : ""]);
+    if (t.autarky !== null) items.push(["Autarkie", fmtPct(t.autarky), "Anteil ohne Netz"]);
+    if (cfg.ent_grid_power) {
+      items.push(["Netzbezug", kwh(t.imp)]);
+      items.push(["Einspeisung", kwh(t.exp)]);
+    }
+    if (cfg.ent_battery_power || cfg.ent_battery_soc) {
+      const hint = t.chg !== null ? `heute ${kwh(t.chg)} geladen, ${kwh(t.dis)} entladen` : "";
+      items.push(["Batterie", isNum(live.soc) ? `${nf0.format(live.soc)} %` : kwh(t.dis), hint]);
+    }
+    if (cfg.ent_power_el) items.push(["Wärmepumpe", kwh(t.wp), t.cons > 0 && isNum(t.wp) ? `${fmtPct(t.wp / t.cons)} des Verbrauchs` : ""]);
+    if (cfg.ent_wallbox_power) items.push(["Wallbox", kwh(t.wallbox)]);
+    const nodes = () => items.map(([label, value, hint]) =>
+      h("div", {}, h("dt", {}, label), h("dd", {}, value, hint ? h("small", {}, hint) : null)));
+    $.oFacts.replaceChildren(...nodes());
+    $.pFacts.replaceChildren(...nodes());
+    this._renderBalance($.oBalance, t, kwh);
+
+    // Rangliste der Verbraucher
+    const rows = [];
+    if (isNum(t.wp)) rows.push(["Wärmepumpe", t.wp, "k-wp"]);
+    if (isNum(t.wallbox)) rows.push(["Wallbox", t.wallbox, "k-wb"]);
+    (this._en?.names || []).forEach((name, i) => {
+      if (isNum(t.consumers[i])) rows.push([name, t.consumers[i], "k-small"]);
+    });
+    rows.sort((a, b) => b[1] - a[1]);
+    if (isNum(t.rest)) rows.push(["Übriges Haus", t.rest, "k-rest"]);
+    const max = Math.max(...rows.map((r) => r[1]), 0.001);
+    $.pRank.replaceChildren(...(rows.length ? rows.map(([name, value, cls]) => h("div", { class: "rank-row" },
+      h("span", {}, name),
+      h("div", { class: "rank-bar" }, h("i", { class: cls, style: `width:${Math.max(0.5, (value / max) * 100).toFixed(1)}%` })),
+      h("b", {}, kwh(value)),
+      h("small", {}, t.cons > 0 ? fmtPct(value / t.cons) : "")))
+      : [h("p", { class: "empty" }, "Noch keine Verbraucher hinterlegt oder heute noch keine Werte.")]));
+    this._renderLive();
+  }
+
+  /* ---------------------------------------------------- Daten für Strom */
+
+  /** Zahlenreihen aus der Statistik von Home Assistant, ersatzweise aus dem Verlauf. */
+  async _grids(ids, t0, t1, step, n, period) {
+    const out = {};
+    if (!ids.length) return out;
+    let stats = {};
+    try {
+      stats = await this._hass.callWS({
+        type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
+        end_time: new Date(t1).toISOString(), statistic_ids: ids, period, types: ["mean"],
+      }) || {};
+    } catch (_err) {
+      stats = {};
+    }
+    for (const id of ids) {
+      const rows = (stats[id] || []).filter((r) => isNum(r.mean)).map((r) => [new Date(r.start).getTime(), r.mean]);
+      out[id] = rows.length
+        ? rowsToGrid(rows, t0, step, n)
+        : stepSeries(await this._history(id, t0, t1), t0, step, n, Math.min(t1, Date.now()));
+    }
+    return out;
+  }
+
+  async _energySet(hours, step, period) {
+    const snap = this._snap;
+    const cfg = snap.entities;
+    const consumers = snap.consumers || [];
+    const t1 = Math.ceil(Date.now() / step) * step;
+    const t0 = t1 - hours * 3600e3;
+    const n = Math.round((t1 - t0) / step);
+    const src = {
+      grid: cfg.ent_grid_power, pv: cfg.ent_pv_power, battery: cfg.ent_battery_power, soc: cfg.ent_battery_soc,
+      house: cfg.ent_house_power, wp: cfg.ent_power_el, wallbox: cfg.ent_wallbox_power,
+    };
+    const ids = [...new Set([...Object.values(src), ...consumers].filter(Boolean))];
+    const grids = await this._grids(ids, t0, t1, step, n, period);
+    const pick = (id, power = true) => (id && grids[id]
+      ? grids[id].map((v) => (v === null ? null : v * (power ? this._powerFactor(id) : 1))) : null);
+    const bal = energyBalance({
+      grid: pick(src.grid), pv: pick(src.pv), battery: pick(src.battery), house: pick(src.house),
+      wp: pick(src.wp), wallbox: pick(src.wallbox),
+      consumers: consumers.map((id) => pick(id) || new Array(n).fill(null)),
+    }, { gridSign: snap.settings.grid_sign, batterySign: snap.settings.battery_sign });
+    return { t0, t1, n, step, bal, soc: pick(src.soc, false), names: consumers.map((id) => this._name(id)) };
+  }
+
+  async _loadEnergy() {
+    if (!this._snap || !this._hass?.callWS || !this._hasPower()) {
+      if (this._snap) this._renderLive();
+      return;
+    }
+    try {
+      const en = await this._energySet(48, 300e3, "5minute");
+      const midnight = new Date();
+      midnight.setHours(0, 0, 0, 0);
+      const i0 = Math.max(0, Math.round((midnight.getTime() - en.t0) / en.step));
+      this._en = en;
+      this._today = energyTotals(en.bal, en.step, i0, en.n);
+      this._hours = hourlyMix(en.bal, en.t0, en.step, midnight.getTime());
+      this._renderToday();
+      this._drawHours();
+      this._drawPower();
+    } catch (err) {
+      this.$.pSub.textContent = `Die Stromdaten konnten nicht geladen werden: ${err?.message || err}`;
+    }
+  }
+
+  async _loadEnergyWeek() {
+    this.$.pPlots.classList.add("loading");
+    try {
+      this._enWeek = await this._energySet(168, 3600e3, "hour");
+    } catch (_err) {
+      this._enWeek = null;
+    }
+    this.$.pPlots.classList.remove("loading");
+    this._drawPower();
+  }
+
+  /** Auswertung der letzten 7 Tage für die Übersicht. */
+  async _loadAnalysis() {
+    const snap = this._snap;
+    if (!snap || !this._hass?.callWS) return;
+    this._analysisAt = Date.now();
+    const findings = [];
+    try {
+      if (this._hasPower()) {
+        const week = await this._energySet(168, 300e3, "5minute");
+        findings.push(...powerFindings(week.bal, week.soc, { consumers: week.names, wallbox: "Wallbox" }, week.step, week.t0));
+      }
+    } catch (_err) {
+      // Strom-Auswertung entfällt, die Wärme-Auswertung läuft trotzdem
+    }
+    try {
+      findings.push(...heatFindings(await this._heatWeek()));
+    } catch (_err) {
+      // ohne Verlauf der Wärmepumpe gibt es keine Wärme-Auswertung
+    }
+    this._findings = findings;
+    this._renderFindings();
+  }
+
+  /** Summen der Wärmepumpe über 7 Tage, berechnet wie im Effizienz-Export. */
+  async _heatWeek() {
+    const snap = this._snap;
+    const cfg = snap.entities;
+    const now = Date.now();
+    const t0 = Math.floor(now / 3600e3) * 3600e3 + 3600e3 - 168 * 3600e3;
+    const data = {};
+    const textual = { comp: cfg.ent_compressor, heater: cfg.ent_heater, lock: cfg.ent_lock, mode: snap.state.state_entity_id };
+    for (const [key, id] of Object.entries(textual)) {
+      if (id) data[key] = await this._history(id, t0, now);
+    }
+    const numeric = { pEl: cfg.ent_power_el, pHeat: cfg.ent_power_heat };
+    const ids = Object.values(numeric).filter(Boolean);
+    const n = Math.round((Math.ceil(now / 300e3) * 300e3 - t0) / 300e3);
+    const grids = await this._grids(ids, t0, t0 + n * 300e3, 300e3, n, "5minute");
+    for (const [key, id] of Object.entries(numeric)) {
+      if (id && grids[id]) data[key] = grids[id].map((v, b) => [t0 + b * 300e3, v === null ? "unknown" : v]);
+    }
+    const a = analyseEfficiency(data, { pEl: this._powerFactor(numeric.pEl), pHeat: this._powerFactor(numeric.pHeat) },
+      t0, now, 3600e3, { regen: matcher(snap.settings.lock_regen_value) });
+    const col = (name) => HOUR_HEADER.indexOf(name);
+    const sum = (name) => a.hourRows.reduce((total, row) => total + (isNum(row[col(name)]) ? row[col(name)] : 0), 0);
+    const known = (name) => a.hourRows.some((row) => isNum(row[col(name)]));
+    const whole = a.cycleRows.filter((row) => !row[CYCLE_HEADER.indexOf("hinweis")]);
+    const runs = whole.map((row) => row[CYCLE_HEADER.indexOf("dauer_min")]);
+    const hoursKnown = a.hourRows.filter((row) => isNum(row[col("verdichter_min")])).length;
+    return {
+      days: hoursKnown / 24,
+      starts: sum("verdichter_starts"),
+      cycles: whole.length,
+      meanRunMin: runs.length ? runs.reduce((x, y) => x + y, 0) / runs.length : null,
+      elKwh: sum("strom_aus_leistung_kwh"),
+      heatKwh: sum("waerme_aus_leistung_kwh"),
+      heaterMin: known("heizstab_min") ? sum("heizstab_min") : null,
+      draws: a.drawRows.length,
+      drawMin: a.drawRows.reduce((total, row) => total + row[DRAW_HEADER.indexOf("dauer_min")], 0),
+      boostMin: sum("angehoben_min"),
+      dryRun: snap.state.dry_run,
+    };
+  }
+
+  _renderFindings() {
+    const host = this.$.oFind;
+    const list = this._findings;
+    if (!list) {
+      host.replaceChildren(h("p", { class: "empty" }, "Die Auswertung wird geladen."));
+      return;
+    }
+    if (!list.length) {
+      host.replaceChildren(h("p", { class: "empty" },
+        "Für eine Auswertung liegen noch zu wenige Daten vor. Sie füllt sich, sobald die Sensoren ein paar Tage aufgezeichnet haben."));
+      return;
+    }
+    const groups = [["warn", "Fällt auf"], ["good", "Läuft gut"], ["info", "Zur Einordnung"]];
+    host.replaceChildren(
+      h("div", { class: "find" }, groups.map(([tone, title]) => {
+        const items = list.filter((f) => f.tone === tone);
+        return h("div", {},
+          h("h3", {}, title),
+          items.length
+            ? items.map((f) => h("div", { class: "fitem" }, h("b", {}, f.title), h("p", {}, f.text)))
+            : h("div", { class: "fitem" }, h("p", { class: "none" }, tone === "warn" ? "Nichts Auffälliges." : "Noch nichts.")));
+      })),
+      h("p", { class: "foot" },
+        "Grundlage: die letzten 7 Tage, berechnet aus den Leistungs-Sensoren und dem Verlauf von Home Assistant. „Bis zu“ heißt: zeitgleich gemessen, nicht einzeln zugeordnet. Die Schwellen der Bewertungen stehen in der Anleitung."));
+  }
+
+  /* -------------------------------------------------- Zeichnen für Strom */
+
+  /** Heute, Stunde für Stunde: woher der Verbrauch kam, dazu die PV-Erzeugung als Linie. */
+  _drawHours() {
+    const host = this.$?.oHours;
+    const hours = this._hours;
+    if (!host || !hours) return;
+    const W = Math.floor(host.clientWidth);
+    if (W < 120) return;
+    if (!hours.some((x) => x.known)) {
+      host.replaceChildren(h("p", { class: "empty" }, "Für heute liegen noch keine Stromdaten vor."));
+      return;
+    }
+    const narrow = W < 520;
+    const M = { l: narrow ? 34 : 44, r: 8 };
+    const H = 220;
+    const top = 10;
+    const ih = H - top - 24;
+    const iw = W - M.l - M.r;
+    const slot = iw / 24;
+    const max = Math.max(0.2, ...hours.map((x) => Math.max(x.fromPv + x.fromBat + x.fromGrid, x.pv)));
+    const hi = niceTicks(0, max * 1.05, 3).at(-1) >= max ? niceTicks(0, max * 1.05, 3).at(-1) : max * 1.1;
+    const y = (v) => top + ih - (v / hi) * ih;
+    const svg = s("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
+    for (const tick of niceTicks(0, hi, 3)) {
+      svg.append(
+        s("line", { x1: M.l, x2: W - M.r, y1: y(tick), y2: y(tick), class: tick === 0 ? "axis" : "grid" }),
+        s("text", { x: M.l - 8, y: y(tick) + 4, class: "tick", "text-anchor": "end" }, nf1.format(tick)));
+    }
+    const gap = Math.min(4, slot * 0.18);
+    let line = "";
+    hours.forEach((x, i) => {
+      const x0 = M.l + i * slot + gap / 2;
+      const w = slot - gap;
+      if (x.known) {
+        let base = 0;
+        for (const [key, cls] of [["fromPv", "col-pv"], ["fromBat", "col-bat"], ["fromGrid", "col-grid"]]) {
+          const v = x[key];
+          if (v > hi * 0.004) {
+            const inset = cls === "col-grid" ? 0.75 : 0;
+            svg.append(s("rect", {
+              x: x0 + inset, y: y(base + v) + inset, width: Math.max(1, w - 2 * inset),
+              height: Math.max(1, y(base) - y(base + v) - 1.5 - 2 * inset), rx: 2, class: cls,
+            }));
+          }
+          base += v;
+        }
+        line += `${line ? "L" : "M"}${(x0 - gap / 2).toFixed(1)} ${y(x.pv).toFixed(1)}H${(x0 + w + gap / 2).toFixed(1)}`;
+      }
+      if (i % (narrow ? 6 : 3) === 0) {
+        svg.append(s("text", { x: M.l + i * slot + slot / 2, y: H - 6, class: "tick", "text-anchor": "middle" }, `${i} Uhr`));
+      }
+    });
+    if (line) svg.append(s("path", { d: line, class: "line thin s-ink" }));
+    const tip = h("div", { class: "tip" });
+    const key = (cls, name) => h("span", { class: "key" }, h("i", { class: `sw ${cls}` }), h("span", {}, name));
+    host.replaceChildren(
+      h("div", { class: "plot-title" }, h("b", {}, "Verbrauch in kWh je Stunde, nach Herkunft"),
+        key("k-pv", "Dach"), key("k-bat", "Batterie"), key("k-grid", "Netz"),
+        h("span", { class: "key s-ink" }, h("i", {}), h("span", {}, "Erzeugung vom Dach"))),
+      svg, tip);
+    const kwh = (v) => `${nf1.format(v)} kWh`;
+    host.onpointermove = (ev) => {
+      const px = ev.clientX - host.getBoundingClientRect().left;
+      const i = Math.floor((px - M.l) / slot);
+      const x = hours[i];
+      if (!x || !x.known) { tip.style.display = "none"; return; }
+      tip.replaceChildren(
+        h("div", { class: "when" }, `${i} bis ${i + 1} Uhr`),
+        ...[["Verbrauch", x.fromPv + x.fromBat + x.fromGrid], ["vom Dach", x.fromPv], ["aus der Batterie", x.fromBat],
+          ["aus dem Netz", x.fromGrid], ["Erzeugung vom Dach", x.pv]]
+          .map(([name, value]) => h("div", { class: "line" }, h("span", {}, name), h("b", {}, kwh(value)))));
+      tip.style.display = "block";
+      const cx = M.l + (i + 0.5) * slot;
+      tip.style.left = `${cx + 14 + tip.offsetWidth > W ? Math.max(0, cx - 14 - tip.offsetWidth) : cx + 14}px`;
+    };
+    host.onpointerdown = host.onpointermove;
+    host.onpointerleave = () => { tip.style.display = "none"; };
+  }
+
+  _drawPower() {
+    const host = this.$?.pPlots;
+    const full = this._pRange === 168 ? this._enWeek : this._en;
+    if (!host || !full) return;
+    const keep = this._pRange === 24 ? Math.round(86400e3 / full.step) : full.n;
+    const from = full.n - keep;
+    const cut = (arr) => (arr ? arr.slice(from) : null);
+    const bal = full.bal;
+    const g = { t0: full.t0 + from * full.step, t1: full.t1, n: keep, step: full.step };
+    const signed = (up, down) => up.map((v, b) => (v === null && down[b] === null ? null : (v ?? 0) - (down[b] ?? 0)));
+    const d = {
+      pv: cut(bal.pv), cons: cut(bal.cons), grid: cut(signed(bal.imp, bal.exp)), bat: cut(signed(bal.dis, bal.chg)),
+      soc: cut(full.soc), wp: cut(bal.wp), wallbox: cut(bal.wallbox), small: cut(bal.small),
+    };
+    const any = (arr) => Boolean(arr && arr.some((v) => v !== null));
+    const last = (arr) => arr.findLast((v) => v !== null) ?? null;
+    const plots = [];
+    if (any(d.pv) || any(d.cons)) {
+      plots.push({
+        title: "Erzeugung und Verbrauch in Watt", height: 170, zero: true,
+        series: [
+          any(d.pv) && { vals: d.pv, cls: "s-pv", kind: "area", name: "Dach", value: fmtW(last(d.pv)) },
+          any(d.cons) && { vals: d.cons, cls: "s-ink", kind: "line", name: "Verbrauch", value: fmtW(last(d.cons)) },
+        ].filter(Boolean),
+      });
+    }
+    if (any(d.grid)) {
+      plots.push({ title: "Netz in Watt", note: "Nach oben: Bezug. Nach unten: Einspeisung.", height: 120, zero: true,
+        series: [{ vals: d.grid, cls: "s-grid", kind: "area" }] });
+    }
+    if (any(d.bat)) {
+      plots.push({ title: "Batterie in Watt", note: "Nach oben: Entladen. Nach unten: Laden.", height: 110, zero: true,
+        series: [{ vals: d.bat, cls: "s-bat", kind: "area" }] });
+    }
+    if (any(d.soc)) {
+      plots.push({ title: "Ladestand in Prozent", height: 90, lo: 0, hi: 100,
+        series: [{ vals: d.soc, cls: "s-bat", kind: "line", name: "Ladestand", value: `${nf0.format(last(d.soc))} %` }] });
+    }
+    if (any(d.wp) || any(d.wallbox) || any(d.small)) {
+      plots.push({
+        title: "Verbraucher in Watt", height: 150, zero: true,
+        series: [
+          any(d.small) && { vals: d.small, cls: "s-outdoor", kind: "line", thin: true, name: "Weitere Verbraucher", value: fmtW(last(d.small)) },
+          any(d.wallbox) && { vals: d.wallbox, cls: "s-return", kind: "line", name: "Wallbox", value: fmtW(last(d.wallbox)) },
+          any(d.wp) && { vals: d.wp, cls: "s-flow", kind: "line", name: "Wärmepumpe", value: fmtW(last(d.wp)) },
+        ].filter(Boolean),
+      });
+    }
+    if (!plots.length) {
+      host.replaceChildren(h("p", { class: "empty" }, "Für diesen Zeitraum liegen noch keine Stromdaten vor."));
+      return;
+    }
+    this._stack(host, g, plots, (i) => {
+      const lines = [];
+      if (any(d.pv)) lines.push(["s-pv", "Dach", fmtW(d.pv[i])]);
+      if (any(d.cons)) lines.push(["s-ink", "Verbrauch", fmtW(d.cons[i])]);
+      if (any(d.grid)) lines.push(["s-grid", d.grid[i] < 0 ? "Einspeisung" : "Netzbezug", fmtW(Math.abs(d.grid[i] ?? NaN))]);
+      if (any(d.bat)) lines.push(["s-bat", d.bat[i] < 0 ? "Batterie lädt" : "Batterie gibt ab", fmtW(Math.abs(d.bat[i] ?? NaN))]);
+      if (any(d.soc)) lines.push(["s-bat", "Ladestand", isNum(d.soc[i]) ? `${nf0.format(d.soc[i])} %` : "–"]);
+      if (any(d.wp)) lines.push(["s-flow", "Wärmepumpe", fmtW(d.wp[i])]);
+      if (any(d.wallbox)) lines.push(["s-return", "Wallbox", fmtW(d.wallbox[i])]);
+      if (any(d.small)) lines.push(["s-outdoor", "Weitere Verbraucher", fmtW(d.small[i])]);
+      return lines;
+    });
+  }
+
+  /**
+   * Mehrere Diagramme untereinander auf gemeinsamer Zeitachse, mit Fadenkreuz.
+   * g: { t0, t1, n, step }; plots: [{ title, note, height, zero, lo, hi, series: [{ vals, cls, kind, thin, name, value }] }]
+   * tipLines(i) liefert die Zeilen der Ablesung für Raster i.
+   */
+  _stack(host, g, plots, tipLines) {
+    const W = Math.floor(host.clientWidth);
+    if (W < 120) return;
+    const narrow = W < 520;
+    const M = { l: narrow ? 40 : 52, r: 12 };
+    const iw = W - M.l - M.r;
+    const x = (i) => M.l + ((i + 0.5) / g.n) * iw;
+    const xt = (t) => M.l + ((t - g.t0) / (g.n * g.step)) * iw;
+    const hours = (g.n * g.step) / 3600e3;
+    const every = hours <= 24 ? (narrow ? 6 : 3) : hours <= 48 ? (narrow ? 12 : 6) : 24;
+    const xticks = [];
+    const d = new Date(g.t0);
+    d.setMinutes(0, 0, 0);
+    while (d.getTime() <= g.t0 + g.n * g.step) {
+      if (d.getTime() >= g.t0 && d.getHours() % every === 0) xticks.push(d.getTime());
+      d.setHours(d.getHours() + 1);
+    }
+    const nodes = [];
+    plots.forEach((plot, index) => {
+      const lastPlot = index === plots.length - 1;
+      const all = plot.series.flatMap((sr) => sr.vals.filter((v) => v !== null));
+      let lo = plot.lo ?? Math.min(...all, plot.zero ? 0 : Infinity);
+      let hi = plot.hi ?? Math.max(...all, plot.zero ? 0 : -Infinity);
+      if (!(hi > lo)) hi = lo + 1;
+      if (plot.lo === undefined && plot.hi === undefined) {
+        const pad = (hi - lo) * 0.06;
+        hi += pad;
+        if (lo < 0) lo -= pad;
+      }
+      const top = 8;
+      const ih = plot.height - top - 4;
+      const height = plot.height + (lastPlot ? 20 : 0);
+      const y = (v) => top + ih - ((v - lo) / (hi - lo)) * ih;
+      const svg = s("svg", { width: W, height, viewBox: `0 0 ${W} ${height}`, "aria-hidden": "true" });
+      for (const t of xticks) svg.append(s("line", { x1: xt(t), x2: xt(t), y1: top, y2: top + ih, class: "grid" }));
+      for (const tick of niceTicks(lo, hi, 3)) {
+        svg.append(
+          s("line", { x1: M.l, x2: W - M.r, y1: y(tick), y2: y(tick), class: tick === 0 ? "axis" : "grid" }),
+          s("text", { x: M.l - 8, y: y(tick) + 4, class: "tick", "text-anchor": "end" }, nf0.format(tick + 0)));
+      }
+      for (const sr of plot.series) {
+        let dstr = "";
+        let pen = false;
+        let area = "";
+        let start = null;
+        sr.vals.forEach((v, i) => {
+          if (v === null) {
+            if (pen && sr.kind === "area") area += `L${x(i - 1).toFixed(1)} ${y(0).toFixed(1)}L${x(start).toFixed(1)} ${y(0).toFixed(1)}Z`;
+            pen = false;
+            return;
+          }
+          if (!pen) start = i;
+          const point = `${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
+          dstr += `${pen ? "L" : "M"}${point}`;
+          if (sr.kind === "area") area += `${pen ? "L" : "M"}${point}`;
+          pen = true;
+        });
+        if (pen && sr.kind === "area") area += `L${x(sr.vals.length - 1).toFixed(1)} ${y(0).toFixed(1)}L${x(start).toFixed(1)} ${y(0).toFixed(1)}Z`;
+        if (area) svg.append(s("path", { d: area, class: `fillarea ${sr.cls}` }));
+        svg.append(s("path", { d: dstr, class: `line ${sr.cls}${sr.thin ? " thin" : ""}` }));
+      }
+      if (lastPlot) {
+        for (const t of xticks) {
+          const date = new Date(t);
+          const label = hours > 48 || date.getHours() === 0 ? tfShortDay.format(date) : tfTime.format(date);
+          svg.append(s("text", { x: xt(t), y: height - 6, class: "tick", "text-anchor": "middle" }, label));
+        }
+      }
+      nodes.push(h("div", { class: "plot-title" }, h("b", {}, plot.title),
+        plot.series.filter((sr) => sr.name).map((sr) => h("span", { class: `key ${sr.cls}` }, h("i", {}),
+          h("span", {}, `${sr.name} ${sr.value ?? ""}`))),
+        plot.note ? h("span", {}, plot.note) : null), svg);
+    });
+    const cross = h("div", { class: "cross" });
+    const tip = h("div", { class: "tip" });
+    host.replaceChildren(...nodes, cross, tip);
+    const leave = () => { cross.style.display = "none"; tip.style.display = "none"; };
+    const move = (ev) => {
+      const px = ev.clientX - host.getBoundingClientRect().left;
+      if (px < M.l || px > W - M.r) { leave(); return; }
+      const i = Math.min(g.n - 1, Math.max(0, Math.floor(((px - M.l) / iw) * g.n)));
+      const when = new Date(g.t0 + (i + 0.5) * g.step);
+      cross.style.display = "block";
+      cross.style.left = `${x(i)}px`;
+      tip.replaceChildren(
+        h("div", { class: "when" }, `${tfShortDay.format(when)}, ${tfTime.format(when)} Uhr`),
+        ...tipLines(i).map(([cls, name, value]) => h("div", { class: `line ${cls}` }, h("i", {}), h("span", {}, name), h("b", {}, value))));
+      tip.style.display = "block";
+      const tw = tip.offsetWidth;
+      tip.style.left = `${x(i) + 14 + tw > W ? Math.max(0, x(i) - 14 - tw) : x(i) + 14}px`;
+    };
+    host.onpointermove = move;
+    host.onpointerdown = move;
+    host.onpointerleave = leave;
   }
 
   /* ------------------------------------------------------------- Export */
