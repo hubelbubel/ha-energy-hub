@@ -285,7 +285,82 @@ def test_snapshot_lists_export_entities_and_full_log():
         assert snap["entities"]["ent_energy_el"] is None
         assert len(snap["log"]) == c.LOG_LIMIT  # das ganze Logbuch, neueste zuerst
         assert snap["log"][0]["text"] == f"Eintrag {c.LOG_LIMIT + 19}"
-        assert snap["version"] == "0.2.0"
+        assert snap["version"] == c.VERSION
         json.dumps(snap)
+
+    asyncio.run(run())
+
+
+STORAGE = "sensor.wp_regenerativspeicher_temperatur"
+LOCK = "sensor.wp_sperre"
+FIRE = "sensor.kamin_exhaust_temperature"
+
+
+def test_ready_storage_blocks_and_ends_boost():
+    async def run():
+        hass, ctrl = make(
+            c.ACT_SMART_GRID,
+            **{c.CONF_ENT_STORAGE: STORAGE, c.CONF_ENT_LOCK: LOCK, c.CONF_ENT_FIREPLACE: FIRE},
+        )
+        hass.states.set(STORAGE, 55)
+        hass.states.set(LOCK, "Regenerativ")
+        hass.states.set(FIRE, 240)
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        state = ctrl.snapshot()["state"]
+        assert ctrl.mode == "normal" and state["rule"] == "storage"
+        assert "55,0 °C" in state["reason"] and "40,0 °C" in state["reason"]
+        assert state["storage"] == {"temp": 55.0, "ready": True, "ready_c": 40.0, "drawing": True}
+        assert state["fireplace"] == {"temp": 240.0, "on": True, "on_c": 80.0, "status": None}
+
+        hass.states.set(STORAGE, 32)  # Speicher leer: jetzt darf angehoben werden
+        hass.states.set(LOCK, "Keine")
+        hass.states.set(FIRE, 31)
+        await tick(ctrl, 1)
+        assert ctrl.mode == "boost"
+        state = ctrl.snapshot()["state"]
+        assert state["storage"]["ready"] is False and state["storage"]["drawing"] is False
+        assert state["fireplace"]["on"] is False
+
+        hass.states.set(STORAGE, 48)  # Kamin hat nachgeladen: Anheben endet nach der Haltezeit
+        await tick(ctrl, 5)
+        assert ctrl.mode == "boost" and ctrl.snapshot()["state"]["rule"] == "hold"
+        await tick(ctrl, 16)
+        assert ctrl.mode == "normal"
+        assert ctrl.snapshot()["log"][0]["values"]["storage_c"] == 48.0
+
+    asyncio.run(run())
+
+
+def test_storage_rule_can_be_switched_off_and_code_matches():
+    async def run():
+        hass, ctrl = make(
+            c.ACT_DRY_RUN,
+            **{
+                c.CONF_ENT_STORAGE: STORAGE,
+                c.CONF_STORAGE_BLOCKS_BOOST: False,
+                c.CONF_ENT_LOCK: "sensor.wp_sperrcode",
+                c.CONF_LOCK_REGEN_VALUE: "Regenerativ, 14",
+            },
+        )
+        hass.states.set(STORAGE, 60)
+        hass.states.set("sensor.wp_sperrcode", 14)
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        assert ctrl.mode == "boost"
+        assert ctrl.snapshot()["state"]["storage"]["drawing"] is True
+
+    asyncio.run(run())
+
+
+def test_without_storage_nothing_changes():
+    async def run():
+        hass, ctrl = make(c.ACT_DRY_RUN)
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        state = ctrl.snapshot()["state"]
+        assert ctrl.mode == "boost"
+        assert state["storage"]["temp"] is None and state["storage"]["ready"] is None
+        assert state["storage"]["drawing"] is None and state["fireplace"]["on"] is None
 
     asyncio.run(run())

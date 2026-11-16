@@ -150,6 +150,10 @@ function scenario() {
       surplus: [[at(-60), "1000"], [at(60), "-500"]],
       heater: [[at(-60), "off"], [at(100), "on"], [at(110), "off"]],
       eHeat: [[at(-60), "100"], [at(40), "104"], [at(60), "105"], [at(115), "109"]],
+      // Kamin brennt von 20 bis 80 min; der Speicher liefert von 45 bis 65 min und wieder ab 100 min
+      storage: [[at(-60), "55"], [at(30), "50"], [at(90), "38"]],
+      fireplace: [[at(-60), "30"], [at(20), "250"], [at(80), "40"]],
+      lock: [[at(-60), "Keine"], [at(45), "Regenerativ"], [at(65), "Keine"], [at(100), "regenerativ"]],
     },
     factors: { pEl: 1000, pHeat: 1000 },
   };
@@ -230,10 +234,60 @@ test("analyseEfficiency: Lauf, der vor dem Zeitraum begann, und fehlender Verdic
   assert.equal(none.hourRows[0][m.HOUR_HEADER.indexOf("verdichter_min")], null);
 });
 
-test("buildEfficiencyExport: zwei Tabellen mit festen Spalten", () => {
+test("episodes und matcher", () => {
+  const active = m.matcher("Regenerativ, 14");
+  assert.ok(active("Regenerativ") && active(" regenerativ ") && active(14) && !active("Keine") && !active("1"));
+  const rows = [[at(-30), "Regenerativ"], [at(10), "Keine"], [at(20), "Regenerativ"], [at(25), "unavailable"],
+    [at(26), "Regenerativ"], [at(40), "Keine"], [at(50), "Regenerativ"]];
+  const found = m.episodes(rows, active, T0, at(60)).map((e) => [(e.start - T0) / MIN, (e.end - T0) / MIN, e.began, e.open]);
+  assert.deepEqual(found, [
+    [0, 10, false, false], // lief schon vor dem Zeitraum
+    [20, 40, true, false], // der Ausfall des Sensors trennt den Abschnitt nicht
+    [50, 60, true, true], // läuft am Ende noch
+  ]);
+  assert.deepEqual(m.episodes([], active, T0, at(60)), []);
+  assert.deepEqual(m.episodes([[at(70), "Regenerativ"]], active, T0, at(60)), []);
+});
+
+test("analyseEfficiency: Kamin, Speicher und Entnahmen", () => {
+  const { data, factors } = scenario();
+  const opts = { regen: m.matcher("Regenerativ"), fireplaceOnC: 80, storageReadyC: 40 };
+  const { hourRows, drawRows } = m.analyseEfficiency(data, factors, T0, at(120), 3600e3, opts);
+  const col = (row, name) => row[m.HOUR_HEADER.indexOf(name)];
+  const [h0, h1] = hourRows;
+  near(col(h0, "speicher_c"), 52.5);
+  near(col(h0, "kamin_c"), (30 * 20 + 250 * 40) / 60);
+  assert.equal(col(h0, "kamin_min"), 40);
+  assert.equal(col(h0, "speicher_bereit_min"), 60);
+  assert.equal(col(h0, "sperre_regenerativ_min"), 15);
+  assert.equal(col(h0, "speicher_entnahmen"), 1);
+  assert.equal(col(h1, "kamin_min"), 20);
+  assert.equal(col(h1, "speicher_bereit_min"), 30);
+  assert.equal(col(h1, "sperre_regenerativ_min"), 25);
+  assert.equal(col(h1, "speicher_entnahmen"), 1); // die erste Entnahme begann in der Stunde davor
+
+  const d = (row, name) => row[m.DRAW_HEADER.indexOf(name)];
+  assert.equal(drawRows.length, 2);
+  assert.equal(d(drawRows[0], "start"), "2026-11-16T10:45:00+01:00");
+  assert.equal(d(drawRows[0], "dauer_min"), 20);
+  assert.equal(d(drawRows[0], "speicher_start_c"), 50);
+  near(d(drawRows[0], "aussen_c"), 5);
+  assert.equal(d(drawRows[0], "hinweis"), null);
+  assert.equal(d(drawRows[1], "speicher_start_c"), 38);
+  assert.equal(d(drawRows[1], "hinweis"), "läuft bei Exportende noch");
+
+  // Ohne hinterlegten Kamin und Speicher bleiben die Spalten leer
+  const bare = m.analyseEfficiency({ comp: data.comp }, {}, T0, at(120));
+  assert.equal(col(bare.hourRows[0], "kamin_min"), null);
+  assert.equal(col(bare.hourRows[0], "sperre_regenerativ_min"), null);
+  assert.equal(col(bare.hourRows[0], "speicher_entnahmen"), null);
+  assert.equal(bare.drawRows.length, 0);
+});
+
+test("buildEfficiencyExport: drei Tabellen mit festen Spalten", () => {
   const { data, factors } = scenario();
   const t0 = at(-120); // zwei leere Stunden davor werden abgeschnitten
-  const analysis = m.analyseEfficiency({ ...data, outdoor: [[at(0), "5"]], comp: data.comp.slice(1), status: [], mode: [], flow: [], ret: [], dhw: [], pEl: [[at(0), "0.04"], ...data.pEl.slice(1)], pHeat: [], surplus: [], heater: [], eHeat: [] }, factors, t0, at(120));
+  const analysis = m.analyseEfficiency({ ...data, outdoor: [[at(0), "5"]], comp: data.comp.slice(1), status: [], mode: [], flow: [], ret: [], dhw: [], pEl: [[at(0), "0.04"], ...data.pEl.slice(1)], pHeat: [], surplus: [], heater: [], eHeat: [], storage: [], fireplace: [], lock: data.lock.slice(1) }, factors, t0, at(120), 3600e3, { regen: m.matcher("Regenerativ") });
   const out = m.buildEfficiencyExport({
     version: "9.9.9", created: at(120), t0, step: 3600e3, analysis,
     settings: { boost_on_w: 1500 }, entities: { comp: "binary_sensor.v", eEl: undefined },
@@ -250,6 +304,12 @@ test("buildEfficiencyExport: zwei Tabellen mit festen Spalten", () => {
   assert.deepEqual(parseLine(lines[iCycles + 1]), m.CYCLE_HEADER);
   assert.equal(iCycles - iHours, 2 + out.rows + 1); // Kopf, Stunden, Leerzeile
   for (const line of lines.slice(iHours + 2, iHours + 2 + out.rows)) assert.equal(parseLine(line).length, m.HOUR_HEADER.length);
-  for (const line of lines.slice(iCycles + 2)) assert.equal(parseLine(line).length, m.CYCLE_HEADER.length);
-  assert.equal(out.cycles, lines.length - iCycles - 2);
+  const iDraws = lines.indexOf("# tabelle: speicherentnahmen");
+  assert.ok(iDraws > iCycles);
+  assert.deepEqual(parseLine(lines[iDraws + 1]), m.DRAW_HEADER);
+  assert.equal(out.cycles, iDraws - iCycles - 3); // Kopf, Läufe, Leerzeile
+  assert.equal(out.draws, 2);
+  for (const line of lines.slice(iCycles + 2, iDraws - 1)) assert.equal(parseLine(line).length, m.CYCLE_HEADER.length);
+  for (const line of lines.slice(iDraws + 2)) assert.equal(parseLine(line).length, m.DRAW_HEADER.length);
+  assert.equal(lines.length - iDraws - 2, out.draws);
 });

@@ -162,3 +162,43 @@ def test_formatting():
     assert logic.fmt_w(1500) == "1.500 W"
     assert logic.fmt_w(-240.4) == "-240 W"
     assert logic.fmt_num(12.5, "kWh") == "12,5 kWh"
+
+
+def test_storage_ready_blocks_boost():
+    s = Settings(storage_ready_c=40)
+    sunny = Timers(above_since=NOON - timedelta(minutes=30))
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=52.5), sunny, settings=s)
+    assert (d.mode, d.rule) == (NORMAL, "storage")
+    assert "52,5 °C" in d.reason and "nicht angehoben" in d.reason
+
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=39.9), sunny, settings=s)
+    assert d.mode == BOOST
+
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=None), sunny, settings=s)
+    assert d.mode == BOOST  # ohne Messwert gilt die Regel nicht
+
+
+def test_storage_ready_ends_running_boost():
+    s = Settings(storage_ready_c=40)
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=45), Timers(above_since=LONG_AGO), mode=BOOST, settings=s)
+    assert (d.mode, d.rule) == (NORMAL, "storage")
+    d = run(
+        Inputs(NOON, surplus_w=3000, storage_c=45), Timers(above_since=LONG_AGO), mode=BOOST,
+        since=NOON - timedelta(minutes=5), settings=s,
+    )
+    assert (d.mode, d.rule) == (BOOST, "hold")
+
+
+def test_storage_rule_off_or_not_configured():
+    sunny = Timers(above_since=NOON - timedelta(minutes=30))
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=70), sunny, settings=Settings(storage_ready_c=40, storage_blocks_boost=False))
+    assert d.mode == BOOST
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=70), sunny)  # kein Speicher hinterlegt
+    assert d.mode == BOOST
+
+
+def test_storage_does_not_stop_setback():
+    s = Settings(storage_ready_c=40)
+    d = run(Inputs(MORNING, surplus_w=0, forecast_kwh=18, outdoor_c=6, dhw_c=47, storage_c=60), settings=s)
+    assert d.mode == SETBACK
+

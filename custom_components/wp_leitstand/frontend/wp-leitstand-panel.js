@@ -175,6 +175,33 @@ export function stepBinary(rows, t0, step, n, tEnd) {
   return { share, starts };
 }
 
+/**
+ * Zeitabschnitte, in denen ein Zustand aktiv ist, beschnitten auf t0 bis tEnd.
+ * began = der Abschnitt hat innerhalb des Zeitraums begonnen; open = er läuft bei tEnd noch.
+ * Kurze Ausfälle des Sensors (nicht verfügbar) trennen einen Abschnitt nicht.
+ */
+export function episodes(rows, isActive, t0, tEnd) {
+  const out = [];
+  let start = null;
+  for (const [t, raw] of rows) {
+    if (isGap(raw) || t >= tEnd) continue;
+    const active = Boolean(isActive(raw));
+    if (active && start === null) start = t;
+    else if (!active && start !== null) {
+      if (t > t0) out.push({ start: Math.max(start, t0), end: t, began: start > t0, open: false });
+      start = null;
+    }
+  }
+  if (start !== null) out.push({ start: Math.max(start, t0), end: tEnd, began: start > t0, open: true });
+  return out;
+}
+
+/** Vergleicht einen Zustand mit den hinterlegten Werten, z. B. "Regenerativ, 14". */
+export function matcher(values) {
+  const wanted = new Set(String(values ?? "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean));
+  return (raw) => wanted.has(String(raw).trim().toLowerCase());
+}
+
 /** Ortszeit mit Zeitzonenversatz, z. B. 2026-11-16T12:05:00+01:00. */
 export function isoLocal(ms) {
   const d = new Date(ms);
@@ -251,7 +278,7 @@ export function buildExport({ version, created, t0, step, n, columns, log, setti
   for (let b = first; b <= last; b++) {
     lines.push([isoLocal(t0 + b * step), ...columns.map((col) => col.values[b]), events[b]].map(csvCell).join(","));
   }
-  return { csv: `﻿${lines.join("\r\n")}\r\n`, rows: rowCount, columns: columns.length + 2 };
+  return { csv: `\ufeff${lines.join("\r\n")}\r\n`, rows: rowCount, columns: columns.length + 2 };
 }
 
 /* ------------------------------------------------------- Effizienz-Export */
@@ -289,6 +316,7 @@ export function sweep(series, t0, tEnd, step, onSegment) {
 export const EFF_KEYS = [
   "comp", "status", "mode", "outdoor", "flow", "ret", "retTarget", "dhw", "dhwTarget",
   "pEl", "pHeat", "surplus", "heater", "second", "eEl", "eHeat", "eDhw", "eEnv",
+  "storage", "fireplace", "lock",
 ];
 const EFF_COUNTERS = ["eEl", "eHeat", "eDhw", "eEnv"];
 
@@ -298,6 +326,10 @@ export const HOUR_HEADER = [
   "heizstab_min", "zweiter_waermeerzeuger_min", "strom_aus_leistung_kwh", "waerme_aus_leistung_kwh",
   "strom_zaehler_kwh", "waerme_heizen_zaehler_kwh", "waerme_warmwasser_zaehler_kwh",
   "umweltenergie_zaehler_kwh", "pv_ueberschuss_kwh", "netzbezug_kwh", "angehoben_min", "abgesenkt_min",
+  "speicher_c", "kamin_c", "kamin_min", "speicher_bereit_min", "sperre_regenerativ_min", "speicher_entnahmen",
+];
+export const DRAW_HEADER = [
+  "start", "ende", "dauer_min", "speicher_start_c", "speicher_ende_c", "aussen_c", "hinweis",
 ];
 export const CYCLE_HEADER = [
   "start", "ende", "dauer_min", "pause_davor_min", "betriebsart", "status_min", "regelzustand",
@@ -317,7 +349,10 @@ const dominant = (map) => [...map.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
  * factors: Umrechnung je Schlüssel in W bzw. kWh (z. B. kW -> 1000)
  * Liefert Stundenwerte und eine Zeile je Verdichterlauf.
  */
-export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3) {
+export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3, opts = {}) {
+  const regen = opts.regen || (() => false);
+  const fireOn = opts.fireplaceOnC ?? null;
+  const readyAt = opts.storageReadyC ?? null;
   const I = Object.fromEntries(EFF_KEYS.map((key, i) => [key, i]));
   const series = EFF_KEYS.map((key) => data[key] || []);
   const has = Object.fromEntries(EFF_KEYS.map((key) => [key, Boolean(data[key])]));
@@ -337,7 +372,19 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3) {
     outdoor: [0, 0], dhw: [0, 0], retTarget: [0, 0], dhwTarget: [0, 0], flowOn: [0, 0], retOn: [0, 0],
     flowMax: null, compMs: null, starts: null, status: new Map(), heaterMs: null, secondMs: null,
     elWh: null, heatWh: null, pvWh: null, gridWh: null, boostMs: null, setbackMs: null, end: {}, first: {},
+    storage: [0, 0], fireplace: [0, 0], fireMs: null, readyMs: null, drawMs: null, draws: null,
   }));
+  const draws = [];
+  let draw = null;
+  let drawState = null;
+  const closeDraw = (end, note) => {
+    const d = draw;
+    draw = null;
+    draws.push([
+      isoLocal(d.start), isoLocal(end), minutes(end - d.start), d.storageStart, d.storageEnd, mean(d.outdoor),
+      [d.note, note].filter(Boolean).join("; ") || null,
+    ]);
+  };
   const cycles = [];
   let cycle = null;
   let compState = null;
@@ -406,6 +453,36 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3) {
       h.boostMs = (h.boostMs ?? 0) + (mode === "boost" ? dt : 0);
       h.setbackMs = (h.setbackMs ?? 0) + (mode === "setback" ? dt : 0);
     }
+    const storage = num(values, "storage");
+    const fireplace = num(values, "fireplace");
+    const lock = values[I.lock];
+    add(h.storage, storage, dt);
+    add(h.fireplace, fireplace, dt);
+    if (fireplace !== null && fireOn !== null) h.fireMs = (h.fireMs ?? 0) + (fireplace >= fireOn ? dt : 0);
+    if (storage !== null && readyAt !== null) h.readyMs = (h.readyMs ?? 0) + (storage >= readyAt ? dt : 0);
+    if (!isGap(lock)) {
+      const active = Boolean(regen(lock));
+      if (active && !draw) {
+        if (drawState === false) h.draws = (h.draws ?? 0) + 1;
+        draw = {
+          start: a, storageStart: null, storageEnd: null, outdoor: [0, 0],
+          note: drawState === null ? "Beginn vor dem Exportzeitraum" : null,
+        };
+      }
+      if (!active && draw) closeDraw(a, null);
+      drawState = active;
+    }
+    if (drawState !== null) {
+      h.drawMs = (h.drawMs ?? 0) + (drawState ? dt : 0);
+      h.draws ??= 0;
+    }
+    if (draw) {
+      add(draw.outdoor, outdoor, dt);
+      if (storage !== null) {
+        draw.storageStart ??= storage;
+        draw.storageEnd = storage;
+      }
+    }
     for (const key of EFF_COUNTERS) {
       const v = num(values, key);
       if (v === null) continue;
@@ -435,6 +512,7 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3) {
     }
   });
   if (cycle) closeCycle(tEnd, "läuft bei Exportende noch");
+  if (draw) closeDraw(tEnd, "läuft bei Exportende noch");
 
   const delta = (b, key) => {
     const end = hours[b].end[key];
@@ -449,13 +527,14 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3) {
     min(h.heaterMs), min(h.secondMs), kwh(h.elWh), kwh(h.heatWh),
     delta(b, "eEl"), delta(b, "eHeat"), delta(b, "eDhw"), delta(b, "eEnv"),
     kwh(h.pvWh), kwh(h.gridWh), min(h.boostMs), min(h.setbackMs),
+    mean(h.storage), mean(h.fireplace), min(h.fireMs), min(h.readyMs), min(h.drawMs), h.draws,
   ]);
-  return { hourRows, cycleRows: cycles, has };
+  return { hourRows, cycleRows: cycles, drawRows: draws, has };
 }
 
-/** CSV mit zwei Tabellen: Stundenwerte und Verdichterläufe. Leere Stunden am Rand entfallen. */
+/** CSV mit drei Tabellen: Stundenwerte, Verdichterläufe, Speicherentnahmen. Leere Stunden am Rand entfallen. */
 export function buildEfficiencyExport({ version, created, t0, step, analysis, settings, entities }) {
-  const { hourRows, cycleRows } = analysis;
+  const { hourRows, cycleRows, drawRows = [] } = analysis;
   const filled = (row) => row.slice(1).some((v) => v !== null && v !== undefined);
   let first = 0;
   let last = hourRows.length - 1;
@@ -468,7 +547,7 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
     `erstellt: ${isoLocal(created)}`,
     `von: ${rows.length ? isoLocal(t0 + first * step) : ""}`,
     `bis: ${rows.length ? isoLocal(Math.min(created, t0 + (last + 1) * step)) : ""}`,
-    "aufbau: zwei Tabellen, jede beginnt mit einer Zeile '# tabelle: name'",
+    "aufbau: drei Tabellen, jede beginnt mit einer Zeile '# tabelle: name'",
     "zahlen: Dezimalpunkt; leer = kein Wert aufgezeichnet oder Sensor nicht hinterlegt",
     "mittelwerte: zeitgewichtet; _lauf_ = nur während der Verdichter läuft",
     "_min: Minuten in der Stunde; status_min: Minuten je Betriebsstatus als name=minuten, getrennt durch ;",
@@ -476,6 +555,9 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
     "_zaehler_kwh: Zunahme des Zähler-Sensors in der Stunde",
     "pv_ueberschuss_kwh: aufsummierter positiver Anteil des Überschuss-Sensors; netzbezug_kwh: aufsummierter negativer Anteil",
     "verdichterlaeufe: eine Zeile je Lauf; betriebsart = Betriebsstatus mit dem größten Zeitanteil; strom_kwh und waerme_kwh aus den Leistungs-Sensoren",
+    "kamin_min: Minuten mit Kamin über der Schwelle; speicher_bereit_min: Minuten mit Speicher über der Bereit-Temperatur",
+    "sperre_regenerativ_min: Minuten, in denen die Wärmepumpe gesperrt war, weil der Speicher liefert; speicher_entnahmen: Beginne solcher Abschnitte",
+    "speicherentnahmen: eine Zeile je Abschnitt mit Sperre Regenerativ. Wärme aus dem Speicher steht nicht in den Wärmemengen der Wärmepumpe",
     ...Object.entries(entities || {}).map(([k, v]) => `entitaet.${k}: ${v || "nicht hinterlegt"}`),
     ...Object.entries(settings || {}).map(([k, v]) => `einstellung.${k}: ${v ?? ""}`),
   ];
@@ -487,8 +569,11 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
     "",
     "# tabelle: verdichterlaeufe",
     line(CYCLE_HEADER), ...cycleRows.map(line),
+    "",
+    "# tabelle: speicherentnahmen",
+    line(DRAW_HEADER), ...drawRows.map(line),
   ];
-  return { csv: `﻿${lines.join("\r\n")}\r\n`, rows: rows.length, cycles: cycleRows.length };
+  return { csv: `\ufeff${lines.join("\r\n")}\r\n`, rows: rows.length, cycles: cycleRows.length, draws: drawRows.length };
 }
 
 /* ------------------------------------------------------------------ Stile */
@@ -506,6 +591,7 @@ const STYLE = `
   --c-return: #2a78d6;
   --c-dhw: #1baf7a;
   --c-pv: #eda100;
+  --c-store: #6250d6;
   --c-warn: #d03b3b;
   display: block;
   min-height: 100vh;
@@ -521,6 +607,7 @@ const STYLE = `
   --c-return: #3987e5;
   --c-dhw: #199e70;
   --c-pv: #c98500;
+  --c-store: #9085e9;
   --c-warn: #e66767;
 }
 * { box-sizing: border-box; }
@@ -581,15 +668,20 @@ select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; ba
 .schema .pipe.flow { stroke: var(--c-flow); }
 .schema .pipe.return { stroke: var(--c-return); }
 .schema .pulse { fill: none; stroke: var(--plane); stroke-width: 3; stroke-linecap: butt; stroke-dasharray: 2 22; opacity: 0; }
-.schema.running .pulse { opacity: 0.75; animation: flow 1.6s linear infinite; }
+.schema.running .pulse:not(.aux-pulse), .schema .pulse.on { opacity: 0.75; animation: flow 1.6s linear infinite; }
 .schema.running .fan { animation: spin 2.4s linear infinite; }
+.schema .pipe.aux { stroke: var(--ink-2); stroke-width: 1.5; }
+.schema .pipe.aux.hot { stroke: var(--c-flow); stroke-width: 3; }
+.schema .store { fill: none; stroke: var(--c-store); stroke-width: 1.5; }
+.schema .store.ready { fill: color-mix(in srgb, var(--c-store) 14%, transparent); }
+.schema .hide { display: none; }
 .schema text { fill: var(--ink); font-size: 13px; }
 .schema .cap { fill: var(--ink-2); font-size: 12px; }
 .schema .val { font-size: 17px; font-weight: 500; }
 @keyframes flow { to { stroke-dashoffset: -24; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .schema.running .pulse, .schema.running .fan { animation: none; }
+  .schema.running .pulse:not(.aux-pulse), .schema .pulse.on, .schema.running .fan { animation: none; }
   .switch, .switch::after { transition: none; }
 }
 
@@ -614,6 +706,7 @@ select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; ba
 .s-dhw { color: var(--c-dhw); stroke: var(--c-dhw); }
 .s-outdoor { color: var(--ink-2); stroke: var(--ink-2); }
 .s-pv { color: var(--c-pv); stroke: var(--c-pv); }
+.s-store { color: var(--c-store); stroke: var(--c-store); }
 .plots { position: relative; }
 .plots.loading svg { opacity: 0.45; }
 .plots svg { display: block; width: 100%; overflow: visible; }
@@ -626,6 +719,7 @@ select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; ba
 .plots .ref { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 4; }
 .plots .ref-label { fill: var(--ink-2); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
 .plots .block { fill: var(--ink); opacity: 0.72; }
+.plots .lane { stroke: var(--rule); stroke-width: 1; }
 .cross { position: absolute; top: 0; bottom: 22px; width: 1px; background: var(--ink); opacity: 0.5; pointer-events: none; display: none; }
 .tip { position: absolute; top: 4px; z-index: 2; min-width: 190px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14); font-size: 13px; pointer-events: none; display: none; }
 .tip .when { color: var(--ink-2); margin-bottom: 6px; }
@@ -723,7 +817,7 @@ class WpLeitstandPanel extends HTMLElement {
 
   connectedCallback() {
     this._clock = setInterval(() => this._queueRender(), 30000);
-    this._refresh = setInterval(() => this._loadHistory(), 5 * 60000);
+    this._refresh = setInterval(() => { this._loadHistory(); this._loadDraws(); }, 5 * 60000);
     if (this._hass) this._subscribe();
   }
 
@@ -744,7 +838,10 @@ class WpLeitstandPanel extends HTMLElement {
         const first = !this._snap;
         this._snap = { ...event, log: event.log ?? this._snap?.log ?? [] };
         this._queueRender();
-        if (first) this._loadHistory();
+        if (first) {
+          this._loadHistory();
+          this._loadDraws();
+        }
       },
       { type: `${DOMAIN}/subscribe` }
     );
@@ -885,7 +982,7 @@ class WpLeitstandPanel extends HTMLElement {
     $.sReturn = t(476, 246, "val");
     $.sReturnTarget = t(476, 266, "cap");
     const flowPath = "M136 152 H236 M366 152 H416 V168 H536 V184 H416";
-    return s("svg", { class: "schema", viewBox: "0 0 560 300", role: "img", "aria-label": "Anlagenschema der Wärmepumpe mit aktuellen Temperaturen" },
+    const svg = s("svg", { class: "schema", viewBox: "0 0 560 300", role: "img", "aria-label": "Anlagenschema der Wärmepumpe mit aktuellen Temperaturen" },
       // Außengerät
       s("text", { x: 76, y: 64, class: "cap", "text-anchor": "middle" }, "Außen"),
       $.sOutdoor,
@@ -909,6 +1006,25 @@ class WpLeitstandPanel extends HTMLElement {
       $.sFlow, $.sReturn, $.sReturnTarget,
       s("text", { x: 476, y: 292, class: "cap", "text-anchor": "middle" }, "Heizkreis")
     );
+    // Zweite Reihe: Kamin lädt den Speicher, der Speicher versorgt den Heizkreis
+    $.sFire = t(76, 372, "val");
+    $.sFireState = t(76, 394, "cap");
+    $.sFirePipe = s("path", { d: "M136 376 H250", class: "pipe aux" });
+    $.gFire = s("g", { class: "hide" },
+      s("text", { x: 76, y: 322, class: "cap", "text-anchor": "middle" }, "Kamin"),
+      s("rect", { x: 16, y: 332, width: 120, height: 88, rx: 8, class: "box" }),
+      $.sFire, $.sFireState, $.sFirePipe);
+    $.sStore = t(301, 378, "val");
+    $.sStoreState = t(301, 400, "cap");
+    $.sStoreBox = s("rect", { x: 250, y: 320, width: 102, height: 108, rx: 20, class: "store" });
+    $.sStorePipe = s("path", { d: "M352 376 H476 V304", class: "pipe aux" });
+    $.sStorePulse = s("path", { d: "M352 376 H476 V304", class: "pulse aux-pulse" });
+    $.gStore = s("g", { class: "hide" },
+      $.sStoreBox,
+      s("text", { x: 301, y: 352, class: "cap", "text-anchor": "middle" }, "Speicher"),
+      $.sStore, $.sStoreState, $.sStorePipe, $.sStorePulse);
+    svg.append($.gFire, $.gStore);
+    return svg;
   }
 
   /* ---------------------------------------------------------- Zustände */
@@ -992,9 +1108,47 @@ class WpLeitstandPanel extends HTMLElement {
     const retT = this._value("ent_return_target");
     $.sReturnTarget.textContent = isNum(retT) ? `Rücklauf, Soll ${fmtC(retT)}` : "Rücklauf";
 
+    // Kamin und Speicher
+    const hasFire = Boolean(cfg.ent_fireplace);
+    const hasStore = Boolean(cfg.ent_storage);
+    $.schema.setAttribute("viewBox", hasFire || hasStore ? "0 0 560 440" : "0 0 560 300");
+    $.gFire.classList.toggle("hide", !hasFire);
+    $.gStore.classList.toggle("hide", !hasStore);
+    const live = this._liveAux();
+    if (hasFire) {
+      $.sFire.textContent = fmtC(live.fireTemp);
+      $.sFireState.textContent = live.fireStatus || (live.fireOn === null ? "" : live.fireOn ? "brennt" : "aus");
+      $.sFirePipe.classList.toggle("hot", Boolean(live.fireOn) && hasStore);
+      $.sFirePipe.classList.toggle("hide", !hasStore);
+    }
+    if (hasStore) {
+      $.sStore.textContent = fmtC(live.storeTemp);
+      $.sStoreState.textContent = live.drawing ? "liefert" : live.ready === null ? "" : live.ready ? "bereit" : "nicht bereit";
+      $.sStoreBox.classList.toggle("ready", Boolean(live.ready));
+      $.sStorePipe.classList.toggle("hot", Boolean(live.drawing));
+      $.sStorePulse.classList.toggle("on", Boolean(live.drawing));
+    }
+
     this._renderFacts();
     this._renderRules();
     this._renderLog(false);
+  }
+
+  /** Kamin und Speicher aus den aktuellen Zuständen: Temperaturen, brennt, bereit, liefert. */
+  _liveAux() {
+    const set = this._snap.settings;
+    const storeTemp = this._value("ent_storage");
+    const fireTemp = this._value("ent_fireplace");
+    const lock = this._state("ent_lock")?.state;
+    const status = this._state("ent_fireplace_status")?.state;
+    return {
+      storeTemp,
+      ready: isNum(storeTemp) ? storeTemp >= Number(set.storage_ready_c) : null,
+      fireTemp,
+      fireOn: isNum(fireTemp) ? fireTemp >= Number(set.fireplace_on_c) : null,
+      fireStatus: status && !isGap(status) ? status : "",
+      drawing: lock === undefined || isGap(lock) ? null : matcher(set.lock_regen_value)(lock),
+    };
   }
 
   _renderFacts() {
@@ -1016,6 +1170,22 @@ class WpLeitstandPanel extends HTMLElement {
     if (cfg.ent_power_heat) items.push(["Heizleistung", fmtKw(heat)]);
     if (isNum(el) && isNum(heat) && el >= 200 && heat > 0) {
       items.push(["Leistungszahl", nf1.format(heat / el), "Wärme je Strom, Momentanwert"]);
+    }
+    const live = this._liveAux();
+    if (cfg.ent_storage) {
+      const hint = live.drawing ? "liefert gerade Wärme"
+        : live.ready === null ? "" : `${live.ready ? "bereit" : "noch nicht bereit"}, Schwelle ${fmtC(Number(set.storage_ready_c))}`;
+      items.push(["Speicher", fmtC(live.storeTemp), hint]);
+    }
+    if (cfg.ent_fireplace) {
+      items.push(["Kamin", fmtC(live.fireTemp), live.fireStatus || (live.fireOn === null ? "" : live.fireOn ? "brennt" : "aus")]);
+    }
+    if (cfg.ent_lock && this._draws) {
+      const d = this._draws;
+      const dur = d.todayMs >= 3600e3
+        ? `${Math.floor(d.todayMs / 3600e3)} h ${Math.round((d.todayMs % 3600e3) / 60e3)} min`
+        : `${Math.round(d.todayMs / 60e3)} min`;
+      items.push(["Wärme aus dem Speicher heute", `${d.today}-mal`, `${dur}, in 7 Tagen ${d.week}-mal`]);
     }
     this.$.facts.replaceChildren(
       ...items.map(([label, value, hint]) =>
@@ -1039,6 +1209,9 @@ class WpLeitstandPanel extends HTMLElement {
       parts.push(`Abgesenkt wird zwischen ${hhmm(set.setback_start)} und ${hhmm(set.setback_end)} Uhr, wenn ${list}.`);
     } else {
       parts.push("Abgesenkt wird nicht.");
+    }
+    if (this._snap.entities.ent_storage && set.storage_blocks_boost) {
+      parts.push(`Solange der Speicher mindestens ${fmtC(Number(set.storage_ready_c))} hat, wird nicht angehoben. Dann kann der Kamin die Heizung versorgen.`);
     }
     parts.push(`Jeder Zustand wird mindestens ${nf0.format(set.min_hold_min)} min gehalten. Handbetrieb wirkt sofort.`);
     parts.push({
@@ -1079,6 +1252,7 @@ class WpLeitstandPanel extends HTMLElement {
     if (isNum(v.forecast_kwh)) bits.push(`Prognose ${fmtKwh(v.forecast_kwh)}`);
     if (isNum(v.outdoor_c)) bits.push(`außen ${fmtC(v.outdoor_c)}`);
     if (isNum(v.dhw_c)) bits.push(`Warmwasser ${fmtC(v.dhw_c)}`);
+    if (isNum(v.storage_c)) bits.push(`Speicher ${fmtC(v.storage_c)}`);
     let result = "";
     if (e.result === "sent") result = `Gesendet: ${e.detail || "Vorgabe gesetzt"}`;
     else if (e.result === "simulated") result = "Nur protokolliert (Probebetrieb)";
@@ -1133,7 +1307,7 @@ class WpLeitstandPanel extends HTMLElement {
     $.expDetails = [];
     const kinds = [
       ["verlauf", "Verlauf und Entscheidungen", "Messwerte im Zeitraster, Regelzustand, Logbuch"],
-      ["effizienz", "Effizienz", "Stundenwerte und eine Zeile je Verdichterlauf"],
+      ["effizienz", "Effizienz", "Stundenwerte, Verdichterläufe und Speicherentnahmen"],
     ];
     $.expDialog = h("dialog", { "aria-labelledby": "exp-title" },
       h("h2", { id: "exp-title" }, "Daten exportieren"),
@@ -1227,6 +1401,10 @@ class WpLeitstandPanel extends HTMLElement {
     num("waerme_heizen_zaehler_kwh", cfg.ent_energy_heat, energy(cfg.ent_energy_heat), "kWh");
     num("waerme_warmwasser_zaehler_kwh", cfg.ent_energy_dhw, energy(cfg.ent_energy_dhw), "kWh");
     num("umweltenergie_zaehler_kwh", cfg.ent_energy_env, energy(cfg.ent_energy_env), "kWh");
+    num("speicher_c", cfg.ent_storage, 1, "°C");
+    num("kamin_c", cfg.ent_fireplace, 1, "°C");
+    plan.push({ name: "kamin_status", id: cfg.ent_fireplace_status, type: "text" });
+    plan.push({ name: "sperre", id: cfg.ent_lock, type: "text" });
 
     const used = new Set(plan.map((col) => col.id).filter(Boolean));
     for (const id of snap.export_extra || []) {
@@ -1284,7 +1462,7 @@ class WpLeitstandPanel extends HTMLElement {
     const size = bytes > 1e6 ? `${nf1.format(bytes / 1e6)} MB` : `${nf0.format(Math.max(1, bytes / 1000))} kB`;
     this._export = { csv: built.csv, filename };
     summary = kind === "effizienz"
-      ? `Fertig: ${nf0.format(built.rows)} Stunden, ${nf0.format(built.cycles)} Verdichterläufe, ${size}.`
+      ? `Fertig: ${nf0.format(built.rows)} Stunden, ${nf0.format(built.cycles)} Verdichterläufe, ${nf0.format(built.draws)} Speicherentnahmen, ${size}.`
       : `Fertig: ${nf0.format(built.rows)} Zeilen, ${built.columns} Spalten, ${size}.`;
     say(built.note ? `${summary} ${built.note}` : summary);
     $.expMake.hidden = true;
@@ -1345,6 +1523,7 @@ class WpLeitstandPanel extends HTMLElement {
       dhw: cfg.ent_dhw, dhwTarget: cfg.ent_dhw_target, pEl: cfg.ent_power_el, pHeat: cfg.ent_power_heat,
       surplus: cfg.ent_pv_surplus, heater: cfg.ent_heater, second: cfg.ent_second_heat,
       eEl: cfg.ent_energy_el, eHeat: cfg.ent_energy_heat, eDhw: cfg.ent_energy_dhw, eEnv: cfg.ent_energy_env,
+      storage: cfg.ent_storage, fireplace: cfg.ent_fireplace, lock: cfg.ent_lock,
     };
     const factors = {
       pEl: power(source.pEl), pHeat: power(source.pHeat),
@@ -1360,7 +1539,11 @@ class WpLeitstandPanel extends HTMLElement {
       if (token !== this._exportToken) return null;
     }
     say("Werte aus …");
-    const analysis = analyseEfficiency(data, factors, t0, created, step);
+    const analysis = analyseEfficiency(data, factors, t0, created, step, {
+      regen: matcher(snap.settings.lock_regen_value),
+      fireplaceOnC: source.fireplace ? Number(snap.settings.fireplace_on_c) : null,
+      storageReadyC: source.storage ? Number(snap.settings.storage_ready_c) : null,
+    });
     const built = buildEfficiencyExport({
       version: snap.version, created, t0, step, analysis, settings: snap.settings, entities: source,
     });
@@ -1398,6 +1581,30 @@ class WpLeitstandPanel extends HTMLElement {
 
   /* ------------------------------------------------------------ Verlauf */
 
+  /** Wie oft und wie lange heute und in den letzten 7 Tagen Wärme aus dem Speicher kam. */
+  async _loadDraws() {
+    const snap = this._snap;
+    const id = snap?.entities?.ent_lock;
+    if (!id || !this._hass?.callWS) return;
+    const now = Date.now();
+    const t0 = now - 7 * 86400e3;
+    try {
+      const rows = await this._history(id, t0, now);
+      const active = matcher(snap.settings.lock_regen_value);
+      const midnight = new Date(now);
+      midnight.setHours(0, 0, 0, 0);
+      const day = episodes(rows, active, midnight.getTime(), now);
+      this._draws = {
+        week: episodes(rows, active, t0, now).length,
+        today: day.length,
+        todayMs: day.reduce((sum, e) => sum + (e.end - e.start), 0),
+      };
+      this._queueRender();
+    } catch (_err) {
+      this._draws = null;
+    }
+  }
+
   async _loadHistory() {
     const snap = this._snap;
     if (!snap || !this._hass?.callWS) return;
@@ -1405,8 +1612,11 @@ class WpLeitstandPanel extends HTMLElement {
     const t1 = Date.now();
     const t0 = t1 - range.hours * 3600e3;
     const cfg = snap.entities;
-    const numeric = [{ key: "surplus", id: cfg.ent_pv_surplus }, ...SERIES.map((x) => ({ key: x.key, id: cfg[x.ent] }))]
-      .filter((x) => x.id);
+    const numeric = [
+      { key: "surplus", id: cfg.ent_pv_surplus }, ...SERIES.map((x) => ({ key: x.key, id: cfg[x.ent] })),
+      { key: "storage", id: cfg.ent_storage }, { key: "fireplace", id: cfg.ent_fireplace },
+    ].filter((x) => x.id);
+    const lockId = cfg.ent_lock;
     const modeId = snap.state.state_entity_id;
     this.$.plots.classList.add("loading");
     const token = (this._loadToken = (this._loadToken || 0) + 1);
@@ -1428,7 +1638,7 @@ class WpLeitstandPanel extends HTMLElement {
         }
         pending = pending.filter((id) => !raw[id]);
       }
-      const ids = [...pending, ...(modeId ? [modeId] : [])];
+      const ids = [...pending, ...(modeId ? [modeId] : []), ...(lockId ? [lockId] : [])];
       if (ids.length) {
         const hist = await this._hass.callWS({
           type: "history/history_during_period", start_time: start, end_time: end,
@@ -1471,6 +1681,15 @@ class WpLeitstandPanel extends HTMLElement {
         chart.modes[b] = ["normal", "boost", "setback"].includes(current) ? current : null;
       }
     }
+    if (lockId) {
+      const active = matcher(snap.settings.lock_regen_value);
+      chart.draw = stepText(raw[lockId] || [], t0, step, n, t1).map((v) => (v === null ? null : active(v)));
+      chart.drawCount = episodes(raw[lockId] || [], active, t0, t1).length;
+    }
+    const onC = Number(snap.settings.fireplace_on_c);
+    const readyC = Number(snap.settings.storage_ready_c);
+    if (chart.series.fireplace) chart.fire = chart.series.fireplace.map((v) => (v === null ? null : v >= onC));
+    if (chart.series.storage) chart.ready = chart.series.storage.map((v) => (v === null ? null : v >= readyC));
     this._chart = chart;
     this.$.plots.classList.remove("loading");
     this._drawPlots();
@@ -1594,7 +1813,57 @@ class WpLeitstandPanel extends HTMLElement {
       }));
     }
 
-    // 3. Eingriffe: nach oben = angehoben, nach unten = abgesenkt
+    // 3. Speicher: Temperatur mit Bereit-Schwelle
+    const store = chart.series.storage;
+    if (store && store.some((v) => v !== null)) {
+      const vals = store.filter((v) => v !== null);
+      const readyC = Number(set.storage_ready_c);
+      const lo = Math.floor((Math.min(...vals, readyC) - 2) / 5) * 5;
+      const hi = Math.ceil((Math.max(...vals, readyC) + 2) / 5) * 5;
+      nodes.push(h("div", { class: "plot-title" }, h("b", {}, "Speicher in °C"),
+        h("span", { class: "key s-store" }, h("i", {}), h("span", {}, `Speicher ${fmtC(store.at(-1))}`))));
+      nodes.push(plot(130, lo, hi, 3, (svg, y) => {
+        svg.append(
+          s("line", { x1: M.l, x2: W - M.r, y1: y(readyC), y2: y(readyC), class: "ref" }),
+          s("text", { x: W - M.r, y: y(readyC) - 5, class: "ref-label", "text-anchor": "end" }, `bereit ab ${fmtC(readyC)}`),
+          s("path", { d: path(store, y), class: "line s-store" }));
+      }));
+    }
+
+    // 4. Kamin und Speicher als Zustände: je Zeile ein Balken, solange der Zustand gilt
+    const lanes = [
+      ["Kamin", chart.fire], ["bereit", chart.ready], ["liefert", chart.draw],
+    ].filter(([, arr]) => arr);
+    if (lanes.length) {
+      const laneH = 18;
+      const height = lanes.length * laneH + 6;
+      const svg = s("svg", { width: W, height, viewBox: `0 0 ${W} ${height}`, "aria-hidden": "true" });
+      svg.append(...vgrid(2, height - 4));
+      lanes.forEach(([label, arr], row) => {
+        const top = 3 + row * laneH;
+        svg.append(
+          s("line", { x1: M.l, x2: W - M.r, y1: top + 12.5, y2: top + 12.5, class: "lane" }),
+          s("text", { x: M.l - 8, y: top + 11, class: "tick", "text-anchor": "end" }, label));
+        let i = 0;
+        while (i < chart.n) {
+          let e = i;
+          while (e + 1 < chart.n && arr[e + 1] === arr[i]) e++;
+          if (arr[i] === true) {
+            const x0 = M.l + (i / chart.n) * iw;
+            const x1 = M.l + ((e + 1) / chart.n) * iw;
+            svg.append(s("rect", { x: x0, y: top, width: Math.max(1.5, x1 - x0), height: 12, class: "block" }));
+          }
+          i = e + 1;
+        }
+      });
+      const count = isNum(chart.drawCount)
+        ? ` Wärme aus dem Speicher geholt: ${chart.drawCount}-mal im gezeigten Zeitraum.` : "";
+      nodes.push(h("div", { class: "plot-title" }, h("b", {}, "Kamin und Speicher"),
+        h("span", {}, `Balken: Kamin brennt, Speicher ist bereit, Speicher liefert Wärme.${count}`)));
+      nodes.push(svg);
+    }
+
+    // 5. Eingriffe: nach oben = angehoben, nach unten = abgesenkt
     const stripH = 74;
     const mid = 26;
     const strip = s("svg", { width: W, height: stripH, viewBox: `0 0 ${W} ${stripH}`, "aria-hidden": "true" });
@@ -1647,10 +1916,19 @@ class WpLeitstandPanel extends HTMLElement {
       for (const sr of SERIES) {
         if (chart.series[sr.key]) lines.push([sr.cls, sr.name, fmtC(chart.series[sr.key][i])]);
       }
+      if (chart.series.storage) lines.push(["s-store", "Speicher", fmtC(chart.series.storage[i])]);
+      const states = [];
+      if (chart.series.fireplace) {
+        states.push(["Kamin", `${fmtC(chart.series.fireplace[i])}${chart.fire?.[i] ? ", brennt" : ""}`]);
+      }
+      if (chart.draw || chart.ready) {
+        states.push(["Speicher", chart.draw?.[i] ? "liefert Wärme" : chart.ready?.[i] ? "bereit" : chart.ready?.[i] === false ? "nicht bereit" : "–"]);
+      }
       const mode = chart.modes[i];
       tip.replaceChildren(
         h("div", { class: "when" }, `${tfShortDay.format(when)}, ${tfTime.format(when)} Uhr`),
         ...lines.map(([cls, name, value]) => h("div", { class: `line ${cls}` }, h("i", {}), h("span", {}, name), h("b", {}, value))),
+        ...states.map(([name, value]) => h("div", { class: "line" }, h("span", {}, name), h("b", {}, value))),
         h("div", { class: "line" }, h("span", {}, "Eingriff"), h("b", {}, mode ? { normal: "keiner", boost: "angehoben", setback: "abgesenkt" }[mode] : "–")));
       tip.style.display = "block";
       const tw = tip.offsetWidth;
@@ -1679,6 +1957,9 @@ class WpLeitstandPanel extends HTMLElement {
     for (const sr of SERIES) {
       if (chart.series[sr.key]) cols.push([sr.name, (i) => fmtC(chart.series[sr.key][i])]);
     }
+    if (chart.series.storage) cols.push(["Speicher", (i) => fmtC(chart.series.storage[i])]);
+    if (chart.series.fireplace) cols.push(["Kamin", (i) => fmtC(chart.series.fireplace[i])]);
+    if (chart.draw) cols.push(["Speicher liefert", (i) => (chart.draw[i] ? "ja" : chart.draw[i] === false ? "nein" : "")]);
     const rows = [];
     for (let i = chart.n - 1; i >= 0; i -= per) {
       const when = new Date(chart.t0 + (i + 0.5) * chart.step);

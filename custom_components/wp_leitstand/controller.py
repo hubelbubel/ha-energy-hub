@@ -59,6 +59,10 @@ ENTITY_KEYS = (
     c.CONF_ENT_ENERGY_ENV,
     c.CONF_ENT_HEATER,
     c.CONF_ENT_SECOND_HEAT,
+    c.CONF_ENT_STORAGE,
+    c.CONF_ENT_LOCK,
+    c.CONF_ENT_FIREPLACE,
+    c.CONF_ENT_FIREPLACE_STATUS,
 )
 
 SETTING_KEYS = (
@@ -77,6 +81,10 @@ SETTING_KEYS = (
     c.CONF_SHIFT_BOOST_K,
     c.CONF_SHIFT_SETBACK_K,
     c.CONF_SURPLUS_SIGN,
+    c.CONF_STORAGE_READY_C,
+    c.CONF_STORAGE_BLOCKS_BOOST,
+    c.CONF_LOCK_REGEN_VALUE,
+    c.CONF_FIREPLACE_ON_C,
 )
 
 
@@ -99,6 +107,7 @@ class Controller:
         self._decision = Decision(MODE_NORMAL, "Die Regelung startet.", "startup")
         self._inputs: Inputs | None = None
         self._forecast_tomorrow: float | None = None
+        self._aux: dict[str, Any] = {}
         self._retry_at: datetime | None = None
         self._last_apply: datetime | None = None
         self._last_error: str | None = None
@@ -160,6 +169,8 @@ class Controller:
             setback_min_forecast_kwh=float(o[c.CONF_SETBACK_MIN_FORECAST]),
             setback_min_outdoor_c=opt_float(c.CONF_SETBACK_MIN_OUTDOOR),
             setback_min_dhw_c=opt_float(c.CONF_SETBACK_MIN_DHW),
+            storage_ready_c=float(o[c.CONF_STORAGE_READY_C]) if o.get(c.CONF_ENT_STORAGE) else None,
+            storage_blocks_boost=bool(o[c.CONF_STORAGE_BLOCKS_BOOST]),
         )
 
     # ------------------------------------------------------------- Lebenszyklus
@@ -240,13 +251,46 @@ class Controller:
         if surplus is not None and self.options[c.CONF_SURPLUS_SIGN] == c.SIGN_EXPORT_NEGATIVE:
             surplus = -surplus
         self._forecast_tomorrow = self._energy_kwh(c.CONF_ENT_FORECAST_TOMORROW)
+        self._aux = self._read_aux()
         return Inputs(
             now=dt_util.now(),
             surplus_w=surplus,
             forecast_kwh=self._energy_kwh(c.CONF_ENT_FORECAST_TODAY),
             outdoor_c=self._number(c.CONF_ENT_OUTDOOR)[0],
             dhw_c=self._number(c.CONF_ENT_DHW)[0],
+            storage_c=self._aux["storage"]["temp"],
         )
+
+    def _text(self, key: str) -> str | None:
+        entity_id = self.options.get(key)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
+            return None
+        return state.state
+
+    def _read_aux(self) -> dict[str, Any]:
+        """Kamin und Speicher: Temperaturen und die daraus abgeleiteten Zustände."""
+        o = self.options
+        storage = self._number(c.CONF_ENT_STORAGE)[0]
+        ready_c = float(o[c.CONF_STORAGE_READY_C])
+        fireplace = self._number(c.CONF_ENT_FIREPLACE)[0]
+        on_c = float(o[c.CONF_FIREPLACE_ON_C])
+        lock = self._text(c.CONF_ENT_LOCK)
+        wanted = {v.strip().casefold() for v in str(o[c.CONF_LOCK_REGEN_VALUE]).split(",") if v.strip()}
+        return {
+            "storage": {
+                "temp": storage,
+                "ready": None if storage is None else storage >= ready_c,
+                "ready_c": ready_c,
+                "drawing": None if lock is None else lock.strip().casefold() in wanted,
+            },
+            "fireplace": {
+                "temp": fireplace,
+                "on": None if fireplace is None else fireplace >= on_c,
+                "on_c": on_c,
+                "status": self._text(c.CONF_ENT_FIREPLACE_STATUS),
+            },
+        }
 
     # ----------------------------------------------------------------- Logbuch
     def _log(
@@ -273,6 +317,7 @@ class Controller:
                 "forecast_kwh": inputs.forecast_kwh if inputs else None,
                 "outdoor_c": inputs.outdoor_c if inputs else None,
                 "dhw_c": inputs.dhw_c if inputs else None,
+                "storage_c": inputs.storage_c if inputs else None,
             },
         }
         log: list[dict[str, Any]] = self._data["log"]
@@ -524,7 +569,10 @@ class Controller:
                     "forecast_tomorrow_kwh": self._forecast_tomorrow,
                     "outdoor_c": inputs.outdoor_c if inputs else None,
                     "dhw_c": inputs.dhw_c if inputs else None,
+                    "storage_c": inputs.storage_c if inputs else None,
                 },
+                "storage": self._aux.get("storage"),
+                "fireplace": self._aux.get("fireplace"),
             },
             "log_rev": self.log_rev,
         }

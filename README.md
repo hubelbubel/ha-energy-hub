@@ -10,7 +10,7 @@ Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Dunkles Design
 
 ## Stand
 
-Version 0.2.0. Die Regellogik und die Abläufe im Regler sind durch 29 automatische Tests abgedeckt, die beiden Exporte durch 13 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.3.0. Die Regellogik und die Abläufe im Regler sind durch 36 automatische Tests abgedeckt, die beiden Exporte durch 15 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Was sie macht
 
@@ -21,6 +21,7 @@ Version 0.2.0. Die Regellogik und die Abläufe im Regler sind durch 29 automatis
 - **Logbuch:** jede Schaltung mit Begründung, den Messwerten zum Zeitpunkt und dem Ergebnis (gesendet, nur protokolliert, fehlgeschlagen). Die Einträge erscheinen auch im Logbuch von Home Assistant.
 - **Handbetrieb:** Normalbetrieb, Anheben oder Absenken für eine Dauer oder bis du ihn beendest.
 - **Export:** zwei CSV-Dateien zum Auswerten, eine mit Verlauf und Entscheidungen, eine für die Effizienz.
+- **Kamin und Speicher:** zeigt, wann der Kamin brennt, wann der Speicher bereit ist und wie oft Wärme aus ihm geholt wurde, und hebt nicht an, solange der Speicher die Heizung versorgen kann.
 
 ## Voraussetzungen
 
@@ -35,7 +36,7 @@ Version 0.2.0. Die Regellogik und die Abläufe im Regler sind durch 29 automatis
 
 **Von Hand:** den Ordner `custom_components/wp_leitstand` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
-Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „WP Leitstand“. Die Einrichtung fragt in fünf Schritten nach Wärmepumpe, Photovoltaik, Regeln, Eingriff sowie Effizienz und Export. In der Seitenleiste erscheint anschließend „Wärmepumpe“.
+Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „WP Leitstand“. Die Einrichtung fragt in sechs Schritten nach Wärmepumpe, Photovoltaik, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. In der Seitenleiste erscheint anschließend „Wärmepumpe“.
 
 ## Wie geregelt wird
 
@@ -64,6 +65,29 @@ Geht eine Vorgabe an der Wärmepumpe verloren (bei Dimplex etwa nach einem Spann
 
 Im Normalbetrieb stellt die Smart-Grid-Variante standardmäßig „Normalbetrieb (gelb)“ ein. Wer stattdessen die Hardware-Eingänge der Wärmepumpe gelten lassen will, trägt als Option für Normalbetrieb „Hardware-Eingang“ ein.
 
+## Kamin und Speicher
+
+Für Anlagen mit wasserführendem Kamin und einem Speicher, aus dem sich die Heizung bedient (bei Dimplex die Betriebsart „Bivalent-Regenerativ“). Alles im Schritt „Kamin und Speicher“ ist freiwillig.
+
+| Einstellung | Wofür | Beispiel |
+|---|---|---|
+| Temperatur im Speicher | Anzeige, „bereit“, Regel | `sensor.wp_regenerativspeicher_temperatur` (Fühler R13, Modbus-Register 10) |
+| Speicher gilt als bereit ab | Schwelle für „bereit“ | 40 °C |
+| Sperre der Wärmepumpe | erkennt, wann der Speicher liefert | `sensor.wp_sperre` mit dem Wert „Regenerativ“ |
+| Temperatur am Kamin | Anzeige, „brennt“ | Abgastemperatur einer Spartherm S-Thermatik NEO über [esphome-thermatik](https://github.com/vk496/esphome-thermatik) |
+| Kamin gilt als an ab | Schwelle für „brennt“ | 80 °C |
+| Status des Kamins | Text im Schema | Sensor „Status“ aus demselben Package |
+
+Im Panel erscheint dann:
+
+- im Anlagenschema eine zweite Reihe mit Kamin und Speicher; die Leitungen färben sich, wenn der Kamin brennt und wenn der Speicher liefert
+- bei den Kennwerten Speicher- und Kamintemperatur sowie „Wärme aus dem Speicher heute“ mit Anzahl, Dauer und der Anzahl der letzten sieben Tage
+- im Verlauf die Speichertemperatur mit der Bereit-Schwelle und drei Balkenzeilen: Kamin brennt, Speicher bereit, Speicher liefert
+
+„Wärme aus dem Speicher geholt“ heißt: Die Wärmepumpe meldet die Sperre „Regenerativ“. Gezählt wird jeder zusammenhängende Abschnitt.
+
+**Regel:** Solange der Speicher bereit ist, wird nicht angehoben, und ein laufendes Anheben endet nach der Mindesthaltezeit. Hintergrund: Im Smart-Grid-Zustand Grün entlädt eine Dimplex den regenerativen Speicher nicht und gibt der Wärmepumpe Vorrang. Die Regel lässt sich abschalten.
+
 ## Export
 
 Oben im Panel öffnet „Export“ einen Dialog mit Inhalt und Zeitraum (24 Stunden, 7 Tage, 30 Tage). Die Datei wird im Browser aus dem Verlauf von Home Assistant berechnet und dann heruntergeladen; wo der Browser es unterstützt, erscheint zusätzlich „Teilen“.
@@ -77,13 +101,16 @@ Beide Dateien sind UTF-8 mit Komma als Trenner und Dezimalpunkt. Am Anfang stehe
 - PV-Überschuss, Prognosen, Außen-, Vorlauf-, Rücklauf- und Warmwassertemperatur mit Sollwerten, Strom und Heizleistung als zeitgewichtete Mittelwerte
 - Verdichter: Laufanteil und Einschaltvorgänge im Raster
 - Betriebsstatus, Regelzustand und Smart-Grid-Auswahl am Ende des Rasters
-- Zählerstände, Heizstab, zweiter Wärmeerzeuger und die frei gewählten weiteren Sensoren
+- Zählerstände, Heizstab, zweiter Wärmeerzeuger, Speicher- und Kamintemperatur, Sperre und die frei gewählten weiteren Sensoren
 - `ereignisse`: die Logbuch-Einträge, die in das Raster fallen, mit Uhrzeit, Ergebnis und Begründung
 
-**Effizienz** – zwei Tabellen in einer Datei, jede beginnt mit `# tabelle: name`:
+**Effizienz** – drei Tabellen in einer Datei, jede beginnt mit `# tabelle: name`:
 
 - `stundenwerte`: Außentemperatur, Vorlauf und Rücklauf nur während der Verdichter läuft, Vorlauf-Maximum, Warmwasser, Laufminuten und Starts, Minuten je Betriebsstatus (zum Beispiel Abtauen), Minuten mit Heizstab und zweitem Wärmeerzeuger, Strom und Wärme aus den Leistungs-Sensoren aufsummiert, Zunahme der Zähler, PV-Überschuss und Netzbezug als Energie, Minuten angehoben und abgesenkt
 - `verdichterlaeufe`: eine Zeile je Lauf mit Beginn, Ende, Dauer, Pause davor, Betriebsart, Regelzustand, mittleren Temperaturen, Warmwasser am Anfang und Ende, Strom und Wärme des Laufs
+- `speicherentnahmen`: eine Zeile je Abschnitt, in dem der Speicher statt der Wärmepumpe geliefert hat, mit Dauer und Speichertemperatur am Anfang und Ende
+
+Die Stundenwerte enthalten dazu Speicher- und Kamintemperatur, Minuten mit brennendem Kamin, mit bereitem Speicher und mit Sperre „Regenerativ“. So lässt sich Kamin-Wärme von der Arbeit der Wärmepumpe trennen; in deren Wärmemengen steckt sie nicht.
 
 Daraus lassen sich Arbeitszahl je Tag, je Betriebsart und je Lauf, Taktung, Abtauanteil, Heizstab-Einsatz und der Einfluss des Anhebens berechnen. Je mehr unter „Effizienz und Export“ hinterlegt ist (Stromzähler, Wärmemengen, Heizstab), desto belastbarer wird die Auswertung. Ohne Zähler wird aus den Leistungs-Sensoren aufsummiert.
 

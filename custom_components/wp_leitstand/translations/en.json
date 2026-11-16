@@ -36,6 +36,28 @@
           "ent_forecast_tomorrow": "Display only."
         }
       },
+      "storage": {
+        "title": "Fireplace and storage tank",
+        "description": "For systems with a water-jacket fireplace and a storage tank the heating draws from. Everything is optional; without a tank leave this step empty.",
+        "data": {
+          "ent_storage": "Temperature in the storage tank",
+          "storage_ready_c": "Tank counts as ready from",
+          "storage_blocks_boost": "Do not raise while the tank is ready",
+          "ent_lock": "Heat pump lock (text or code)",
+          "lock_regen_value": "Lock value while the tank supplies heat",
+          "ent_fireplace": "Temperature at the fireplace",
+          "fireplace_on_c": "Fireplace counts as on from",
+          "ent_fireplace_status": "Fireplace status (text)"
+        },
+        "data_description": {
+          "ent_storage": "With Dimplex the sensor R13 in the renewable storage tank.",
+          "storage_blocks_boost": "In smart grid state green a Dimplex does not discharge the tank. Without this rule the heat pump would run although heat from the fireplace is available.",
+          "ent_lock": "Used to detect when and how often heat was drawn from the tank.",
+          "lock_regen_value": "With Dimplex \"Regenerativ\" (text) or 14 (code). Separate several values with commas.",
+          "ent_fireplace": "For example the exhaust temperature of a Spartherm S-Thermatik NEO.",
+          "fireplace_on_c": "Above this temperature the fireplace counts as burning."
+        }
+      },
       "rules": {
         "title": "Rules",
         "description": "The heating is raised when enough own power is left over. It is lowered in the morning when the forecast promises enough sun later.",
@@ -111,6 +133,7 @@
         "menu_options": {
           "heatpump": "Heat pump",
           "pv": "Photovoltaics",
+          "storage": "Fireplace and storage tank",
           "rules": "Rules",
           "actuator": "Action on the heat pump",
           "export": "Efficiency and export"
@@ -149,6 +172,28 @@
           "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export.",
           "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering in the morning.",
           "ent_forecast_tomorrow": "Display only."
+        }
+      },
+      "storage": {
+        "title": "Fireplace and storage tank",
+        "description": "For systems with a water-jacket fireplace and a storage tank the heating draws from. Everything is optional; without a tank leave this step empty.",
+        "data": {
+          "ent_storage": "Temperature in the storage tank",
+          "storage_ready_c": "Tank counts as ready from",
+          "storage_blocks_boost": "Do not raise while the tank is ready",
+          "ent_lock": "Heat pump lock (text or code)",
+          "lock_regen_value": "Lock value while the tank supplies heat",
+          "ent_fireplace": "Temperature at the fireplace",
+          "fireplace_on_c": "Fireplace counts as on from",
+          "ent_fireplace_status": "Fireplace status (text)"
+        },
+        "data_description": {
+          "ent_storage": "With Dimplex the sensor R13 in the renewable storage tank.",
+          "storage_blocks_boost": "In smart grid state green a Dimplex does not discharge the tank. Without this rule the heat pump would run although heat from the fireplace is available.",
+          "ent_lock": "Used to detect when and how often heat was drawn from the tank.",
+          "lock_regen_value": "With Dimplex \"Regenerativ\" (text) or 14 (code). Separate several values with commas.",
+          "ent_fireplace": "For example the exhaust temperature of a Spartherm S-Thermatik NEO.",
+          "fireplace_on_c": "Above this temperature the fireplace counts as burning."
         }
       },
       "rules": {

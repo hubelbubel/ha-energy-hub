@@ -325,6 +325,22 @@ modbus:
         scan_interval: 60
 
       # ------------------------------------------------------------------
+      # Regenerativer Speicher (Kamin, Solar) - nur bei Betriebsart Bivalent-Regenerativ
+      # ------------------------------------------------------------------
+      # Fühler R13. Das Wiki nennt Adresse 10 'Temperatur 3. Heizkreis (R13)'; beim WPM Touch ist R13 der Fühler im Regenerativspeicher. Mit dem Display vergleichen. Die Sperre 'Regenerativ' (Sperrcode 14) zeigt, wann der Speicher statt der Wärmepumpe liefert
+      - name: "WP Regenerativspeicher Temperatur"
+        unique_id: dimplex_wpm_reg_10
+        slave: 1
+        address: 10
+        data_type: int16
+        scale: 0.1
+        precision: 1
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        scan_interval: 60
+
+      # ------------------------------------------------------------------
       # OPTIONAL: 2./3. Heizkreis - Betriebsdaten
       # ------------------------------------------------------------------
       # - name: "WP Heizkreis 2 Solltemperatur"
@@ -361,9 +377,9 @@ modbus:
       #   device_class: temperature
       #   state_class: measurement
       #   scan_interval: 30
-      # Hinweis: Fühler R13
+      # Hinweis: Fühler R13 - dieselbe Adresse wie der Regenerativspeicher oben, nur eines von beiden aktivieren
       # - name: "WP Heizkreis 3 Temperatur"
-      #   unique_id: dimplex_wpm_reg_10
+      #   unique_id: dimplex_wpm_reg_10_hk3
       #   slave: 1
       #   address: 10
       #   data_type: int16
@@ -417,7 +433,7 @@ modbus:
       # ------------------------------------------------------------------
       # OPTIONAL: Solar
       # ------------------------------------------------------------------
-      # Hinweis: Fühler R23. Das Wiki nennt Adresse 10 auch für den 3. Heizkreis - nur eines von beiden aktivieren
+      # Hinweis: Fühler R23. Das Wiki nennt Adresse 10 auch für R13 - nur einen Eintrag mit Adresse 10 aktivieren
       # - name: "WP Solar Kollektorfühler"
       #   unique_id: dimplex_wpm_reg_10_solar
       #   slave: 1

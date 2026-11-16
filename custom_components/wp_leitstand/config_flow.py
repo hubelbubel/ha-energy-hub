@@ -13,6 +13,7 @@ from . import const as c
 
 STEP_HEATPUMP = "heatpump"
 STEP_PV = "pv"
+STEP_STORAGE = "storage"
 STEP_RULES = "rules"
 STEP_ACTUATOR = "actuator"
 STEP_EXPORT = "export"
@@ -69,6 +70,16 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         ),
         (c.CONF_ENT_FORECAST_TODAY, _entity("sensor"), False),
         (c.CONF_ENT_FORECAST_TOMORROW, _entity("sensor"), False),
+    ],
+    STEP_STORAGE: [
+        (c.CONF_ENT_STORAGE, _entity("sensor"), False),
+        (c.CONF_STORAGE_READY_C, _number(10, 95, 0.5, "°C"), True),
+        (c.CONF_STORAGE_BLOCKS_BOOST, selector.BooleanSelector(), True),
+        (c.CONF_ENT_LOCK, _entity("sensor"), False),
+        (c.CONF_LOCK_REGEN_VALUE, selector.TextSelector(), True),
+        (c.CONF_ENT_FIREPLACE, _entity("sensor"), False),
+        (c.CONF_FIREPLACE_ON_C, _number(20, 600, 1, "°C"), True),
+        (c.CONF_ENT_FIREPLACE_STATUS, _entity("sensor"), False),
     ],
     STEP_RULES: [
         (c.CONF_BOOST_ON_W, _number(0, 20000, 50, "W"), True),
@@ -178,7 +189,10 @@ class WPLeitstandConfigFlow(ConfigFlow, domain=c.DOMAIN):
         return await self._step(STEP_HEATPUMP, "user", user_input, STEP_PV)
 
     async def async_step_pv(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return await self._step(STEP_PV, STEP_PV, user_input, STEP_RULES)
+        return await self._step(STEP_PV, STEP_PV, user_input, STEP_STORAGE)
+
+    async def async_step_storage(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_STORAGE, STEP_STORAGE, user_input, STEP_RULES)
 
     async def async_step_rules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_RULES, STEP_RULES, user_input, STEP_ACTUATOR)
@@ -201,7 +215,7 @@ class WPLeitstandOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=[STEP_HEATPUMP, STEP_PV, STEP_RULES, STEP_ACTUATOR, STEP_EXPORT],
+            menu_options=[STEP_HEATPUMP, STEP_PV, STEP_STORAGE, STEP_RULES, STEP_ACTUATOR, STEP_EXPORT],
         )
 
     async def _step(self, step: str, user_input: dict[str, Any] | None) -> ConfigFlowResult:
@@ -223,6 +237,9 @@ class WPLeitstandOptionsFlow(OptionsFlow):
 
     async def async_step_pv(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_PV, user_input)
+
+    async def async_step_storage(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_STORAGE, user_input)
 
     async def async_step_rules(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_RULES, user_input)

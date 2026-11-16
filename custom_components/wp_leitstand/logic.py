@@ -39,6 +39,9 @@ class Settings:
     setback_min_forecast_kwh: float = 10
     setback_min_outdoor_c: float | None = 3
     setback_min_dhw_c: float | None = 42
+    # Speicher (Kamin): ab dieser Temperatur gilt er als bereit; None = kein Speicher hinterlegt
+    storage_ready_c: float | None = None
+    storage_blocks_boost: bool = True
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,7 @@ class Inputs:
     forecast_kwh: float | None = None
     outdoor_c: float | None = None
     dhw_c: float | None = None
+    storage_c: float | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,25 @@ def update_timers(timers: Timers, inputs: Inputs, settings: Settings) -> Timers:
     return Timers(above_since=above, below_since=below)
 
 
+def storage_ready(inputs: Inputs, s: Settings) -> bool:
+    """Hat der Speicher genug Temperatur, um die Heizung zu versorgen?"""
+    return (
+        s.storage_ready_c is not None
+        and inputs.storage_c is not None
+        and inputs.storage_c >= s.storage_ready_c
+    )
+
+
+def _storage_block(inputs: Inputs, s: Settings) -> str | None:
+    """Begründung, warum wegen des Speichers nicht angehoben wird, sonst None."""
+    if not (s.storage_blocks_boost and storage_ready(inputs, s)):
+        return None
+    return (
+        f"Der Speicher hat {fmt_num(inputs.storage_c, '°C')} und kann die Heizung versorgen "
+        f"(bereit ab {fmt_num(s.storage_ready_c, '°C')}). Deshalb wird nicht angehoben."
+    )
+
+
 def _setback_check(inputs: Inputs, s: Settings) -> tuple[bool, str]:
     """Prüft die Absenkbedingungen. Liefert (erfüllt, Begründung)."""
     window = f"{s.setback_start:%H:%M}–{s.setback_end:%H:%M} Uhr"
@@ -169,8 +192,14 @@ def _wanted(
     assert surplus is not None
     above_for = _minutes(timers.above_since, inputs.now)
     below_for = _minutes(timers.below_since, inputs.now)
+    block = _storage_block(inputs, s)
 
     if current_mode == MODE_BOOST:
+        if block:
+            ok, text = _setback_check(inputs, s)
+            if ok:
+                return Decision(MODE_SETBACK, f"{block} {text}", "setback")
+            return Decision(MODE_NORMAL, block, "storage")
         if below_for is None or below_for < s.boost_off_min:
             if below_for is None:
                 reason = (
@@ -193,7 +222,8 @@ def _wanted(
             return Decision(MODE_SETBACK, f"{ended} {text}", "setback")
         return Decision(MODE_NORMAL, ended, "boost_end")
 
-    if above_for is not None and above_for >= s.boost_on_min:
+    enough = above_for is not None and above_for >= s.boost_on_min
+    if enough and not block:
         return Decision(
             MODE_BOOST,
             f"Der PV-Überschuss liegt seit {fmt_min(above_for)} über "
@@ -204,6 +234,8 @@ def _wanted(
     ok, text = _setback_check(inputs, s)
     if ok:
         return Decision(MODE_SETBACK, text, "setback")
+    if enough and block:
+        return Decision(MODE_NORMAL, block, "storage")
 
     if above_for is not None:
         boost_text = (

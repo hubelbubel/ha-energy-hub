@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "wp_leitstand"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TITLE = "WP Leitstand"
 
 PANEL_URL_PATH = "wp-leitstand"
@@ -59,6 +59,16 @@ CONF_SURPLUS_SIGN = "surplus_sign"
 CONF_ENT_FORECAST_TODAY = "ent_forecast_today"
 CONF_ENT_FORECAST_TOMORROW = "ent_forecast_tomorrow"
 
+# --- Kamin und Speicher ----------------------------------------------------
+CONF_ENT_STORAGE = "ent_storage"
+CONF_STORAGE_READY_C = "storage_ready_c"
+CONF_STORAGE_BLOCKS_BOOST = "storage_blocks_boost"
+CONF_ENT_LOCK = "ent_lock"
+CONF_LOCK_REGEN_VALUE = "lock_regen_value"
+CONF_ENT_FIREPLACE = "ent_fireplace"
+CONF_FIREPLACE_ON_C = "fireplace_on_c"
+CONF_ENT_FIREPLACE_STATUS = "ent_fireplace_status"
+
 # --- Regeln ----------------------------------------------------------------
 CONF_BOOST_ON_W = "boost_on_w"
 CONF_BOOST_ON_MIN = "boost_on_min"
@@ -96,6 +106,8 @@ SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
     CONF_ENT_POWER_HEAT: "sensor.wp_heizleistung",
     CONF_ENT_SMART_GRID: "select.wp_smart_grid_setzen",
     CONF_ENT_SHIFT: "number.wp_parallelverschiebung_setzen",
+    CONF_ENT_STORAGE: "sensor.wp_regenerativspeicher_temperatur",
+    CONF_ENT_LOCK: "sensor.wp_sperre",
     CONF_ENT_ENERGY_HEAT: "sensor.wp_warmemenge_heizen",
     CONF_ENT_ENERGY_DHW: "sensor.wp_warmemenge_warmwasser",
     CONF_ENT_ENERGY_ENV: "sensor.wp_umweltenergie",
@@ -127,6 +139,10 @@ DEFAULTS: dict[str, object] = {
     CONF_SETBACK_MIN_FORECAST: 10,
     CONF_SETBACK_MIN_OUTDOOR: 3,
     CONF_SETBACK_MIN_DHW: 42,
+    CONF_STORAGE_READY_C: 40,
+    CONF_STORAGE_BLOCKS_BOOST: True,
+    CONF_LOCK_REGEN_VALUE: "Regenerativ",
+    CONF_FIREPLACE_ON_C: 80,
     CONF_ACTUATOR: ACT_DRY_RUN,
     CONF_OPT_NORMAL: "Normalbetrieb (gelb)",
     CONF_OPT_BOOST: "Verstärkter Betrieb (grün)",
