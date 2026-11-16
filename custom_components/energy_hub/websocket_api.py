@@ -16,7 +16,7 @@ def _controller(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
 
     controller = get_controller(hass)
     if controller is None:
-        connection.send_error(msg["id"], "not_loaded", "WP Leitstand ist nicht geladen.")
+        connection.send_error(msg["id"], "not_loaded", "Energy Hub ist nicht geladen.")
     return controller
 
 

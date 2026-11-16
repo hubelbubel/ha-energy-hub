@@ -6,10 +6,10 @@ import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
-_PATH = Path(__file__).parents[1] / "custom_components" / "wp_leitstand" / "logic.py"
-_SPEC = importlib.util.spec_from_file_location("wp_leitstand_logic", _PATH)
+_PATH = Path(__file__).parents[1] / "custom_components" / "energy_hub" / "logic.py"
+_SPEC = importlib.util.spec_from_file_location("energy_hub_logic", _PATH)
 logic = importlib.util.module_from_spec(_SPEC)
-sys.modules["wp_leitstand_logic"] = logic
+sys.modules["energy_hub_logic"] = logic
 _SPEC.loader.exec_module(logic)
 
 Inputs, Settings, Timers, Override = logic.Inputs, logic.Settings, logic.Timers, logic.Override

@@ -1,4 +1,4 @@
-"""Entscheidungslogik für WP Leitstand.
+"""Entscheidungslogik für Energy Hub.
 
 Dieses Modul ist bewusst frei von Home-Assistant-Importen: Es bekommt
 Messwerte, Einstellungen und den bisherigen Zustand und liefert zurück,

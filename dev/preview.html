@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WP Leitstand – Vorschau mit Beispieldaten</title>
+<title>Energy Hub – Vorschau mit Beispieldaten</title>
 <style>
   html, body { margin: 0; }
   body { font-family: Roboto, system-ui, sans-serif; }
@@ -27,7 +27,7 @@
   Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty
 -->
 <script type="module">
-  import "../custom_components/wp_leitstand/frontend/wp-leitstand-panel.js";
+  import "../custom_components/energy_hub/frontend/energy-hub-panel.js";
 
   const q = new URLSearchParams(location.search);
   const dark = q.get("theme") === "dark";
@@ -113,7 +113,7 @@
         setback: "Für den Rest des Tages sind 11,8 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (05:00–10:00 Uhr) auf eigenen Strom.",
         normal: "Der PV-Überschuss von 2.140 W liegt erst seit 4 min über 1.500 W; angehoben wird nach 10 min. Abgesenkt wird nur 05:00–10:00 Uhr.",
       }[mode],
-      rule: "boost_keep", state_entity_id: "sensor.wp_leitstand_regelzustand", last_error: null, retry_at: null,
+      rule: "boost_keep", state_entity_id: "sensor.energy_hub_regelzustand", last_error: null, retry_at: null,
       above_since: scene === "empty" ? null : iso(now - 48 * 60e3), below_since: null,
       inputs: { surplus_w: scene === "empty" ? null : 2140, forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 48.3 },
     },
@@ -183,7 +183,7 @@
     },
   };
 
-  const panel = document.createElement("wp-leitstand-panel");
+  const panel = document.createElement("energy-hub-panel");
   document.body.append(panel);
   panel.narrow = innerWidth < 870;
   panel.hass = hass;

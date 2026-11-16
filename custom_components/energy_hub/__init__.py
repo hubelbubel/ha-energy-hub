@@ -1,4 +1,4 @@
-"""WP Leitstand: Wärmepumpe anzeigen und nach PV-Überschuss führen."""
+"""Energy Hub: Wärmepumpe anzeigen und nach PV-Überschuss führen."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,7 +18,7 @@ from .websocket_api import async_register_websocket
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
-type WPLeitstandConfigEntry = ConfigEntry[Controller]
+type EnergyHubConfigEntry = ConfigEntry[Controller]
 
 OVERRIDE_SCHEMA = vol.Schema(
     {
@@ -37,7 +37,7 @@ def get_controller(hass: HomeAssistant) -> Controller | None:
     return None
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: WPLeitstandConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: EnergyHubConfigEntry) -> bool:
     """Richtet Regler, Entitäten, Dienste und das Panel in der Seitenleiste ein."""
     controller = Controller(hass, entry)
     await controller.async_start()
@@ -58,7 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: WPLeitstandConfigEntry) 
         webcomponent_name=c.PANEL_COMPONENT,
         sidebar_title=c.PANEL_TITLE,
         sidebar_icon=c.PANEL_ICON,
-        module_url=f"{c.STATIC_URL}/wp-leitstand-panel.js?v={c.VERSION}",
+        module_url=f"{c.STATIC_URL}/energy-hub-panel.js?v={c.VERSION}",
         require_admin=False,
         config={"version": c.VERSION},
     )
@@ -68,7 +68,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: WPLeitstandConfigEntry) 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: WPLeitstandConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: EnergyHubConfigEntry) -> bool:
     """Entfernt Panel und Entitäten. An der Wärmepumpe wird dabei nichts verstellt."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
@@ -77,7 +77,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: WPLeitstandConfigEntry)
     return unloaded
 
 
-async def _async_reload(hass: HomeAssistant, entry: WPLeitstandConfigEntry) -> None:
+async def _async_reload(hass: HomeAssistant, entry: EnergyHubConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -85,7 +85,7 @@ def _register_services(hass: HomeAssistant) -> None:
     def _controller() -> Controller:
         controller = get_controller(hass)
         if controller is None:
-            raise ServiceValidationError("WP Leitstand ist nicht geladen.")
+            raise ServiceValidationError("Energy Hub ist nicht geladen.")
         return controller
 
     async def _set_override(call: ServiceCall) -> None:

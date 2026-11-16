@@ -1,14 +1,14 @@
 {
-  "domain": "wp_leitstand",
-  "name": "WP Leitstand",
+  "domain": "energy_hub",
+  "name": "Energy Hub",
   "after_dependencies": ["modbus", "template", "recorder", "logbook"],
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["http", "frontend", "panel_custom", "websocket_api"],
-  "documentation": "https://github.com/OWNER/ha-wp-leitstand",
+  "documentation": "https://github.com/OWNER/ha-energy-hub",
   "integration_type": "service",
   "iot_class": "calculated",
-  "issue_tracker": "https://github.com/OWNER/ha-wp-leitstand/issues",
+  "issue_tracker": "https://github.com/OWNER/ha-energy-hub/issues",
   "requirements": [],
   "single_config_entry": true,
   "version": "0.3.1"

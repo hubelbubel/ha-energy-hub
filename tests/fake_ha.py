@@ -12,7 +12,7 @@ import types
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
-COMPONENT = Path(__file__).parents[1] / "custom_components" / "wp_leitstand"
+COMPONENT = Path(__file__).parents[1] / "custom_components" / "energy_hub"
 TZ = timezone(timedelta(hours=1))
 
 
@@ -125,7 +125,7 @@ def install():
     _module("homeassistant.core", CALLBACK_TYPE=object, HomeAssistant=HomeAssistant, callback=lambda f: f)
     _module("homeassistant.exceptions", HomeAssistantError=HomeAssistantError)
     registry = types.SimpleNamespace(
-        async_get_entity_id=lambda domain, platform, unique_id: "sensor.wp_leitstand_regelzustand"
+        async_get_entity_id=lambda domain, platform, unique_id: "sensor.energy_hub_regelzustand"
     )
     er = _module("homeassistant.helpers.entity_registry", async_get=lambda hass: registry)
     _module("homeassistant.helpers", entity_registry=er)
@@ -152,10 +152,10 @@ def install():
     )
     _module("homeassistant.util", dt=dt)
 
-    pkg = types.ModuleType("wp_leitstand_under_test")
+    pkg = types.ModuleType("energy_hub_under_test")
     pkg.__path__ = [str(COMPONENT)]
-    sys.modules["wp_leitstand_under_test"] = pkg
+    sys.modules["energy_hub_under_test"] = pkg
     return (
-        importlib.import_module("wp_leitstand_under_test.controller"),
-        importlib.import_module("wp_leitstand_under_test.const"),
+        importlib.import_module("energy_hub_under_test.controller"),
+        importlib.import_module("energy_hub_under_test.const"),
     )

@@ -1,5 +1,5 @@
 /*
- * WP Leitstand – Panel für die Seitenleiste von Home Assistant.
+ * Energy Hub – Panel für die Seitenleiste von Home Assistant.
  * Reines JavaScript ohne Build-Schritt und ohne externe Abhängigkeiten.
  *
  * Aufbau der Seite:
@@ -9,7 +9,7 @@
  *   Logbuch   – was wann und warum geschaltet wurde; daneben die Regeln in Klartext
  */
 
-const DOMAIN = "wp_leitstand";
+const DOMAIN = "energy_hub";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const RANGES = [
   { hours: 24, label: "24 Stunden", buckets: 288 },
@@ -257,7 +257,7 @@ export function buildExport({ version, created, t0, step, n, columns, log, setti
   const rowCount = Math.max(0, last - first + 1);
 
   const meta = [
-    "WP Leitstand Export",
+    "Energy Hub Export",
     `version: ${version}`,
     `erstellt: ${isoLocal(created)}`,
     `von: ${rowCount ? isoLocal(t0 + first * step) : ""}`,
@@ -548,7 +548,7 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
   while (last >= first && !filled(hourRows[last])) last--;
   const rows = hourRows.slice(first, last + 1);
   const meta = [
-    "WP Leitstand Effizienz-Export",
+    "Energy Hub Effizienz-Export",
     `version: ${version}`,
     `erstellt: ${isoLocal(created)}`,
     `von: ${rows.length ? isoLocal(t0 + first * step) : ""}`,
@@ -797,7 +797,7 @@ dialog input[type="radio"] { width: 18px; height: 18px; margin: 2px 0 0; accent-
 
 /* ------------------------------------------------------------------ Panel */
 
-class WpLeitstandPanel extends HTMLElement {
+class EnergyHubPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
@@ -1241,7 +1241,7 @@ class WpLeitstandPanel extends HTMLElement {
     this.$.rules.replaceChildren(
       ...parts.map((p) => h("p", {}, p)),
       h("p", {}, h("a", { href: settingsHref, onclick: (e) => this._navigate(e) }, "Regeln ändern")),
-      h("p", { class: "foot" }, `WP Leitstand ${this._snap.version}`)
+      h("p", { class: "foot" }, `Energy Hub ${this._snap.version}`)
     );
   }
 
@@ -1473,7 +1473,7 @@ class WpLeitstandPanel extends HTMLElement {
       return;
     }
     const stamp = isoLocal(created);
-    const filename = `wp-leitstand_${kind}_${stamp.slice(0, 10)}_${stamp.slice(11, 16).replace(":", "")}_${range.hours}h.csv`;
+    const filename = `energy-hub_${kind}_${stamp.slice(0, 10)}_${stamp.slice(11, 16).replace(":", "")}_${range.hours}h.csv`;
     const bytes = new Blob([built.csv]).size;
     const size = bytes > 1e6 ? `${nf1.format(bytes / 1e6)} MB` : `${nf0.format(Math.max(1, bytes / 1000))} kB`;
     this._export = { csv: built.csv, filename };
@@ -1588,7 +1588,7 @@ class WpLeitstandPanel extends HTMLElement {
     if (!this._export) return;
     const { csv, filename } = this._export;
     try {
-      await navigator.share({ files: [new File([csv], filename, { type: "text/csv" })], title: "WP Leitstand Export" });
+      await navigator.share({ files: [new File([csv], filename, { type: "text/csv" })], title: "Energy Hub Export" });
     } catch (err) {
       if (err?.name === "AbortError") return;
       this.$.expStatus.textContent = `Teilen hat nicht geklappt (${err?.message || err}). Nimm „Herunterladen“.`;
@@ -2001,6 +2001,6 @@ class WpLeitstandPanel extends HTMLElement {
   }
 }
 
-if (!customElements.get("wp-leitstand-panel")) {
-  customElements.define("wp-leitstand-panel", WpLeitstandPanel);
+if (!customElements.get("energy-hub-panel")) {
+  customElements.define("energy-hub-panel", EnergyHubPanel);
 }

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-OUT = Path(__file__).parents[1] / "custom_components" / "wp_leitstand" / "translations"
+OUT = Path(__file__).parents[1] / "custom_components" / "energy_hub" / "translations"
 
 DE = {
     "steps": {
@@ -134,12 +134,12 @@ DE = {
             },
         },
     },
-    "menu_title": "WP Leitstand einstellen",
+    "menu_title": "Energy Hub einstellen",
     "errors": {
         "thresholds": "Die Schwelle zum Beenden muss unter der Schwelle zum Anheben liegen.",
         "entity_required": "Für diese Stellgröße wird eine Entität gebraucht.",
     },
-    "abort": {"single_instance_allowed": "WP Leitstand ist bereits eingerichtet."},
+    "abort": {"single_instance_allowed": "Energy Hub ist bereits eingerichtet."},
     "selector": {
         "surplus_sign": {
             "options": {
@@ -306,12 +306,12 @@ EN = {
             },
         },
     },
-    "menu_title": "Configure WP Leitstand",
+    "menu_title": "Configure Energy Hub",
     "errors": {
         "thresholds": "The threshold to stop must be below the threshold to raise.",
         "entity_required": "This actuator needs an entity.",
     },
-    "abort": {"single_instance_allowed": "WP Leitstand is already set up."},
+    "abort": {"single_instance_allowed": "Energy Hub is already set up."},
     "selector": {
         "surplus_sign": {
             "options": {

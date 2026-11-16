@@ -126,13 +126,13 @@
       "entity_required": "Für diese Stellgröße wird eine Entität gebraucht."
     },
     "abort": {
-      "single_instance_allowed": "WP Leitstand ist bereits eingerichtet."
+      "single_instance_allowed": "Energy Hub ist bereits eingerichtet."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "WP Leitstand einstellen",
+        "title": "Energy Hub einstellen",
         "menu_options": {
           "heatpump": "Wärmepumpe",
           "pv": "Photovoltaik",

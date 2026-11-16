@@ -17,7 +17,7 @@ def device_info(entry: ConfigEntry) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(c.DOMAIN, entry.entry_id)},
         name=c.TITLE,
-        manufacturer="WP Leitstand",
+        manufacturer="Energy Hub",
         model="PV-geführte Heizungsregelung",
         sw_version=c.VERSION,
         entry_type=DeviceEntryType.SERVICE,

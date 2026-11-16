@@ -1,4 +1,4 @@
-# WP Leitstand
+# Energy Hub
 
 Eine Integration für Home Assistant, die eine Wärmepumpe in der Seitenleiste zeigt und die Heizung nach PV-Überschuss und PV-Prognose anhebt oder absenkt. Jede Schaltung steht mit Uhrzeit und Begründung im Logbuch.
 
@@ -32,11 +32,11 @@ Version 0.3.1. Die Regellogik und die Abläufe im Regler sind durch 38 automatis
 
 ## Installation
 
-**Mit HACS:** HACS öffnen, Menü „Benutzerdefinierte Repositories“, die Adresse dieses Repositories mit Typ „Integration“ eintragen, „WP Leitstand“ installieren, Home Assistant neu starten.
+**Mit HACS:** HACS öffnen, Menü „Benutzerdefinierte Repositories“, die Adresse dieses Repositories mit Typ „Integration“ eintragen, „Energy Hub“ installieren, Home Assistant neu starten.
 
-**Von Hand:** den Ordner `custom_components/wp_leitstand` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
+**Von Hand:** den Ordner `custom_components/energy_hub` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
-Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „WP Leitstand“. Die Einrichtung fragt in sechs Schritten nach Wärmepumpe, Photovoltaik, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. In der Seitenleiste erscheint anschließend „Wärmepumpe“.
+Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“. Die Einrichtung fragt in sechs Schritten nach Wärmepumpe, Photovoltaik, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. In der Seitenleiste erscheint anschließend „Wärmepumpe“.
 
 ## Wie geregelt wird
 
@@ -51,7 +51,7 @@ Die Regeln werden alle 30 Sekunden in dieser Reihenfolge geprüft:
 
 Wechsel aus den Regeln 4 bis 6 warten eine Mindesthaltezeit ab (20 min), damit der Verdichter nicht taktet.
 
-Alle Werte lassen sich unter Einstellungen, Geräte & Dienste, WP Leitstand, „Konfigurieren“ ändern.
+Alle Werte lassen sich unter Einstellungen, Geräte & Dienste, Energy Hub, „Konfigurieren“ ändern.
 
 ### Eingriff an der Wärmepumpe
 
@@ -125,9 +125,9 @@ Zu beachten:
 
 ## Entitäten und Dienste
 
-- `sensor.wp_leitstand_regelzustand`: `normal`, `boost` oder `setback`, mit Begründung (`reason`), Zeitpunkt (`since`) und Handbetrieb als Attributen.
-- `switch.wp_leitstand_automatik`: Automatik ein oder aus.
-- `wp_leitstand.set_override` (`mode`, optional `minutes`) und `wp_leitstand.clear_override`: Handbetrieb aus Automationen heraus.
+- `sensor.energy_hub_regelzustand`: `normal`, `boost` oder `setback`, mit Begründung (`reason`), Zeitpunkt (`since`) und Handbetrieb als Attributen.
+- `switch.energy_hub_automatik`: Automatik ein oder aus.
+- `energy_hub.set_override` (`mode`, optional `minutes`) und `energy_hub.clear_override`: Handbetrieb aus Automationen heraus.
 
 Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einrichtung.
 
@@ -157,6 +157,6 @@ Aufbau:
 | `controller.py` | Messwerte lesen, entscheiden lassen, stellen, nachführen, Logbuch führen |
 | `config_flow.py` | Einrichtung und Einstellungen |
 | `websocket_api.py` | Schnittstelle zwischen Panel und Regler |
-| `frontend/wp-leitstand-panel.js` | Panel und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
+| `frontend/energy-hub-panel.js` | Panel und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 
 Vor der Veröffentlichung in `manifest.json` den Platzhalter `OWNER` in den beiden Adressen durch den GitHub-Namen ersetzen.

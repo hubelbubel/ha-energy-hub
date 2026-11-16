@@ -47,7 +47,7 @@ with sync_playwright() as p:
         page.wait_for_timeout(700)
         if name.startswith("desktop-light-boost"):
             box = page.evaluate(
-                "() => { const r = document.querySelector('wp-leitstand-panel').shadowRoot"
+                "() => { const r = document.querySelector('energy-hub-panel').shadowRoot"
                 ".querySelector('.plots').getBoundingClientRect(); return [r.left, r.top, r.width]; }"
             )
             page.mouse.move(box[0] + box[2] * 0.62, box[1] + 120)
@@ -58,7 +58,7 @@ with sync_playwright() as p:
         page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
         page.close()
     # Export: Dialog öffnen, beide Exporte erstellen und die heruntergeladenen Dateien ablegen
-    DIALOG = "document.querySelector('wp-leitstand-panel').shadowRoot"
+    DIALOG = "document.querySelector('energy-hub-panel').shadowRoot"
     for name, w, h in (("export-desktop", 1360, 900), ("export-mobile", 390, 844)):
         page = browser.new_page(viewport={"width": w, "height": h}, accept_downloads=True)
         page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))

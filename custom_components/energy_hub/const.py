@@ -1,17 +1,17 @@
-"""Konstanten für WP Leitstand."""
+"""Konstanten für Energy Hub."""
 from __future__ import annotations
 
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
-DOMAIN = "wp_leitstand"
+DOMAIN = "energy_hub"
 VERSION = "0.3.1"
-TITLE = "WP Leitstand"
+TITLE = "Energy Hub"
 
-PANEL_URL_PATH = "wp-leitstand"
-PANEL_COMPONENT = "wp-leitstand-panel"
-PANEL_TITLE = "Wärmepumpe"
-PANEL_ICON = "mdi:heat-pump-outline"
-STATIC_URL = "/wp_leitstand_static"
+PANEL_URL_PATH = "energy-hub"
+PANEL_COMPONENT = "energy-hub-panel"
+PANEL_TITLE = "Energie"
+PANEL_ICON = "mdi:home-lightning-bolt-outline"
+STATIC_URL = "/energy_hub_static"
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.state"

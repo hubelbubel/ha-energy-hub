@@ -1,4 +1,4 @@
-"""Einrichtung und Einstellungen für WP Leitstand."""
+"""Einrichtung und Einstellungen für Energy Hub."""
 from __future__ import annotations
 
 from typing import Any
@@ -160,7 +160,7 @@ def validate_step(step: str, data: dict[str, Any]) -> dict[str, str]:
     return errors
 
 
-class WPLeitstandConfigFlow(ConfigFlow, domain=c.DOMAIN):
+class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
     """Ersteinrichtung in vier Schritten."""
 
     VERSION = 1
@@ -207,10 +207,10 @@ class WPLeitstandConfigFlow(ConfigFlow, domain=c.DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return WPLeitstandOptionsFlow()
+        return EnergyHubOptionsFlow()
 
 
-class WPLeitstandOptionsFlow(OptionsFlow):
+class EnergyHubOptionsFlow(OptionsFlow):
     """Einstellungen nachträglich ändern."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

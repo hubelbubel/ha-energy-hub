@@ -126,13 +126,13 @@
       "entity_required": "This actuator needs an entity."
     },
     "abort": {
-      "single_instance_allowed": "WP Leitstand is already set up."
+      "single_instance_allowed": "Energy Hub is already set up."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Configure WP Leitstand",
+        "title": "Configure Energy Hub",
         "menu_options": {
           "heatpump": "Heat pump",
           "pv": "Photovoltaics",

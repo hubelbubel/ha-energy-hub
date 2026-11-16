@@ -7,7 +7,7 @@ globalThis.customElements = { get: () => undefined, define: () => {} };
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-const m = await import("../custom_components/wp_leitstand/frontend/wp-leitstand-panel.js");
+const m = await import("../custom_components/energy_hub/frontend/energy-hub-panel.js");
 
 const T0 = new Date("2026-11-16T10:00:00+01:00").getTime();
 const MIN = 60e3;
@@ -96,7 +96,7 @@ test("buildExport: Kopf, Spalten, Ereignisse, leere Ränder", () => {
   });
   assert.equal(out.rows, 3); // Raster 2 bis 4: zwei mit Werten, eins nur mit Ereignis
   assert.equal(out.columns, 5);
-  assert.ok(out.csv.startsWith("﻿# WP Leitstand Export\r\n"));
+  assert.ok(out.csv.startsWith("﻿# Energy Hub Export\r\n"));
   const lines = out.csv.slice(1).trimEnd().split("\r\n");
   const meta = lines.filter((l) => l.startsWith("#"));
   assert.ok(meta.includes("# version: 9.9.9"));
