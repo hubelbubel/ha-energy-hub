@@ -23,7 +23,7 @@
       },
       "power": {
         "title": "Strom",
-        "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW; die Energie je Tag wird daraus berechnet.",
+        "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW. Die Energie je Tag wird daraus berechnet, oder aus Zählern in kWh, wenn du sie hinterlegst.",
         "data": {
           "ent_grid_power": "Leistung am Netzanschluss",
           "grid_sign": "Vorzeichen am Netzanschluss",
@@ -33,10 +33,16 @@
           "ent_battery_soc": "Ladestand der Batterie",
           "ent_house_power": "Verbrauch des Hauses",
           "ent_wallbox_power": "Leistung der Wallbox",
+          "ent_grid_import_energy": "Zähler Netzbezug",
+          "ent_grid_export_energy": "Zähler Einspeisung",
+          "ent_pv_energy": "Zähler PV-Erzeugung",
+          "ent_battery_charge_energy": "Zähler Batterie geladen",
+          "ent_battery_discharge_energy": "Zähler Batterie entladen",
           "consumers": "Weitere Verbraucher"
         },
         "data_description": {
           "ent_grid_power": "Ein Sensor mit Vorzeichen: Bezug und Einspeisung.",
+          "ent_grid_import_energy": "Zählerstände in kWh, wie im Energie-Dashboard (Zustandsklasse total_increasing oder total). Hinterlegt, kommen Tages- und Stundenwerte aus ihnen statt aus der Leistung. Das ist genauer, weil kurze Wechsel zwischen Bezug und Einspeisung nicht gegeneinander aufgerechnet werden. Ohne Zähler hier nimmt das Panel die aus dem Schritt „Wechselrichter“.",
           "ent_house_power": "Leer lassen, dann wird der Verbrauch aus PV, Netz und Batterie berechnet.",
           "consumers": "Leistungs-Sensoren einzelner Geräte, zum Beispiel Badheizung, Waschmaschine, Trockner, Spülmaschine. Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“."
         }
@@ -216,7 +222,7 @@
       },
       "power": {
         "title": "Strom",
-        "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW; die Energie je Tag wird daraus berechnet.",
+        "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW. Die Energie je Tag wird daraus berechnet, oder aus Zählern in kWh, wenn du sie hinterlegst.",
         "data": {
           "ent_grid_power": "Leistung am Netzanschluss",
           "grid_sign": "Vorzeichen am Netzanschluss",
@@ -226,10 +232,16 @@
           "ent_battery_soc": "Ladestand der Batterie",
           "ent_house_power": "Verbrauch des Hauses",
           "ent_wallbox_power": "Leistung der Wallbox",
+          "ent_grid_import_energy": "Zähler Netzbezug",
+          "ent_grid_export_energy": "Zähler Einspeisung",
+          "ent_pv_energy": "Zähler PV-Erzeugung",
+          "ent_battery_charge_energy": "Zähler Batterie geladen",
+          "ent_battery_discharge_energy": "Zähler Batterie entladen",
           "consumers": "Weitere Verbraucher"
         },
         "data_description": {
           "ent_grid_power": "Ein Sensor mit Vorzeichen: Bezug und Einspeisung.",
+          "ent_grid_import_energy": "Zählerstände in kWh, wie im Energie-Dashboard (Zustandsklasse total_increasing oder total). Hinterlegt, kommen Tages- und Stundenwerte aus ihnen statt aus der Leistung. Das ist genauer, weil kurze Wechsel zwischen Bezug und Einspeisung nicht gegeneinander aufgerechnet werden. Ohne Zähler hier nimmt das Panel die aus dem Schritt „Wechselrichter“.",
           "ent_house_power": "Leer lassen, dann wird der Verbrauch aus PV, Netz und Batterie berechnet.",
           "consumers": "Leistungs-Sensoren einzelner Geräte, zum Beispiel Badheizung, Waschmaschine, Trockner, Spülmaschine. Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“."
         }

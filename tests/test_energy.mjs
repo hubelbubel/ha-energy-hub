@@ -30,6 +30,31 @@ test("energyBalance: Sonne mittags, Batterie lädt, Rest wird eingespeist", () =
   assert.deepEqual(bal.consumers.map((c) => c[0]), [300, null]);
 });
 
+test("counterPower: Zunahme je Raster als mittlere Leistung, Wh werden umgerechnet", () => {
+  const t0 = 0;
+  const step = 300e3; // 5 Minuten
+  // 0,1 kWh in 5 Minuten sind im Mittel 1200 W; zwei Zeilen im selben Raster werden addiert
+  const w = m.counterPower([[0, 0.1], [300e3, 0.05], [300e3, 0.05], [900e3, -3]], t0, step, 4);
+  assert.deepEqual(w, [1200, 1200, null, 0]);
+  assert.deepEqual(m.counterPower([[0, 250]], t0, 3600e3, 1, 0.001), [250]); // 250 Wh in einer Stunde
+});
+
+test("energyBalance: Zähler gelten statt der Leistung, wo sie einen Wert haben", () => {
+  // Netz-Leistung fehlt ganz (etwa ohne Aufzeichnung), die Zähler liefern Bezug und Einspeisung
+  const bal = m.energyBalance({
+    grid: [null, null], pv: [0, 3000], battery: [0, 0], impE: [600, 0], expE: [0, 1000],
+  });
+  assert.deepEqual(bal.imp, [600, 0]);
+  assert.deepEqual(bal.exp, [0, 1000]);
+  assert.deepEqual(bal.cons, [600, 2000]);
+  assert.deepEqual(bal.fromGrid, [600, 0]);
+  // Ohne Zählerwert im Raster gilt die Leistung
+  const mixed = m.energyBalance({ grid: [400, 400], impE: [null, 900] });
+  assert.deepEqual(mixed.imp, [400, 900]);
+  const t = m.energyTotals(m.energyBalance({ grid: [null], impE: [1200], expE: [0], pv: [0] }), 3600e3);
+  assert.equal(t.imp, 1.2);
+});
+
 test("energyBalance: abends aus Batterie und Netz", () => {
   const bal = m.energyBalance({ grid: [1200], pv: [0], battery: [2500], wp: [2000], wallbox: [null] });
   assert.equal(bal.cons[0], 3700);

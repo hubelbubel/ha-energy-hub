@@ -27,6 +27,7 @@
   Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty  ?tab=overview|power|pv|heat
              ?ohne=wp,speicher,regelung,strom,batterie,wallbox,wr,tigo  (diese Teile sind nicht hinterlegt)
              ?weg=wp  (Wärmepumpe hinterlegt, aber nicht erreichbar, etwa ohne Modbus-Karte)
+             ?ohneverlauf=netz  (Sensor hat einen Wert, aber keinen Verlauf, etwa vom Recorder ausgeschlossen)
 -->
 <script type="module">
   import "../custom_components/energy_hub/frontend/energy-hub-panel.js";
@@ -243,7 +244,7 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.5.2",
+    version: "0.5.3",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
@@ -304,6 +305,9 @@
   // nicht erreichbar: Zustand unavailable, kein Verlauf, keine Statistik
   const unreachable = new Set([...gone].flatMap((part) => (PARTS[part] || []).map((key) => snapshot.entities[key]).filter(Boolean)));
   for (const id of unreachable) states[id] = { state: "unavailable", attributes: {} };
+  const noRec = new Set((q.get("ohneverlauf") || "").split(",").filter(Boolean)
+    .flatMap((part) => (part === "netz" ? ["ent_grid_power"] : PARTS[part] || []).map((key) => snapshot.entities[key]))
+    .filter(Boolean));
 
   // Erfundener Tagesverlauf: Sonne mittags, Heizung taktet, Warmwasser wird mittags geladen
   function history(id, t0, t1) {
@@ -361,7 +365,7 @@
       if (msg.type === "history/history_during_period") {
         const t0 = new Date(msg.start_time).getTime();
         const t1 = new Date(msg.end_time).getTime();
-        return Object.fromEntries(msg.entity_ids.map((id) => [id, scene === "empty" || unreachable.has(id) ? [] : history(id, t0, t1)]));
+        return Object.fromEntries(msg.entity_ids.map((id) => [id, scene === "empty" || unreachable.has(id) || noRec.has(id) ? [] : history(id, t0, t1)]));
       }
       if (msg.type === "recorder/statistics_during_period") {
         // Statistik nur für die Strom-Sensoren; alles andere holt das Panel aus dem Verlauf
@@ -371,7 +375,7 @@
         const res = {};
         if (msg.period === "day") {
           for (const id of msg.statistic_ids) {
-            const values = unreachable.has(id) ? null : sim[id];
+            const values = unreachable.has(id) || noRec.has(id) ? null : sim[id];
             if (!values) continue;
             res[id] = [];
             const d = new Date(t0);
@@ -389,15 +393,18 @@
         }
         const per = msg.period === "hour" ? 12 : 1;
         for (const id of msg.statistic_ids) {
-          const values = unreachable.has(id) ? null : sim[id];
+          const values = unreachable.has(id) || noRec.has(id) ? null : sim[id];
           if (!values) continue;
           res[id] = [];
           for (let i = 0; i + per <= values.length; i += per) {
             const chunk = values.slice(i, i + per).filter((v) => v !== null);
             if (!chunk.length) continue;
+            // Zunahme eines Zählers; fällt er (Tageszähler um Mitternacht), zählt der neue Stand
+            const before = i > 0 ? values[i - 1] : values[i];
+            const change = isFinite(before) && chunk.at(-1) >= before ? chunk.at(-1) - before : chunk.at(-1);
             res[id].push({ start: t0 + i * STEP, end: t0 + (i + per) * STEP,
               mean: chunk.reduce((a, b) => a + b, 0) / chunk.length, min: Math.min(...chunk), max: Math.max(...chunk),
-              state: chunk.at(-1) });
+              state: chunk.at(-1), change });
           }
         }
         return res;

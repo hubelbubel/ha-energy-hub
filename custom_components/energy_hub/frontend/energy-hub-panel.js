@@ -31,6 +31,16 @@ const SERIES = [
   { key: "outdoor", ent: "ent_outdoor", name: "Außen", cls: "s-outdoor" },
 ];
 
+// Zähler in kWh je Größe. Zuerst die aus dem Schritt Strom, sonst die des Wechselrichters
+// (heute vor gesamt, weil Tageszähler meist feiner auflösen).
+const ENERGY_COUNTERS = {
+  imp: ["ent_grid_import_energy", "ent_import_energy_today", "ent_import_energy_total"],
+  exp: ["ent_grid_export_energy", "ent_export_energy_today", "ent_export_energy_total"],
+  pv: ["ent_pv_energy", "ent_pv_energy_today", "ent_pv_energy_total"],
+  chg: ["ent_battery_charge_energy"],
+  dis: ["ent_battery_discharge_energy"],
+};
+
 // Sensoren der Wärmepumpe; ist keiner hinterlegt, zeigt das Panel den Bereich Wärme ohne Anlagenschema
 const HEATPUMP_KEYS = [
   "ent_flow", "ent_return", "ent_return_target", "ent_dhw", "ent_dhw_target", "ent_outdoor",
@@ -638,13 +648,30 @@ export function rowsToGrid(rows, t0, step, n) {
 }
 
 /**
+ * Zunahme eines Zählers je Raster als mittlere Leistung in Watt.
+ * rows: [[Beginn ms, Zunahme]] aus der Statistik (Typ "change"); factor rechnet in kWh um.
+ */
+export function counterPower(rows, t0, step, n, factor = 1) {
+  const out = new Array(n).fill(null);
+  for (const [t, change] of rows) {
+    const b = Math.floor((t - t0) / step);
+    if (b < 0 || b >= n || !isNum(change)) continue;
+    out[b] = (out[b] ?? 0) + Math.max(0, change) * factor;
+  }
+  return out.map((kwh) => (kwh === null ? null : (kwh * 3.6e9) / step));
+}
+
+/**
  * Strombilanz je Raster aus den Leistungs-Sensoren (alles in Watt).
  * raw: { grid, pv, battery, house, wp, wallbox, consumers: [..] } als gleich lange Reihen, null = unbekannt.
  * Liefert Bezug/Einspeisung, Laden/Entladen, Verbrauch und woher der Verbrauch gedeckt wurde.
  * Ohne eigenen Verbrauchs-Sensor gilt: Verbrauch = PV + Bezug - Einspeisung + Entladen - Laden.
+ * Aus Zählern (counterPower) können impE, expE, pvE, chgE und disE kommen; wo sie einen Wert haben,
+ * gelten sie statt der Leistung.
  */
 export function energyBalance(raw, signs = {}) {
-  const lists = [raw.grid, raw.pv, raw.battery, raw.house, raw.wp, raw.wallbox, ...(raw.consumers || [])];
+  const lists = [raw.grid, raw.pv, raw.battery, raw.house, raw.wp, raw.wallbox, raw.impE, raw.expE, raw.pvE,
+    raw.chgE, raw.disE, ...(raw.consumers || [])];
   const n = Math.max(0, ...lists.filter(Boolean).map((a) => a.length));
   const gs = signs.gridSign === "export_positive" ? -1 : 1;
   const bs = signs.batterySign === "charge_positive" ? -1 : 1;
@@ -656,11 +683,11 @@ export function energyBalance(raw, signs = {}) {
   for (let b = 0; b < n; b++) {
     const g = at(raw.grid, b);
     const bt = at(raw.battery, b);
-    const imp = pos(g === null ? null : gs * g);
-    const exp = pos(g === null ? null : -gs * g);
-    const pv = pos(at(raw.pv, b));
-    const dis = pos(bt === null ? null : bs * bt);
-    const chg = pos(bt === null ? null : -bs * bt);
+    const imp = pos(at(raw.impE, b)) ?? pos(g === null ? null : gs * g);
+    const exp = pos(at(raw.expE, b)) ?? pos(g === null ? null : -gs * g);
+    const pv = pos(at(raw.pvE, b)) ?? pos(at(raw.pv, b));
+    const dis = pos(at(raw.disE, b)) ?? pos(bt === null ? null : bs * bt);
+    const chg = pos(at(raw.chgE, b)) ?? pos(bt === null ? null : -bs * bt);
     let cons = pos(at(raw.house, b));
     if (cons === null && (imp !== null || pv !== null || dis !== null)) {
       cons = Math.max(0, (pv ?? 0) + (imp ?? 0) - (exp ?? 0) + (dis ?? 0) - (chg ?? 0));
@@ -2223,6 +2250,8 @@ class EnergyHubPanel extends HTMLElement {
     $.pNote = h("p", { class: "note", hidden: true },
       "Für den Bereich Strom sind noch keine Sensoren hinterlegt. ",
       h("a", { href: settingsHref, onclick: nav }, "Strom-Sensoren hinterlegen"));
+    $.pMissing = h("p", { class: "note", hidden: true });
+    $.pMissingLink = h("a", { href: settingsHref, onclick: nav }, "Zähler hinterlegen");
     $.pBalance = h("div", { class: "bal" });
     $.pFacts = h("dl", { class: "facts" });
     $.pRanges = h("div", { class: "seg", role: "group", "aria-label": "Zeitraum" },
@@ -2239,7 +2268,7 @@ class EnergyHubPanel extends HTMLElement {
     $.pRank = h("div", { class: "rank" });
     return h("main", { hidden: true },
       h("section", { class: "lage" },
-        h("div", {}, $.pHeadline, $.pSub, $.pNote),
+        h("div", {}, $.pHeadline, $.pSub, $.pNote, $.pMissing),
         ($.pBalWrap = h("div", {}, h("h2", {}, "Strom jetzt: woher er kommt, wohin er geht"), $.pBalance))),
       ($.pFactsSec = h("section", {}, $.pFacts)),
       ($.pSheet = h("section", { class: "sheet" },
@@ -2251,7 +2280,45 @@ class EnergyHubPanel extends HTMLElement {
 
   _hasPower() {
     const cfg = this._snap?.entities;
-    return Boolean(cfg && (cfg.ent_grid_power || cfg.ent_pv_power || cfg.ent_house_power));
+    return Boolean(cfg && (cfg.ent_grid_power || cfg.ent_pv_power || cfg.ent_house_power
+      || cfg.ent_grid_import_energy || cfg.ent_grid_export_energy));
+  }
+
+  /** Erster hinterlegter Zähler je Größe, siehe ENERGY_COUNTERS. */
+  _counterIds() {
+    const cfg = this._snap?.entities || {};
+    const out = {};
+    for (const [key, keys] of Object.entries(ENERGY_COUNTERS)) {
+      const id = keys.map((k) => cfg[k]).find(Boolean);
+      if (id) out[key] = id;
+    }
+    return out;
+  }
+
+  _energyFactor(id) {
+    const unit = String(this._hass?.states?.[id]?.attributes?.unit_of_measurement || "").toLowerCase();
+    return { wh: 0.001, mwh: 1000 }[unit] || 1;
+  }
+
+  /** Zähler als mittlere Leistung je Raster; null, wenn die Statistik nichts liefert. */
+  async _counterGrids(counters, t0, t1, step, n, period) {
+    const ids = [...new Set(Object.values(counters))];
+    if (!ids.length) return {};
+    let stats = {};
+    try {
+      stats = await this._hass.callWS({
+        type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
+        end_time: new Date(t1).toISOString(), statistic_ids: ids, period, types: ["change"],
+      }) || {};
+    } catch (_err) {
+      return {};
+    }
+    const out = {};
+    for (const [key, id] of Object.entries(counters)) {
+      const rows = (stats[id] || []).filter((r) => isNum(r.change)).map((r) => [new Date(r.start).getTime(), r.change]);
+      out[key] = rows.length ? counterPower(rows, t0, step, n, this._energyFactor(id)) : null;
+    }
+    return out;
   }
 
   _powerFactor(id) {
@@ -2348,6 +2415,16 @@ class EnergyHubPanel extends HTMLElement {
     const has = this._hasPower();
     $.pNote.hidden = has;
     $.oNote.hidden = has;
+    // Sensoren ohne Aufzeichnung: Tageswerte fehlen, solange kein Zähler einspringt
+    const en = this._en;
+    const missing = (en?.missing || []).filter((id) => !(id === snap.entities.ent_grid_power && en.counters.imp && en.counters.exp));
+    $.pMissing.hidden = !has || !missing.length;
+    if (missing.length) {
+      $.pMissing.replaceChildren(
+        `Für ${missing.map((id) => `„${this._name(id)}“`).join(", ")} gibt es gerade einen Wert, aber keinen Verlauf in Home Assistant. `
+          + "Vermutlich ist der Sensor vom Recorder ausgeschlossen. Dann fehlen Tageswerte und Verlauf; Zähler in kWh springen für die Tageswerte ein. ",
+        $.pMissingLink);
+    }
     for (const el of [$.oBalWrap, $.oFactsSec, $.oHoursSec, $.pBalWrap, $.pFactsSec, $.pSheet, $.pRankSec]) el.hidden = !has;
     const hasHp = this._hasHeatPump();
     const heat = hasHp ? this._heatHeadline(snap.state) : null;
@@ -2394,12 +2471,19 @@ class EnergyHubPanel extends HTMLElement {
     const kwh = (v) => (isNum(v) ? `${nf1.format(v)} kWh` : "–");
     const cfg = this._snap.entities;
     const live = this._liveBalance();
+    const counters = this._en?.counters || {};
+    const missing = new Set(this._en?.missing || []);
+    // Unter dem Wert: woher er kommt, oder warum er fehlt
+    const source = (key, id) => (counters[key] ? "laut Zähler"
+      : id && missing.has(id) ? "keine Aufzeichnung im Verlauf" : "");
     const items = [["Verbrauch heute", kwh(t.cons)]];
-    if (cfg.ent_pv_power) items.push(["Vom Dach", kwh(t.pv), t.selfUse !== null ? `${fmtPct(t.selfUse)} selbst genutzt` : ""]);
+    if (cfg.ent_pv_power || counters.pv) {
+      items.push(["Vom Dach", kwh(t.pv), t.selfUse !== null ? `${fmtPct(t.selfUse)} selbst genutzt` : source("pv", cfg.ent_pv_power)]);
+    }
     if (t.autarky !== null) items.push(["Autarkie", fmtPct(t.autarky), "Anteil ohne Netz"]);
-    if (cfg.ent_grid_power) {
-      items.push(["Netzbezug", kwh(t.imp)]);
-      items.push(["Einspeisung", kwh(t.exp)]);
+    if (cfg.ent_grid_power || counters.imp || counters.exp) {
+      items.push(["Netzbezug", kwh(t.imp), source("imp", cfg.ent_grid_power)]);
+      items.push(["Einspeisung", kwh(t.exp), source("exp", cfg.ent_grid_power)]);
     }
     if (cfg.ent_battery_power || cfg.ent_battery_soc) {
       const hint = t.chg !== null ? `heute ${kwh(t.chg)} geladen, ${kwh(t.dis)} entladen` : "";
@@ -2471,12 +2555,25 @@ class EnergyHubPanel extends HTMLElement {
     const grids = await this._grids(ids, t0, t1, step, n, period);
     const pick = (id, power = true) => (id && grids[id]
       ? grids[id].map((v) => (v === null ? null : v * (power ? this._powerFactor(id) : 1))) : null);
-    const bal = energyBalance({
+    const raw = {
       grid: pick(src.grid), pv: pick(src.pv), battery: pick(src.battery), house: pick(src.house),
       wp: pick(src.wp), wallbox: pick(src.wallbox),
       consumers: consumers.map((id) => pick(id) || new Array(n).fill(null)),
-    }, { gridSign: snap.settings.grid_sign, batterySign: snap.settings.battery_sign });
-    return { t0, t1, n, step, bal, soc: pick(src.soc, false), names: consumers.map((id) => this._name(id)) };
+    };
+    const signs = { gridSign: snap.settings.grid_sign, batterySign: snap.settings.battery_sign };
+    // bal: nur aus der Leistung, für Verläufe und Auswertung im 5-Minuten-Raster.
+    // balE: mit Zählern, für Tageswerte und Stunden; je Raster gröber, in der Summe genauer.
+    const bal = energyBalance(raw, signs);
+    const counterIds = this._counterIds();
+    const cg = await this._counterGrids(counterIds, t0, t1, step, n, period);
+    const used = Object.fromEntries(Object.entries(cg).filter(([, arr]) => arr && arr.some(isNum)).map(([key]) => [key, counterIds[key]]));
+    const balE = Object.keys(used).length
+      ? energyBalance({ ...raw, impE: cg.imp, expE: cg.exp, pvE: cg.pv, chgE: cg.chg, disE: cg.dis }, signs)
+      : bal;
+    // Leistungs-Sensoren mit aktuellem Wert, aber ohne Aufzeichnung (etwa vom Recorder ausgeschlossen)
+    const missing = [...new Set(Object.values(src).filter(Boolean))]
+      .filter((id) => grids[id] && !grids[id].some((v) => v !== null) && this._num(id) !== null);
+    return { t0, t1, n, step, bal, balE, counters: used, missing, soc: pick(src.soc, false), names: consumers.map((id) => this._name(id)) };
   }
 
   async _loadEnergy() {
@@ -2490,8 +2587,8 @@ class EnergyHubPanel extends HTMLElement {
       midnight.setHours(0, 0, 0, 0);
       const i0 = Math.max(0, Math.round((midnight.getTime() - en.t0) / en.step));
       this._en = en;
-      this._today = energyTotals(en.bal, en.step, i0, en.n);
-      this._hours = hourlyMix(en.bal, en.t0, en.step, midnight.getTime());
+      this._today = energyTotals(en.balE, en.step, i0, en.n);
+      this._hours = hourlyMix(en.balE, en.t0, en.step, midnight.getTime());
       this._renderToday();
       this._drawHours();
       this._drawPower();

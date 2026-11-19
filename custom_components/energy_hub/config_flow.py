@@ -80,6 +80,11 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_ENT_BATTERY_SOC, _entity("sensor"), False),
         (c.CONF_ENT_HOUSE, _entity("sensor"), False),
         (c.CONF_ENT_WALLBOX, _entity("sensor"), False),
+        (c.CONF_ENT_GRID_IMPORT_ENERGY, _entity("sensor"), False),
+        (c.CONF_ENT_GRID_EXPORT_ENERGY, _entity("sensor"), False),
+        (c.CONF_ENT_PV_ENERGY, _entity("sensor"), False),
+        (c.CONF_ENT_BATTERY_CHARGE_ENERGY, _entity("sensor"), False),
+        (c.CONF_ENT_BATTERY_DISCHARGE_ENERGY, _entity("sensor"), False),
         (
             c.CONF_CONSUMERS,
             selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor"], multiple=True)),

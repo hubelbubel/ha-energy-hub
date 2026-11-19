@@ -37,6 +37,15 @@ Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Weitere: [Stro
 - Verlauf über 24 Stunden, 48 Stunden oder 7 Tage: Erzeugung und Verbrauch, Netz, Batterie, Ladestand, Verbraucher
 - Rangliste der Verbraucher von heute
 
+Die Tageswerte (Netzbezug, Einspeisung, Erzeugung, Batterie, „woher und wohin“, Stunde für Stunde) kommen aus Zählern in kWh, sobald welche hinterlegt sind, sonst aus der Leistung aufsummiert. Zähler sind genauer: Wechselt das Netz innerhalb von fünf Minuten zwischen Bezug und Einspeisung, heben sich beide in der aufsummierten Leistung teilweise auf, im Zähler nicht. Gesucht wird in dieser Reihenfolge:
+
+| Größe | Zuerst | Sonst |
+|---|---|---|
+| Netzbezug, Einspeisung, PV-Erzeugung | Zähler aus dem Schritt Strom | Zähler „heute“, dann „gesamt“ aus dem Schritt Wechselrichter |
+| Batterie geladen, entladen | Zähler aus dem Schritt Strom | Leistung der Batterie |
+
+Unter dem Wert steht „laut Zähler“. Hat ein Leistungs-Sensor einen aktuellen Wert, aber keinen Verlauf (etwa weil er vom Recorder ausgeschlossen ist), weist der Bereich Strom darauf hin; ohne Zähler bleiben die Tageswerte dann leer. Verläufe im 5-Minuten-Raster und die Auswertung der Woche rechnen weiter mit der Leistung.
+
 **PV** – Wechselrichter und Tigo-Optimierer zusammen, nur Anzeige.
 
 - was das Dach gerade liefert, wie viel heute erzeugt wurde, ob sich alle Optimierer melden und welches Paneel gerade zurückfällt
@@ -143,7 +152,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.2. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 9 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.3. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -171,7 +180,7 @@ Energy Hub braucht nicht alle Teile. Was fehlt, lässt das Panel weg oder sagt, 
 | Bereich | Mindestens | Fehlt etwas |
 |---|---|---|
 | Übersicht | Netzanschluss oder Leistung der PV-Anlage (Schritt Strom) | Ohne Wärmepumpe wird die Heizung nicht erwähnt, die Aussagen zur Wärme entfallen |
-| Strom | Netzanschluss und Leistung der PV-Anlage | Batterie, Wallbox und Verbraucher erscheinen nur, wenn sie hinterlegt sind |
+| Strom | Netzanschluss und Leistung der PV-Anlage; für genaue Tageswerte Zähler in kWh | Batterie, Wallbox und Verbraucher erscheinen nur, wenn sie hinterlegt sind |
 | PV | Leistung der PV-Anlage, Sensoren des Wechselrichters oder die Integration tigo_rs485 | Ohne Wechselrichter kein Abgleich mit den Optimierern, ohne Optimierer keine Paneele |
 | Wärme | ein Sensor der Wärmepumpe | Ohne Wärmepumpe kein Anlagenschema. Mit Sensor für den PV-Überschuss läuft die Regelung trotzdem mit und schreibt ins Logbuch, wann sie angehoben oder abgesenkt hätte |
 | Regelung | Sensor für den PV-Überschuss, für das Absenken die Prognose | Ohne Überschuss bleibt die Heizung im Normalbetrieb |

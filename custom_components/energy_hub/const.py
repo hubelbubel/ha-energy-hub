@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "energy_hub"
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"
@@ -74,6 +74,13 @@ CONF_ENT_SURPLUS = "ent_pv_surplus"
 CONF_SURPLUS_SIGN = "surplus_sign"
 CONF_ENT_FORECAST_TODAY = "ent_forecast_today"
 CONF_ENT_FORECAST_TOMORROW = "ent_forecast_tomorrow"
+
+# Zähler in kWh (wie im Energie-Dashboard); genauer als aus der Leistung aufsummiert
+CONF_ENT_GRID_IMPORT_ENERGY = "ent_grid_import_energy"
+CONF_ENT_GRID_EXPORT_ENERGY = "ent_grid_export_energy"
+CONF_ENT_PV_ENERGY = "ent_pv_energy"
+CONF_ENT_BATTERY_CHARGE_ENERGY = "ent_battery_charge_energy"
+CONF_ENT_BATTERY_DISCHARGE_ENERGY = "ent_battery_discharge_energy"
 
 # --- Wechselrichter und Optimierer (nur Anzeige) ----------------------------
 CONF_ENT_INV_STATUS = "ent_inv_status"
@@ -155,6 +162,9 @@ SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
     CONF_ENT_HEATER: "binary_sensor.wp_flanschheizung_e9",
     CONF_ENT_SECOND_HEAT: "binary_sensor.wp_2_warmeerzeuger",
     # Namen aus einer Modbus-Konfiguration für ZCS Azzurro HYD (siehe README)
+    CONF_ENT_GRID_IMPORT_ENERGY: "sensor.azzurro_netzbezug_heute",
+    CONF_ENT_GRID_EXPORT_ENERGY: "sensor.azzurro_netzeinspeisung_heute",
+    CONF_ENT_PV_ENERGY: "sensor.pv_generation_today",
     CONF_ENT_INV_STATUS: "sensor.azzurro_status",
     CONF_ENT_MPPT1_POWER: "sensor.pv_power",
     CONF_ENT_MPPT1_VOLTAGE: "sensor.azzurro_pv1_spannung",

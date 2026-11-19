@@ -36,7 +36,7 @@ DE = {
         },
         "power": {
             "title": "Strom",
-            "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW; die Energie je Tag wird daraus berechnet.",
+            "description": "Für den Bereich Strom und die Übersicht. Hier wird nur angezeigt und ausgewertet, nichts geregelt: Batterie und Wallbox steuern sich weiter selbst. Gebraucht werden Leistungs-Sensoren in W oder kW. Die Energie je Tag wird daraus berechnet, oder aus Zählern in kWh, wenn du sie hinterlegst.",
             "data": {
                 "ent_grid_power": "Leistung am Netzanschluss",
                 "grid_sign": "Vorzeichen am Netzanschluss",
@@ -46,10 +46,16 @@ DE = {
                 "ent_battery_soc": "Ladestand der Batterie",
                 "ent_house_power": "Verbrauch des Hauses",
                 "ent_wallbox_power": "Leistung der Wallbox",
+                "ent_grid_import_energy": "Zähler Netzbezug",
+                "ent_grid_export_energy": "Zähler Einspeisung",
+                "ent_pv_energy": "Zähler PV-Erzeugung",
+                "ent_battery_charge_energy": "Zähler Batterie geladen",
+                "ent_battery_discharge_energy": "Zähler Batterie entladen",
                 "consumers": "Weitere Verbraucher",
             },
             "data_description": {
                 "ent_grid_power": "Ein Sensor mit Vorzeichen: Bezug und Einspeisung.",
+                "ent_grid_import_energy": "Zählerstände in kWh, wie im Energie-Dashboard (Zustandsklasse total_increasing oder total). Hinterlegt, kommen Tages- und Stundenwerte aus ihnen statt aus der Leistung. Das ist genauer, weil kurze Wechsel zwischen Bezug und Einspeisung nicht gegeneinander aufgerechnet werden. Ohne Zähler hier nimmt das Panel die aus dem Schritt „Wechselrichter“.",
                 "ent_house_power": "Leer lassen, dann wird der Verbrauch aus PV, Netz und Batterie berechnet.",
                 "consumers": "Leistungs-Sensoren einzelner Geräte, zum Beispiel Badheizung, Waschmaschine, Trockner, Spülmaschine. Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“.",
             },
@@ -270,7 +276,7 @@ EN = {
         },
         "power": {
             "title": "Electricity",
-            "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed; daily energy is calculated from them.",
+            "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed. Daily energy is calculated from them, or from kWh counters if you add them.",
             "data": {
                 "ent_grid_power": "Power at the grid connection",
                 "grid_sign": "Sign at the grid connection",
@@ -280,9 +286,15 @@ EN = {
                 "ent_battery_soc": "Battery state of charge",
                 "ent_house_power": "House consumption",
                 "ent_wallbox_power": "Power of the wallbox",
+                "ent_grid_import_energy": "Grid import counter",
+                "ent_grid_export_energy": "Grid export counter",
+                "ent_pv_energy": "PV generation counter",
+                "ent_battery_charge_energy": "Battery charged counter",
+                "ent_battery_discharge_energy": "Battery discharged counter",
                 "consumers": "Further consumers",
             },
             "data_description": {
+                "ent_grid_import_energy": "Meter readings in kWh as in the energy dashboard (state class total_increasing or total). When set, daily and hourly values come from them instead of power. This is more accurate because short switches between import and export do not cancel out. Without counters here the panel uses those from the inverter step.",
                 "ent_grid_power": "One signed sensor: import and export.",
                 "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
                 "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\".",

@@ -23,7 +23,7 @@
       },
       "power": {
         "title": "Electricity",
-        "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed; daily energy is calculated from them.",
+        "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed. Daily energy is calculated from them, or from kWh counters if you add them.",
         "data": {
           "ent_grid_power": "Power at the grid connection",
           "grid_sign": "Sign at the grid connection",
@@ -33,9 +33,15 @@
           "ent_battery_soc": "Battery state of charge",
           "ent_house_power": "House consumption",
           "ent_wallbox_power": "Power of the wallbox",
+          "ent_grid_import_energy": "Grid import counter",
+          "ent_grid_export_energy": "Grid export counter",
+          "ent_pv_energy": "PV generation counter",
+          "ent_battery_charge_energy": "Battery charged counter",
+          "ent_battery_discharge_energy": "Battery discharged counter",
           "consumers": "Further consumers"
         },
         "data_description": {
+          "ent_grid_import_energy": "Meter readings in kWh as in the energy dashboard (state class total_increasing or total). When set, daily and hourly values come from them instead of power. This is more accurate because short switches between import and export do not cancel out. Without counters here the panel uses those from the inverter step.",
           "ent_grid_power": "One signed sensor: import and export.",
           "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
           "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\"."
@@ -216,7 +222,7 @@
       },
       "power": {
         "title": "Electricity",
-        "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed; daily energy is calculated from them.",
+        "description": "For the electricity section and the overview. Display and analysis only, nothing is controlled: battery and wallbox keep managing themselves. Power sensors in W or kW are needed. Daily energy is calculated from them, or from kWh counters if you add them.",
         "data": {
           "ent_grid_power": "Power at the grid connection",
           "grid_sign": "Sign at the grid connection",
@@ -226,9 +232,15 @@
           "ent_battery_soc": "Battery state of charge",
           "ent_house_power": "House consumption",
           "ent_wallbox_power": "Power of the wallbox",
+          "ent_grid_import_energy": "Grid import counter",
+          "ent_grid_export_energy": "Grid export counter",
+          "ent_pv_energy": "PV generation counter",
+          "ent_battery_charge_energy": "Battery charged counter",
+          "ent_battery_discharge_energy": "Battery discharged counter",
           "consumers": "Further consumers"
         },
         "data_description": {
+          "ent_grid_import_energy": "Meter readings in kWh as in the energy dashboard (state class total_increasing or total). When set, daily and hourly values come from them instead of power. This is more accurate because short switches between import and export do not cancel out. Without counters here the panel uses those from the inverter step.",
           "ent_grid_power": "One signed sensor: import and export.",
           "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
           "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\"."
