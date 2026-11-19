@@ -21,8 +21,9 @@ custom_components/energy_hub/
   sensor.py, switch.py, services.yaml
   frontend/energy-hub-panel.js   das ganze Panel (~4400 Zeilen), ES-Modul ohne Build-Schritt und ohne Abhängigkeiten
   translations/de.json, en.json  GENERIERT – nicht von Hand ändern
+  brand/            icon.png, dark_icon.png (+@2x) – GENERIERT mit dev/brand.py, Quelle docs/logo.svg
 packages/dimplex_wpm.yaml   Modbus-Package für die Dimplex-Wärmepumpe; die Vorschläge im config_flow passen zu dessen Entitätsnamen
-dev/                        preview.html (Panel mit Beispieldaten), screenshot.py, build_translations.py
+dev/                        preview.html (Panel mit Beispieldaten), screenshot.py, build_translations.py, brand.py
 tests/                      pytest (fake_ha.py ersetzt Home Assistant) und node --test
 docs/                       Screenshots für die README
 ```

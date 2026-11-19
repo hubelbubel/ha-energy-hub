@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="" width="72" align="right">
+
 # Energy Hub
 
 > [!WARNING]
@@ -141,7 +143,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.1. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 9 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.2. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 9 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -313,6 +315,7 @@ Aufbau:
 | `websocket_api.py` | Schnittstelle zwischen Panel und Regler, dazu die Liste der Tigo-Optimierer |
 | `tigo.py` | Optimierer, Strings und ihre Entitäten aus dem Entitätsregister von tigo_rs485, ohne Home-Assistant-Importe |
 | `frontend/energy-hub-panel.js` | Panel mit den vier Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
+| `brand/` | Zeichen für die Integrationsseite (ab Home Assistant 2026.3), erzeugt mit `dev/brand.py` aus den Farben des Panels |
 
 ## Lizenz
 
