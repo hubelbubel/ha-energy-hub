@@ -1,5 +1,8 @@
 # Energy Hub
 
+[![In Home Assistant öffnen: Repository im Marketplace beziehungsweise in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hubelbubel&repository=ha-energy-hub&category=integration)
+[![In Home Assistant öffnen: Energy Hub einrichten](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=energy_hub)
+
 Eine Integration für Home Assistant, die Strom und Wärme eines Hauses in der Seitenleiste zusammenführt: woher der Strom kommt und wohin er geht, was die Wärmepumpe tut, und was in der letzten Woche gut lief und was auffiel. Die Heizung wird nach PV-Überschuss und PV-Prognose angehoben oder abgesenkt; jede Schaltung steht mit Uhrzeit und Begründung im Logbuch.
 
 Entstanden für ein Haus mit Dimplex-Wärmepumpe (Modbus RTU), wasserführendem Kamin, PV mit ZCS-Azzurro-Wechselrichter und Tigo-Optimierern, Batterie und Wallbox. Die Integration selbst ist herstellerneutral: Sie arbeitet mit beliebigen Entitäten, die du bei der Einrichtung auswählst.
@@ -166,11 +169,11 @@ Ist die Wärmepumpe hinterlegt, meldet aber keiner ihrer Sensoren einen Wert (et
 
 ## Installation
 
-**Mit HACS:** HACS öffnen, Menü „Benutzerdefinierte Repositories“, die Adresse dieses Repositories mit Typ „Integration“ eintragen, „Energy Hub“ installieren, Home Assistant neu starten.
+**Mit dem Marketplace** (ab Home Assistant 2026.11, vorher HACS): Der erste Knopf oben öffnet dieses Repository direkt in deinem Home Assistant; dort „Energy Hub“ herunterladen und Home Assistant neu starten. Ohne Knopf: Einstellungen, Marketplace (oder HACS), Menü „Benutzerdefinierte Repositories“, die Adresse dieses Repositories mit Typ „Integration“ eintragen. Updates erscheinen danach wie bei anderen Integrationen.
 
 **Von Hand:** den Ordner `custom_components/energy_hub` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
-Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“. Die Einrichtung fragt in acht Schritten nach Wärmepumpe, Strom, Photovoltaik, Wechselrichter, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
+Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“, oder der zweite Knopf oben. Die Einrichtung fragt in acht Schritten nach Wärmepumpe, Strom, Photovoltaik, Wechselrichter, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
 
 ## Wie geregelt wird
 
