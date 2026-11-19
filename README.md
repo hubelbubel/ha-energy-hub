@@ -1,5 +1,14 @@
 # Energy Hub
 
+> [!WARNING]
+> **Nutzung auf eigene Verantwortung. Keine Verantwortung und keine Haftung für Eingriffe an der Wärmepumpe.**
+>
+> Energy Hub kann Vorgaben an deine Wärmepumpe senden (Smart Grid oder Parallelverschiebung), sobald du in den Einstellungen einen Eingriff wählst. Falsche Einstellungen, Fehler in der Software oder in der Anbindung können Heizung und Warmwasser beeinträchtigen, die Effizienz verschlechtern oder die Anlage belasten.
+>
+> - Der Autor übernimmt keine Verantwortung und keine Haftung für Schäden an Wärmepumpe, Heizungsanlage oder Gebäude, für höhere Energiekosten oder für sonstige Folgen der Nutzung.
+> - Die Integration ist von keinem Hersteller geprüft oder freigegeben. Ob Eingriffe über Schnittstellen Garantie oder Gewährleistung berühren, klärst du selbst mit dem Hersteller oder deinem Heizungsfachbetrieb.
+> - Standard ist der Probebetrieb, in dem nichts gesendet wird. Wechsle erst daraus, wenn du die Einstellungen deiner Wärmepumpe kennst und die Entscheidungen im Logbuch eine Weile beobachtet hast.
+
 [![In Home Assistant öffnen: Repository im Marketplace beziehungsweise in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hubelbubel&repository=ha-energy-hub&category=integration)
 [![In Home Assistant öffnen: Energy Hub einrichten](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=energy_hub)
 
