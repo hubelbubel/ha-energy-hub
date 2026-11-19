@@ -180,7 +180,7 @@ Ist die Wärmepumpe hinterlegt, meldet aber keiner ihrer Sensoren einen Wert (et
 
 ## Installation
 
-**Mit dem Marketplace** (ab Home Assistant 2026.11, vorher HACS): Der erste Knopf oben öffnet dieses Repository direkt in deinem Home Assistant; dort „Energy Hub“ herunterladen und Home Assistant neu starten. Ohne Knopf: Einstellungen, Marketplace (oder HACS), Menü „Benutzerdefinierte Repositories“, die Adresse dieses Repositories mit Typ „Integration“ eintragen. Updates erscheinen danach wie bei anderen Integrationen.
+**Mit dem Marketplace** (ab Home Assistant 2026.11, vorher HACS): Der erste Knopf oben öffnet dieses Repository direkt in deinem Home Assistant; dort „Energy Hub“ herunterladen und Home Assistant neu starten. Ohne Knopf: Einstellungen, Marketplace (oder HACS), Menü „Benutzerdefinierte Repositories“, die Adresse dieses Repositories mit Typ „Integration“ eintragen. Updates erscheinen danach wie bei anderen Integrationen, sobald es ein neues Release gibt. Das Zeichen von Energy Hub zeigt Home Assistant erst nach der Installation, und erst ab Version 2026.3.
 
 **Von Hand:** den Ordner `custom_components/energy_hub` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
@@ -304,6 +304,8 @@ python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
 python3 dev/screenshot.py /tmp/shots   # Panel rendern und beide Exporte erzeugen (braucht Playwright und Chrome)
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
 ```
+
+Versionen: Steigt `version` in `manifest.json` und ist die Prüfung auf GitHub grün, legt die CI ein Release mit dieser Nummer an. Nur Releases bietet der Marketplace als Update an; Commits ohne neue Version erreichen also niemanden.
 
 Aufbau:
 

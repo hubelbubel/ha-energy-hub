@@ -26,3 +26,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: home-assistant/actions/hassfest@master
+
+  # Steigt die Version in manifest.json, entsteht nach bestandenen Prüfungen ein Release.
+  # Der Marketplace (vorher HACS) zeigt dann die Versionsnummer statt der Commit-Kennung
+  # und bietet nur Releases als Update an.
+  release:
+    name: Release für neue Version
+    needs: [tests, hassfest]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release anlegen, wenn es die Version noch nicht gibt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version custom_components/energy_hub/manifest.json)
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version gibt es schon."
+          else
+            gh release create "$version" --target "$GITHUB_SHA" --title "Energy Hub $version" --generate-notes
+          fi
