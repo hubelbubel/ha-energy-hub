@@ -152,7 +152,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.3. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.3. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -314,7 +314,7 @@ python3 dev/screenshot.py /tmp/shots   # Panel rendern und beide Exporte erzeuge
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
 ```
 
-Versionen: Steigt `version` in `manifest.json` und ist die Prüfung auf GitHub grün, legt die CI ein Release mit dieser Nummer an. Nur Releases bietet der Marketplace als Update an; Commits ohne neue Version erreichen also niemanden.
+Versionen: Steigt `version` in `manifest.json` und ist die Prüfung auf GitHub grün, legt die CI ein Release mit dieser Nummer an. Als Text nimmt sie den Abschnitt der Version aus [`CHANGELOG.md`](CHANGELOG.md); den zeigt Home Assistant beim Update. Nur Releases bietet der Marketplace als Update an; Commits ohne neue Version erreichen also niemanden.
 
 Aufbau:
 
