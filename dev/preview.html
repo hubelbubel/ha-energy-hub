@@ -24,7 +24,7 @@
   Vorschau des Panels ohne Home Assistant, mit erfundenen Beispieldaten.
   Start:  python3 -m http.server 8000   (im Hauptordner des Repositories)
   Dann:   http://localhost:8000/dev/preview.html
-  Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty  ?tab=overview|power|heat
+  Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty  ?tab=overview|power|pv|heat
 -->
 <script type="module">
   import "../custom_components/energy_hub/frontend/energy-hub-panel.js";
@@ -65,20 +65,91 @@
     "sensor.badheizung_leistung": "Badheizung Leistung", "sensor.waschmaschine_leistung": "Waschmaschine Leistung",
     "sensor.trockner_leistung": "Trockner Leistung", "sensor.spuelmaschine_leistung": "Spülmaschine Leistung",
   };
+  // PV: ZCS Azzurro mit einem String an MPPT 1, darin 14 Module mit Tigo-Optimierern.
+  // A4 ist verschmutzt, A9 liegt nachmittags im Schatten, A12 verliert ab und zu die Funkverbindung, A2 wird warm.
+  const inv = {
+    ent_inv_status: "sensor.azzurro_status", ent_mppt1_power: "sensor.pv_power",
+    ent_mppt1_voltage: "sensor.azzurro_pv1_spannung", ent_mppt1_current: "sensor.azzurro_pv1_strom",
+    ent_mppt2_power: null, ent_mppt2_voltage: null, ent_mppt2_current: null,
+    ent_grid_frequency: "sensor.azzurro_netz_frequenz",
+    ent_pv_energy_today: "sensor.pv_generation_today", ent_pv_energy_total: "sensor.pv_generation_total",
+    ent_load_energy_today: "sensor.azzurro_hausverbrauch_heute", ent_load_energy_total: "sensor.azzurro_hausverbrauch_gesamt",
+    ent_import_energy_today: "sensor.azzurro_netzbezug_heute", ent_import_energy_total: "sensor.azzurro_netzbezug_gesamt",
+    ent_export_energy_today: "sensor.azzurro_netzeinspeisung_heute", ent_export_energy_total: "sensor.azzurro_netzeinspeisung_gesamt",
+  };
+  const LABELS = Array.from({ length: 14 }, (_x, i) => `A${i + 1}`);
+  const METRICS = ["power", "voltage_in", "voltage_out", "current", "temperature", "pwm", "energy_today"];
+  const pid = (label, key) => `sensor.panel_${label.toLowerCase()}_${key}`;
+  const layout = {
+    found: true,
+    panels: LABELS.map((label) => ({ label, string: "A", entry_id: "x",
+      entities: Object.fromEntries(METRICS.map((key) => [key, pid(label, key)])) })),
+    strings: [{ name: "A", entities: { power: "sensor.tigo_string_a_power", energy_today: "sensor.tigo_string_a_energy_today" } }],
+    installation: { energy_today: "sensor.tigo_installation_energy_today" },
+  };
+  // Tagessummen (kWh seit Mitternacht) für die Zähler des Wechselrichters
+  const COUNTERS = {
+    "sensor.pv_generation_today": ["pv", true], "sensor.pv_generation_total": ["pv", false],
+    "sensor.azzurro_hausverbrauch_heute": ["load", true], "sensor.azzurro_hausverbrauch_gesamt": ["load", false],
+    "sensor.azzurro_netzbezug_heute": ["imp", true], "sensor.azzurro_netzbezug_gesamt": ["imp", false],
+    "sensor.azzurro_netzeinspeisung_heute": ["exp", true], "sensor.azzurro_netzeinspeisung_gesamt": ["exp", false],
+  };
+  function panelFactor(label, t, hour) {
+    if (label === "A4") return 0.86;
+    if (label === "A9" && hour >= 14.5 && hour < 16.5) return 0.42;
+    if (label === "A12" && Math.sin(t / 7.1e5) > 0.96) return 0;
+    return 1 + 0.025 * Math.sin(t / 3e5 + LABELS.indexOf(label));
+  }
+
   const STEP = 300e3;
   function simulate(t0, t1) {
     const out = {};
     const ids = [pw.ent_grid_power, pw.ent_pv_power, pw.ent_battery_power, pw.ent_battery_soc, pw.ent_wallbox_power,
-      "sensor.wp_elektrische_leistung", ...consumers];
+      "sensor.wp_elektrische_leistung", ...consumers, "sensor.pv_power", "sensor.azzurro_pv1_spannung",
+      "sensor.azzurro_pv1_strom", "sensor.azzurro_netz_frequenz", ...Object.keys(COUNTERS),
+      ...LABELS.flatMap((label) => METRICS.map((key) => pid(label, key)))];
     for (const id of ids) out[id] = [];
     let soc = 2.0; // kWh im Speicher, nutzbar 0,55 bis 5,0
+    const day = { pv: 0, load: 0, imp: 0, exp: 0 };
+    const tot = { pv: 8120, load: 9430, imp: 3210, exp: 2950 };
+    const panelDay = Object.fromEntries(LABELS.map((label) => [label, 0]));
+    let lastDay = null;
     for (let t = t0; t < t1; t += STEP) {
       const d = new Date(t);
       const hour = d.getHours() + d.getMinutes() / 60;
       const odd = Math.floor(t / 86400e3) % 2 === 1;
       const sun = Math.max(0, Math.sin(((hour - 7.5) / 9.5) * Math.PI));
       const cloud = 0.72 + 0.28 * Math.sin(t / 9e5) * Math.cos(t / 23e5);
-      const pv = sun * cloud * 6800;
+      if (lastDay !== d.getDate()) {
+        lastDay = d.getDate();
+        for (const k of Object.keys(day)) day[k] = 0;
+        for (const label of LABELS) panelDay[label] = 0;
+      }
+      const vMppt = sun > 0 ? 432 + 18 * sun : 0;
+      let tigo = 0;
+      const panelW = LABELS.map((label) => {
+        const w = sun > 0.02 ? Math.max(0, (sun * cloud * 6950 / LABELS.length) * panelFactor(label, t, hour)) : 0;
+        tigo += w;
+        return w;
+      });
+      const pv = tigo * 0.976;
+      const iString = vMppt > 0 ? pv / vMppt : 0;
+      LABELS.forEach((label, i) => {
+        const w = panelW[i];
+        const vin = w > 0 ? 33.2 + 3.1 * sun - (label === "A4" ? 0.6 : 0) : 0;
+        panelDay[label] += (w * STEP) / 3.6e9;
+        out[pid(label, "power")].push(w);
+        out[pid(label, "voltage_in")].push(vin);
+        out[pid(label, "current")].push(vin > 0 ? w / vin : 0);
+        out[pid(label, "voltage_out")].push(iString > 0 ? (w * 0.99) / iString : 0);
+        out[pid(label, "temperature")].push(sun > 0.02 ? 7 + 24 * sun * cloud + (label === "A2" ? 7 : 0) : null);
+        out[pid(label, "pwm")].push(w > 0 ? Math.round(180 + 60 * sun) : null);
+        out[pid(label, "energy_today")].push(panelDay[label]);
+      });
+      out["sensor.pv_power"].push(Math.round(pv / 10) * 10);
+      out["sensor.azzurro_pv1_spannung"].push(vMppt);
+      out["sensor.azzurro_pv1_strom"].push(iString);
+      out["sensor.azzurro_netz_frequenz"].push(50 + 0.02 * Math.sin(t / 4e5));
       const cyc = Math.sin(t / 26e5);
       const wp = cyc > -0.3 ? 1800 + 300 * cyc : 40;
       const bath = hour >= 6.2 && hour < 7 ? 900 : 0;
@@ -102,10 +173,19 @@
       out[pw.ent_wallbox_power].push(wallbox);
       out["sensor.wp_elektrische_leistung"].push(wp);
       [bath, wash, dry, dish].forEach((v, i) => out[consumers[i]].push(v));
+      const grid = house + wallbox + chg - dis - pv;
+      const add = { pv, load: house + wallbox, imp: Math.max(0, grid), exp: Math.max(0, -grid) };
+      for (const k of Object.keys(add)) {
+        day[k] += (add[k] * STEP) / 3.6e9;
+        tot[k] += (add[k] * STEP) / 3.6e9;
+      }
+      for (const [id, [k, today]] of Object.entries(COUNTERS)) out[id].push(today ? day[k] : tot[k]);
     }
     return out;
   }
-  const nowSim = simulate(Date.now() - 48 * 3600e3, Date.now());
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  const nowSim = simulate(midnight.getTime() - 48 * 3600e3, Date.now());
   const extra = ["sensor.wp_statuscode", "binary_sensor.wp_heizungspumpe_m13"];
   const st = (state, unit) => ({ state: String(state), attributes: { unit_of_measurement: unit } });
   const running = scene !== "normal";
@@ -125,7 +205,17 @@
     states[id] = { state: String(Math.round(value * 10) / 10),
       attributes: { unit_of_measurement: id.includes("ladestand") ? "%" : "W", friendly_name: friendly[id] } };
   }
-  Object.assign(ent, pw);
+  const pvIds = [...Object.values(inv).filter(Boolean), ...LABELS.flatMap((label) => METRICS.map((key) => pid(label, key)))];
+  for (const id of pvIds) {
+    if (!nowSim[id]) continue;
+    const value = nowSim[id].at(-1);
+    const unit = /energy|generation|verbrauch|bezug|einspeisung/.test(id) ? "kWh" : /spannung|voltage/.test(id) ? "V"
+      : /strom|current/.test(id) ? "A" : /temperature/.test(id) ? "°C" : /frequenz/.test(id) ? "Hz" : /pwm/.test(id) ? undefined : "W";
+    states[id] = { state: value === null ? "unknown" : String(Math.round(value * 100) / 100), attributes: { unit_of_measurement: unit } };
+  }
+  states["sensor.tigo_installation_energy_today"] = st(LABELS.reduce((sum, label) => sum + nowSim[pid(label, "energy_today")].at(-1), 0).toFixed(2), "kWh");
+  states["sensor.azzurro_status"] = st(nowSim["sensor.pv_power"].at(-1) > 0 ? 2 : 0);
+  Object.assign(ent, pw, inv);
 
   const log = scene === "empty" ? [] : [
     { ts: iso(now - 38 * 60e3), kind: "switch", from: "normal", to: "boost", result: "sent",
@@ -151,13 +241,14 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.3.1",
+    version: "0.5.0",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
       ? { ...ent, ent_pv_surplus: null, ent_forecast_today: null, ent_forecast_tomorrow: null,
           ent_storage: null, ent_lock: null, ent_fireplace: null, ent_fireplace_status: null,
-          ent_grid_power: null, ent_pv_power: null, ent_battery_power: null, ent_battery_soc: null, ent_wallbox_power: null }
+          ent_grid_power: null, ent_pv_power: null, ent_battery_power: null, ent_battery_soc: null, ent_wallbox_power: null,
+          ...Object.fromEntries(Object.keys(inv).map((key) => [key, null])) }
       : ent,
     settings: {
       boost_on_w: 1500, boost_on_min: 10, boost_off_w: 300, boost_off_min: 15, min_hold_min: 20,
@@ -165,7 +256,7 @@
       setback_min_forecast_kwh: 10, setback_min_outdoor_c: 3, setback_min_dhw_c: 42,
       actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_setback_k: 2,
       surplus_sign: "surplus_positive",
-      grid_sign: "import_positive", battery_sign: "discharge_positive",
+      grid_sign: "import_positive", battery_sign: "discharge_positive", tigo_string_mppt1: null, tigo_string_mppt2: null,
       storage_ready_delta_k: 5, storage_ready_c: 40, storage_blocks_boost: true, fireplace_on_c: 80, lock_regen_value: "Regenerativ",
     },
     state: {
@@ -222,6 +313,7 @@
       else if (id === ent.ent_lock) v = storeTemp >= 42 && Math.sin(t / 19e5) > 0.1 ? "Regenerativ" : "Keine";
       else if (id === "sensor.wp_statuscode") v = cyc > -0.3 ? 2 : 0;
       else if (id === "binary_sensor.wp_heizungspumpe_m13") v = "on";
+      else if (id === "sensor.azzurro_status") v = t > now - 30 * 3600e3 && t < now - 29.8 * 3600e3 ? 4 : sun > 0.02 ? 2 : 0;
       else continue;
       rows.push({ s: String(typeof v === "number" ? Math.round(v * 10) / 10 : v), lu: t / 1000 });
     }
@@ -245,19 +337,41 @@
         const t0 = new Date(msg.start_time).getTime();
         const t1 = Math.min(new Date(msg.end_time).getTime(), Date.now());
         const sim = scene === "empty" ? {} : simulate(t0, t1);
-        const per = msg.period === "hour" ? 12 : 1;
         const res = {};
+        if (msg.period === "day") {
+          for (const id of msg.statistic_ids) {
+            const values = sim[id];
+            if (!values) continue;
+            res[id] = [];
+            const d = new Date(t0);
+            d.setHours(0, 0, 0, 0);
+            for (let start = d.getTime(); start < t1; start += 86400e3) {
+              const i0 = Math.max(0, Math.floor((start - t0) / STEP));
+              const i1 = Math.min(values.length, Math.floor((start + 86400e3 - t0) / STEP));
+              if (i1 <= i0) continue;
+              const today = COUNTERS[id]?.[1];
+              const change = today ? values[i1 - 1] : values[i1 - 1] - values[i0];
+              res[id].push({ start, end: start + 86400e3, change });
+            }
+          }
+          return res;
+        }
+        const per = msg.period === "hour" ? 12 : 1;
         for (const id of msg.statistic_ids) {
           const values = sim[id];
           if (!values) continue;
           res[id] = [];
           for (let i = 0; i + per <= values.length; i += per) {
-            const chunk = values.slice(i, i + per);
-            res[id].push({ start: t0 + i * STEP, end: t0 + (i + per) * STEP, mean: chunk.reduce((a, b) => a + b, 0) / per });
+            const chunk = values.slice(i, i + per).filter((v) => v !== null);
+            if (!chunk.length) continue;
+            res[id].push({ start: t0 + i * STEP, end: t0 + (i + per) * STEP,
+              mean: chunk.reduce((a, b) => a + b, 0) / chunk.length, min: Math.min(...chunk), max: Math.max(...chunk),
+              state: chunk.at(-1) });
           }
         }
         return res;
       }
+      if (msg.type === "energy_hub/pv_layout") return scene === "empty" ? { found: false, panels: [], strings: [], installation: {} } : layout;
       console.log("WS", msg);
       return null;
     },

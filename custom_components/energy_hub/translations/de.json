@@ -56,6 +56,36 @@
           "ent_forecast_tomorrow": "Wird nur angezeigt."
         }
       },
+      "inverter": {
+        "title": "Wechselrichter",
+        "description": "Für den Bereich PV. Hier wird nur angezeigt und ausgewertet, nichts geregelt. Alles ist freiwillig. Die Tigo-Optimierer findet das Panel selbst, wenn die Integration tigo_rs485 eingerichtet ist.",
+        "data": {
+          "ent_inv_status": "Status des Wechselrichters",
+          "ent_mppt1_power": "MPPT 1: Leistung",
+          "ent_mppt1_voltage": "MPPT 1: Spannung",
+          "ent_mppt1_current": "MPPT 1: Strom",
+          "ent_mppt2_power": "MPPT 2: Leistung",
+          "ent_mppt2_voltage": "MPPT 2: Spannung",
+          "ent_mppt2_current": "MPPT 2: Strom",
+          "ent_pv_energy_today": "Erzeugung heute",
+          "ent_pv_energy_total": "Erzeugung gesamt",
+          "ent_load_energy_today": "Hausverbrauch heute",
+          "ent_load_energy_total": "Hausverbrauch gesamt",
+          "ent_import_energy_today": "Netzbezug heute",
+          "ent_import_energy_total": "Netzbezug gesamt",
+          "ent_export_energy_today": "Einspeisung heute",
+          "ent_export_energy_total": "Einspeisung gesamt",
+          "ent_grid_frequency": "Netzfrequenz",
+          "tigo_string_mppt1": "Tigo-String an MPPT 1",
+          "tigo_string_mppt2": "Tigo-String an MPPT 2"
+        },
+        "data_description": {
+          "ent_inv_status": "Text oder Code. Die Codes 0 bis 7 von ZCS Azzurro und Sofar werden übersetzt, zum Beispiel 2 = am Netz.",
+          "ent_mppt1_power": "Leistung am Gleichstrom-Eingang in W oder kW. Leer lassen, dann wird sie aus Spannung mal Strom berechnet.",
+          "ent_pv_energy_today": "Zähler des Wechselrichters in kWh. Sie werden im Bereich PV angezeigt, mit den Optimierern verglichen und exportiert.",
+          "tigo_string_mppt1": "Name des Strings wie in tigo_rs485, zum Beispiel A. Leer lassen: Gibt es nur einen String, gehört er zu MPPT 1."
+        }
+      },
       "storage": {
         "title": "Kamin und Speicher",
         "description": "Für Anlagen mit wasserführendem Kamin und einem Speicher, aus dem sich die Heizung bedient. Alles ist freiwillig; ohne Speicher bleibt dieser Schritt leer.",
@@ -157,6 +187,7 @@
           "heatpump": "Wärmepumpe",
           "power": "Strom",
           "pv": "Photovoltaik",
+          "inverter": "Wechselrichter",
           "storage": "Kamin und Speicher",
           "rules": "Regeln",
           "actuator": "Eingriff an der Wärmepumpe",
@@ -216,6 +247,36 @@
           "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss.",
           "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken am Morgen gebraucht.",
           "ent_forecast_tomorrow": "Wird nur angezeigt."
+        }
+      },
+      "inverter": {
+        "title": "Wechselrichter",
+        "description": "Für den Bereich PV. Hier wird nur angezeigt und ausgewertet, nichts geregelt. Alles ist freiwillig. Die Tigo-Optimierer findet das Panel selbst, wenn die Integration tigo_rs485 eingerichtet ist.",
+        "data": {
+          "ent_inv_status": "Status des Wechselrichters",
+          "ent_mppt1_power": "MPPT 1: Leistung",
+          "ent_mppt1_voltage": "MPPT 1: Spannung",
+          "ent_mppt1_current": "MPPT 1: Strom",
+          "ent_mppt2_power": "MPPT 2: Leistung",
+          "ent_mppt2_voltage": "MPPT 2: Spannung",
+          "ent_mppt2_current": "MPPT 2: Strom",
+          "ent_pv_energy_today": "Erzeugung heute",
+          "ent_pv_energy_total": "Erzeugung gesamt",
+          "ent_load_energy_today": "Hausverbrauch heute",
+          "ent_load_energy_total": "Hausverbrauch gesamt",
+          "ent_import_energy_today": "Netzbezug heute",
+          "ent_import_energy_total": "Netzbezug gesamt",
+          "ent_export_energy_today": "Einspeisung heute",
+          "ent_export_energy_total": "Einspeisung gesamt",
+          "ent_grid_frequency": "Netzfrequenz",
+          "tigo_string_mppt1": "Tigo-String an MPPT 1",
+          "tigo_string_mppt2": "Tigo-String an MPPT 2"
+        },
+        "data_description": {
+          "ent_inv_status": "Text oder Code. Die Codes 0 bis 7 von ZCS Azzurro und Sofar werden übersetzt, zum Beispiel 2 = am Netz.",
+          "ent_mppt1_power": "Leistung am Gleichstrom-Eingang in W oder kW. Leer lassen, dann wird sie aus Spannung mal Strom berechnet.",
+          "ent_pv_energy_today": "Zähler des Wechselrichters in kWh. Sie werden im Bereich PV angezeigt, mit den Optimierern verglichen und exportiert.",
+          "tigo_string_mppt1": "Name des Strings wie in tigo_rs485, zum Beispiel A. Leer lassen: Gibt es nur einen String, gehört er zu MPPT 1."
         }
       },
       "storage": {

@@ -14,6 +14,7 @@ from . import const as c
 STEP_HEATPUMP = "heatpump"
 STEP_POWER = "power"
 STEP_PV = "pv"
+STEP_INVERTER = "inverter"
 STEP_STORAGE = "storage"
 STEP_RULES = "rules"
 STEP_ACTUATOR = "actuator"
@@ -95,6 +96,26 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_ENT_FORECAST_TODAY, _entity("sensor"), False),
         (c.CONF_ENT_FORECAST_TOMORROW, _entity("sensor"), False),
     ],
+    STEP_INVERTER: [
+        (c.CONF_ENT_INV_STATUS, _entity("sensor"), False),
+        (c.CONF_ENT_MPPT1_POWER, _entity("sensor"), False),
+        (c.CONF_ENT_MPPT1_VOLTAGE, _entity("sensor"), False),
+        (c.CONF_ENT_MPPT1_CURRENT, _entity("sensor"), False),
+        (c.CONF_ENT_MPPT2_POWER, _entity("sensor"), False),
+        (c.CONF_ENT_MPPT2_VOLTAGE, _entity("sensor"), False),
+        (c.CONF_ENT_MPPT2_CURRENT, _entity("sensor"), False),
+        (c.CONF_ENT_PV_ENERGY_TODAY, _entity("sensor"), False),
+        (c.CONF_ENT_PV_ENERGY_TOTAL, _entity("sensor"), False),
+        (c.CONF_ENT_LOAD_ENERGY_TODAY, _entity("sensor"), False),
+        (c.CONF_ENT_LOAD_ENERGY_TOTAL, _entity("sensor"), False),
+        (c.CONF_ENT_IMPORT_ENERGY_TODAY, _entity("sensor"), False),
+        (c.CONF_ENT_IMPORT_ENERGY_TOTAL, _entity("sensor"), False),
+        (c.CONF_ENT_EXPORT_ENERGY_TODAY, _entity("sensor"), False),
+        (c.CONF_ENT_EXPORT_ENERGY_TOTAL, _entity("sensor"), False),
+        (c.CONF_ENT_GRID_FREQUENCY, _entity("sensor"), False),
+        (c.CONF_TIGO_MPPT1, selector.TextSelector(), False),
+        (c.CONF_TIGO_MPPT2, selector.TextSelector(), False),
+    ],
     STEP_STORAGE: [
         (c.CONF_ENT_STORAGE, _entity("sensor"), False),
         (c.CONF_STORAGE_READY_DELTA_K, _number(2, 20, 0.5, "K"), True),
@@ -145,14 +166,29 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
 }
 
 
-def build_schema(step: str, values: dict[str, Any], *, initial: bool) -> vol.Schema:
-    """Formular eines Schritts. Bei der Ersteinrichtung werden Vorschläge eingetragen."""
+def build_schema(
+    step: str, values: dict[str, Any], *, initial: bool, existing: set[str] | None = None
+) -> vol.Schema:
+    """Formular eines Schritts. Bei der Ersteinrichtung werden Vorschläge eingetragen.
+
+    existing: vorhandene Entitäten. Der Schritt „Wechselrichter“ kam erst mit 0.5 dazu;
+    wer schon eingerichtet ist, bekommt dort beim ersten Öffnen die Vorschläge, die es
+    in diesem Home Assistant gibt. Sobald ein Feld belegt ist, gilt nur noch das Gespeicherte.
+    """
     schema: dict[Any, Any] = {}
+    fresh = (
+        existing is not None
+        and step == STEP_INVERTER
+        and not any(key in values for key, _sel, _req in FIELDS[step])
+    )
     for key, sel, required in FIELDS[step]:
+        suggestion = c.SUGGESTED_ENTITIES.get(key)
         if key in values:
             current = values[key]
         elif initial:
-            current = c.DEFAULTS.get(key, c.SUGGESTED_ENTITIES.get(key))
+            current = c.DEFAULTS.get(key, suggestion)
+        elif fresh and isinstance(suggestion, str) and suggestion in existing:
+            current = suggestion
         else:
             current = c.DEFAULTS.get(key) if required else None
         if required:
@@ -185,7 +221,7 @@ def validate_step(step: str, data: dict[str, Any]) -> dict[str, str]:
 
 
 class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
-    """Ersteinrichtung in vier Schritten."""
+    """Ersteinrichtung in acht Schritten."""
 
     VERSION = 1
 
@@ -217,7 +253,10 @@ class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
         return await self._step(STEP_POWER, STEP_POWER, user_input, STEP_PV)
 
     async def async_step_pv(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return await self._step(STEP_PV, STEP_PV, user_input, STEP_STORAGE)
+        return await self._step(STEP_PV, STEP_PV, user_input, STEP_INVERTER)
+
+    async def async_step_inverter(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_INVERTER, STEP_INVERTER, user_input, STEP_STORAGE)
 
     async def async_step_storage(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_STORAGE, STEP_STORAGE, user_input, STEP_RULES)
@@ -243,7 +282,16 @@ class EnergyHubOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
             step_id="init",
-            menu_options=[STEP_HEATPUMP, STEP_POWER, STEP_PV, STEP_STORAGE, STEP_RULES, STEP_ACTUATOR, STEP_EXPORT],
+            menu_options=[
+                STEP_HEATPUMP,
+                STEP_POWER,
+                STEP_PV,
+                STEP_INVERTER,
+                STEP_STORAGE,
+                STEP_RULES,
+                STEP_ACTUATOR,
+                STEP_EXPORT,
+            ],
         )
 
     async def _step(self, step: str, user_input: dict[str, Any] | None) -> ConfigFlowResult:
@@ -254,9 +302,10 @@ class EnergyHubOptionsFlow(OptionsFlow):
             if not errors:
                 return self.async_create_entry(data=merge_step(step, current, user_input))
         values = {**current, **(user_input or {})}
+        existing = None if user_input is not None else set(self.hass.states.async_entity_ids())
         return self.async_show_form(
             step_id=step,
-            data_schema=build_schema(step, values, initial=False),
+            data_schema=build_schema(step, values, initial=False, existing=existing),
             errors=errors,
         )
 
@@ -268,6 +317,9 @@ class EnergyHubOptionsFlow(OptionsFlow):
 
     async def async_step_pv(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_PV, user_input)
+
+    async def async_step_inverter(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_INVERTER, user_input)
 
     async def async_step_storage(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_STORAGE, user_input)

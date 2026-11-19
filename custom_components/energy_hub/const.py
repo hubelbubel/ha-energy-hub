@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "energy_hub"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"
@@ -75,6 +75,30 @@ CONF_SURPLUS_SIGN = "surplus_sign"
 CONF_ENT_FORECAST_TODAY = "ent_forecast_today"
 CONF_ENT_FORECAST_TOMORROW = "ent_forecast_tomorrow"
 
+# --- Wechselrichter und Optimierer (nur Anzeige) ----------------------------
+CONF_ENT_INV_STATUS = "ent_inv_status"
+CONF_ENT_MPPT1_POWER = "ent_mppt1_power"
+CONF_ENT_MPPT1_VOLTAGE = "ent_mppt1_voltage"
+CONF_ENT_MPPT1_CURRENT = "ent_mppt1_current"
+CONF_ENT_MPPT2_POWER = "ent_mppt2_power"
+CONF_ENT_MPPT2_VOLTAGE = "ent_mppt2_voltage"
+CONF_ENT_MPPT2_CURRENT = "ent_mppt2_current"
+CONF_ENT_GRID_FREQUENCY = "ent_grid_frequency"
+CONF_ENT_PV_ENERGY_TODAY = "ent_pv_energy_today"
+CONF_ENT_PV_ENERGY_TOTAL = "ent_pv_energy_total"
+CONF_ENT_LOAD_ENERGY_TODAY = "ent_load_energy_today"
+CONF_ENT_LOAD_ENERGY_TOTAL = "ent_load_energy_total"
+CONF_ENT_IMPORT_ENERGY_TODAY = "ent_import_energy_today"
+CONF_ENT_IMPORT_ENERGY_TOTAL = "ent_import_energy_total"
+CONF_ENT_EXPORT_ENERGY_TODAY = "ent_export_energy_today"
+CONF_ENT_EXPORT_ENERGY_TOTAL = "ent_export_energy_total"
+# Welcher Tigo-String an welchem MPPT hängt; leer = automatisch
+CONF_TIGO_MPPT1 = "tigo_string_mppt1"
+CONF_TIGO_MPPT2 = "tigo_string_mppt2"
+
+# Integration, aus der die Optimierer gelesen werden
+TIGO_DOMAIN = "tigo_rs485"
+
 # --- Kamin und Speicher ----------------------------------------------------
 CONF_ENT_STORAGE = "ent_storage"
 CONF_STORAGE_READY_DELTA_K = "storage_ready_delta_k"
@@ -130,6 +154,23 @@ SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
     CONF_ENT_ENERGY_ENV: "sensor.wp_umweltenergie",
     CONF_ENT_HEATER: "binary_sensor.wp_flanschheizung_e9",
     CONF_ENT_SECOND_HEAT: "binary_sensor.wp_2_warmeerzeuger",
+    # Namen aus einer Modbus-Konfiguration für ZCS Azzurro HYD (siehe README)
+    CONF_ENT_INV_STATUS: "sensor.azzurro_status",
+    CONF_ENT_MPPT1_POWER: "sensor.pv_power",
+    CONF_ENT_MPPT1_VOLTAGE: "sensor.azzurro_pv1_spannung",
+    CONF_ENT_MPPT1_CURRENT: "sensor.azzurro_pv1_strom",
+    CONF_ENT_MPPT2_POWER: "sensor.azzurro_pv2_leistung",
+    CONF_ENT_MPPT2_VOLTAGE: "sensor.azzurro_pv2_spannung",
+    CONF_ENT_MPPT2_CURRENT: "sensor.azzurro_pv2_strom",
+    CONF_ENT_GRID_FREQUENCY: "sensor.azzurro_netz_frequenz",
+    CONF_ENT_PV_ENERGY_TODAY: "sensor.pv_generation_today",
+    CONF_ENT_PV_ENERGY_TOTAL: "sensor.pv_generation_total",
+    CONF_ENT_LOAD_ENERGY_TODAY: "sensor.azzurro_hausverbrauch_heute",
+    CONF_ENT_LOAD_ENERGY_TOTAL: "sensor.azzurro_hausverbrauch_gesamt",
+    CONF_ENT_IMPORT_ENERGY_TODAY: "sensor.azzurro_netzbezug_heute",
+    CONF_ENT_IMPORT_ENERGY_TOTAL: "sensor.azzurro_netzbezug_gesamt",
+    CONF_ENT_EXPORT_ENERGY_TODAY: "sensor.azzurro_netzeinspeisung_heute",
+    CONF_ENT_EXPORT_ENERGY_TOTAL: "sensor.azzurro_netzeinspeisung_gesamt",
     CONF_EXPORT_EXTRA: [
         "sensor.wp_statuscode",
         "sensor.wp_sperrcode",

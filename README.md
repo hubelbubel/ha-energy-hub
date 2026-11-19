@@ -2,13 +2,13 @@
 
 Eine Integration für Home Assistant, die Strom und Wärme eines Hauses in der Seitenleiste zusammenführt: woher der Strom kommt und wohin er geht, was die Wärmepumpe tut, und was in der letzten Woche gut lief und was auffiel. Die Heizung wird nach PV-Überschuss und PV-Prognose angehoben oder abgesenkt; jede Schaltung steht mit Uhrzeit und Begründung im Logbuch.
 
-Entstanden für ein Haus mit Dimplex-Wärmepumpe (Modbus RTU), wasserführendem Kamin, PV, Batterie und Wallbox. Die Integration selbst ist herstellerneutral: Sie arbeitet mit beliebigen Entitäten, die du bei der Einrichtung auswählst.
+Entstanden für ein Haus mit Dimplex-Wärmepumpe (Modbus RTU), wasserführendem Kamin, PV mit ZCS-Azzurro-Wechselrichter und Tigo-Optimierern, Batterie und Wallbox. Die Integration selbst ist herstellerneutral: Sie arbeitet mit beliebigen Entitäten, die du bei der Einrichtung auswählst.
 
 ![Übersicht mit Beispieldaten](docs/uebersicht.png)
 
-Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Weitere: [Strom](docs/strom.png), [Wärme hell](docs/panel-hell.png), [Wärme dunkel](docs/panel-dunkel.png).
+Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Weitere: [Strom](docs/strom.png), [PV](docs/pv.png), [Wärme hell](docs/panel-hell.png), [Wärme dunkel](docs/panel-dunkel.png).
 
-## Die drei Bereiche
+## Die vier Bereiche
 
 **Übersicht**
 
@@ -22,6 +22,18 @@ Die Bilder zeigen erfundene Beispieldaten aus `dev/preview.html`. Weitere: [Stro
 - Bilanz jetzt und Kennwerte von heute: Verbrauch, Erzeugung, Eigenverbrauch, Autarkie, Netzbezug, Einspeisung, Batterie, Wärmepumpe, Wallbox
 - Verlauf über 24 Stunden, 48 Stunden oder 7 Tage: Erzeugung und Verbrauch, Netz, Batterie, Ladestand, Verbraucher
 - Rangliste der Verbraucher von heute
+
+**PV** – Wechselrichter und Tigo-Optimierer zusammen, nur Anzeige.
+
+- was das Dach gerade liefert, wie viel heute erzeugt wurde, ob sich alle Optimierer melden und welches Paneel gerade zurückfällt
+- „Paneele jetzt“: eine Kachel je Optimierer mit aktueller Leistung; ein Klick hebt das Paneel im Verlauf hervor
+- Kennwerte: Erzeugung heute (Wechselrichter, darunter die Optimierer), Spitze, Eigenverbrauch, Hausverbrauch, Spannung und Strom je MPPT, Status des Wechselrichters, Optimierer
+- Verlauf über 24 Stunden, 48 Stunden oder 7 Tage, umschaltbar:
+  - Anlage: Leistung am Wechselrichter gegen die Summe der Optimierer, Spannung am MPPT gegen die Summe der Ausgangsspannungen, Strom je MPPT
+  - Paneele: Leistung, Spannung, Strom oder Temperatur aller Paneele; die übrigen grau, bis zu sieben farbig hervorgehoben, dazu der Median
+- Wechselrichter und Optimierer im Vergleich, je String: jetzt und heute
+- Paneele heute: Ertrag je Paneel und Anteil am Median im String
+- Auswertung der letzten 7 Tage und Export
 
 **Wärme** – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch, Regeln, Handbetrieb und Export. Alles Weitere dazu steht unten.
 
@@ -47,6 +59,49 @@ Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“ (elektrische Leistung).
 - Die Werte von heute hinken bis zu zehn Minuten nach, weil Home Assistant die Statistik in 5-Minuten-Blöcken schreibt.
 - Sensoren ohne Statistik (ohne `state_class: measurement`) werden aus dem Verlauf gelesen; das ist langsamer.
 
+## PV: Wechselrichter und Optimierer
+
+Im Schritt „Wechselrichter“ wählst du die Sensoren deines Wechselrichters. Alles ist freiwillig; was fehlt, wird im Bereich PV weggelassen.
+
+| Einstellung | Hinweis |
+|---|---|
+| Status des Wechselrichters | Text oder Code. Die Codes 0 bis 7 von ZCS Azzurro und Sofar (Register 1028) werden übersetzt: 0 wartet, 1 prüft, 2 am Netz, 3 Notstrom, 4 behebbarer Fehler, 5 dauerhafter Fehler, 6 Update, 7 Selbstladung |
+| MPPT 1 und 2: Leistung, Spannung, Strom | Leistung leer lassen, dann wird sie aus Spannung mal Strom berechnet |
+| Erzeugung, Hausverbrauch, Netzbezug, Einspeisung | Zähler des Wechselrichters in kWh, je „heute“ und „gesamt“ |
+| Netzfrequenz | Anzeige und Export |
+| Tigo-String an MPPT 1 und 2 | Name des Strings wie in tigo_rs485, zum Beispiel `A`. Leer: Ein einziger String gehört zu MPPT 1, zwei Strings bei zwei MPPTs in ihrer Reihenfolge |
+
+Die Vorschläge passen zu einer Modbus-Konfiguration für ZCS Azzurro HYD mit Entitäten wie `sensor.pv_power` (Register 1414, Leistung an PV1), `sensor.azzurro_pv1_spannung` und `sensor.pv_generation_today`. Wer Energy Hub schon eingerichtet hatte, bekommt sie beim ersten Öffnen des Schritts eingetragen, soweit es die Entitäten gibt.
+
+Die **Gesamtleistung** kommt aus „Leistung der PV-Anlage“ im Schritt Strom, sonst aus der Summe der MPPTs.
+
+Die **Optimierer** findet das Panel selbst, wenn die Integration [tigo_rs485](https://github.com/Zwer2k/ha-tigo-rs485) eingerichtet ist. Gelesen wird das Entitätsregister, nicht die Namen der Entitäten: Umbenennen stört also nicht. Es zählen nur Optimierer mit Label; der String kommt aus deren Einstellungen (sonst aus dem Label, A1 gehört zu A). Die Werte stammen aus der Statistik von Home Assistant, für 24 und 48 Stunden in 5-Minuten-Schritten, für 7 Tage als Stundenwerte.
+
+Was verglichen wird:
+
+- **Leistung:** Die Optimierer messen am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit.
+- **Spannung:** Die Ausgangsspannungen der Optimierer eines Strings addieren sich und sollten nahe an der Spannung des MPPT liegen.
+- **Paneele untereinander:** jedes Paneel gegen den Median der Paneele im selben String. Der Median ist robust gegen einzelne Ausreißer.
+
+### Auswertung der PV
+
+Die Aussagen erscheinen im Bereich PV und in der Übersicht. Grundlage sind Stundenwerte der letzten sieben Kalendertage. Ein Tag zählt nur, wenn das mittlere Paneel mindestens 0,15 kWh geliefert hat.
+
+| Aussage | Bedingung |
+|---|---|
+| Der Wechselrichter meldete einen Fehler | Status 4 oder 5 (oder ein Text mit „Fehler“, „Fault“, „Störung“) |
+| PV-Ertrag in 7 Tagen | Summe am Wechselrichter, sonst der Optimierer; ohne Bewertung |
+| Optimierer und Wechselrichter stimmen überein | höchstens 6 % Unterschied über die Woche, je String |
+| Am Wechselrichter kommt weniger an | über 12 % weniger als die Optimierer messen |
+| Der Wechselrichter misst mehr als die Optimierer | über 6 % mehr, etwa wenn Module ohne Optimierer im String hängen |
+| Paneel liefert dauerhaft weniger | unter 90 % des Medians an mindestens 60 % der Tage, bei mindestens 3 Tagen; höchstens drei |
+| Paneel fällt zu einer Tageszeit ab | aufeinanderfolgende Stunden unter 80 % des Medians, sonst mindestens 90 %; gezählt werden Stunden mit mindestens 15 % der stärksten Stunde |
+| Optimierer meldet sich zeitweise nicht | in mindestens 2 Stunden fiel er auf 0 W, während der Median der anderen mindestens 20 W betrug |
+| Optimierer wurde heiß | ab 75 °C |
+| Alle Paneele liefern gleichmäßig | jedes Paneel mindestens 95 % des Medians |
+
+Die Schwellen sind Setzungen dieses Projekts und stehen in `PV_LIMITS` im Panel.
+
 ## Auswertung der letzten sieben Tage
 
 Die Aussagen in der Übersicht sind feste Regeln mit Zahlen, kein Sprachmodell. Jede erscheint nur, wenn die nötigen Sensoren hinterlegt sind. Die Schwellen sind Setzungen dieses Projekts.
@@ -71,7 +126,7 @@ Die Aussagen in der Übersicht sind feste Regeln mit Zahlen, kein Sprachmodell. 
 
 ## Stand
 
-Version 0.4.0. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Exporte durch 15 und die Rechnungen für Strom und Auswertung durch 9 weitere. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.0. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 9 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (14 Optimierer an einem MPPT), noch nicht an der echten Anlage. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -97,7 +152,7 @@ Version 0.4.0. Die Regellogik und die Abläufe im Regler sind durch 39 automatis
 
 **Von Hand:** den Ordner `custom_components/energy_hub` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
-Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“. Die Einrichtung fragt in sieben Schritten nach Wärmepumpe, Strom, Photovoltaik, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
+Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“. Die Einrichtung fragt in acht Schritten nach Wärmepumpe, Strom, Photovoltaik, Wechselrichter, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
 
 ## Wie geregelt wird
 
@@ -154,11 +209,11 @@ Im Panel erscheint dann:
 
 ## Export
 
-Im Bereich Wärme öffnet „Export“ oben einen Dialog mit Inhalt und Zeitraum (24 Stunden, 7 Tage, 30 Tage). Die Datei wird im Browser aus dem Verlauf von Home Assistant berechnet und dann heruntergeladen; wo der Browser es unterstützt, erscheint zusätzlich „Teilen“.
+Im Bereich Wärme öffnet „Export“ oben einen Dialog mit Inhalt und Zeitraum (24 Stunden, 7 Tage, 30 Tage). Im Bereich PV öffnet derselbe Knopf den PV-Export (siehe unten). Die Datei wird im Browser aus dem Verlauf von Home Assistant berechnet und dann heruntergeladen; wo der Browser es unterstützt, erscheint zusätzlich „Teilen“.
 
 ![Export-Dialog mit Auswahl von Inhalt und Zeitraum](docs/export-dialog.png)
 
-Beide Dateien sind UTF-8 mit Komma als Trenner und Dezimalpunkt. Am Anfang stehen Zeilen mit `#`: Version, Zeitraum, Erklärung der Spalten, alle Regeln und welcher Sensor hinter welcher Spalte steckt. Nicht hinterlegte Sensoren ergeben leere Spalten, das Spaltenschema bleibt gleich.
+Alle Dateien sind UTF-8 mit Komma als Trenner und Dezimalpunkt. Am Anfang stehen Zeilen mit `#`: Version, Zeitraum, Erklärung der Spalten, alle Regeln und welcher Sensor hinter welcher Spalte steckt. Nicht hinterlegte Sensoren ergeben leere Spalten, das Spaltenschema bleibt gleich.
 
 **Verlauf und Entscheidungen** – eine Zeile je Zeitraster (1, 5 oder 15 Minuten):
 
@@ -177,6 +232,15 @@ Beide Dateien sind UTF-8 mit Komma als Trenner und Dezimalpunkt. Am Anfang stehe
 Die Stundenwerte enthalten dazu Speicher- und Kamintemperatur, Minuten mit brennendem Kamin, mit bereitem Speicher und mit Sperre „Regenerativ“. So lässt sich Kamin-Wärme von der Arbeit der Wärmepumpe trennen; in deren Wärmemengen steckt sie nicht.
 
 Daraus lassen sich Arbeitszahl je Tag, je Betriebsart und je Lauf, Taktung, Abtauanteil, Heizstab-Einsatz und der Einfluss des Anhebens berechnen. Je mehr unter „Effizienz und Export“ hinterlegt ist (Stromzähler, Wärmemengen, Heizstab), desto belastbarer wird die Auswertung. Ohne Zähler wird aus den Leistungs-Sensoren aufsummiert.
+
+**Photovoltaik** (im Bereich PV) – eine Datei mit vier Tabellen, Zeitraum 24 Stunden oder 7 Tage in 5-Minuten-Schritten, 30 Tage in Stunden. Die Werte kommen aus der Statistik von Home Assistant; nur der Status des Wechselrichters aus dem Verlauf.
+
+- `anlage`: Leistung, Spannung und Strom je MPPT, Netzfrequenz, die Tageszähler des Wechselrichters, Status als Text und die Summe der Optimierer (bei mehreren Strings auch je String)
+- `paneele`: eine Zeile je Zeitpunkt und Paneel mit Leistung, Eingangs- und Ausgangsspannung, Strom, Temperatur und PWM; Nachtzeilen ohne Leistung und Temperatur entfallen
+- `tage_paneele`: Ertrag je Tag und Paneel, Anteil am Median im String, Spitze und höchste Temperatur
+- `tage_anlage`: Erzeugung laut Wechselrichter (Zähler, sonst aus der Leistung), Summe der Optimierer, Abweichung, Hausverbrauch, Netzbezug, Einspeisung und Minuten im Fehlerzustand
+
+Mit 14 Optimierern sind 7 Tage knapp 1 MB groß. Die 5-Minuten-Werte bewahrt Home Assistant standardmäßig zehn Tage auf, Stundenwerte dauerhaft.
 
 Zu beachten:
 
@@ -203,8 +267,8 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 ## Entwicklung
 
 ```bash
-pytest tests                       # Regellogik und Abläufe im Regler, ohne Home Assistant
-node --test tests/test_export.mjs tests/test_energy.mjs   # Rechenfunktionen für Exporte, Strom und Auswertung
+pytest tests                       # Regellogik, Abläufe im Regler, Erkennung der Optimierer, ohne Home Assistant
+node --test tests/test_export.mjs tests/test_energy.mjs tests/test_pv.mjs   # Rechenfunktionen für Exporte, Strom, PV und Auswertung
 python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
 python3 dev/screenshot.py /tmp/shots   # Panel rendern und beide Exporte erzeugen (braucht Playwright und Chrome)
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
@@ -217,6 +281,7 @@ Aufbau:
 | `logic.py` | Entscheidung aus Messwerten und Einstellungen, ohne Home-Assistant-Importe |
 | `controller.py` | Messwerte lesen, entscheiden lassen, stellen, nachführen, Logbuch führen |
 | `config_flow.py` | Einrichtung und Einstellungen |
-| `websocket_api.py` | Schnittstelle zwischen Panel und Regler |
-| `frontend/energy-hub-panel.js` | Panel mit den drei Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
+| `websocket_api.py` | Schnittstelle zwischen Panel und Regler, dazu die Liste der Tigo-Optimierer |
+| `tigo.py` | Optimierer, Strings und ihre Entitäten aus dem Entitätsregister von tigo_rs485, ohne Home-Assistant-Importe |
+| `frontend/energy-hub-panel.js` | Panel mit den vier Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 

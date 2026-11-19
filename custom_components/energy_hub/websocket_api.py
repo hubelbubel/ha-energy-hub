@@ -7,8 +7,10 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 
 from . import const as c
+from .tigo import RegistryEntity, build_layout
 
 
 def _controller(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]):
@@ -102,7 +104,35 @@ async def ws_clear_log(
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command({vol.Required("type"): f"{c.DOMAIN}/pv_layout"})
+@callback
+def ws_pv_layout(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Tigo-Optimierer mit String und Entitäten, gelesen aus dem Entitätsregister."""
+    entries = [(entry.entry_id, dict(entry.options)) for entry in hass.config_entries.async_entries(c.TIGO_DOMAIN)]
+    registry = er.async_get(hass)
+    entities = [
+        RegistryEntity(
+            entity_id=ent.entity_id,
+            unique_id=str(ent.unique_id),
+            config_entry_id=ent.config_entry_id or "",
+            disabled=ent.disabled_by is not None,
+        )
+        for ent in registry.entities.values()
+        if ent.platform == c.TIGO_DOMAIN and ent.entity_id.startswith("sensor.")
+    ]
+    connection.send_result(msg["id"], {"found": bool(entries), **build_layout(entries, entities)})
+
+
 @callback
 def async_register_websocket(hass: HomeAssistant) -> None:
-    for command in (ws_subscribe, ws_set_automation, ws_set_override, ws_clear_override, ws_clear_log):
+    for command in (
+        ws_subscribe,
+        ws_set_automation,
+        ws_set_override,
+        ws_clear_override,
+        ws_clear_log,
+        ws_pv_layout,
+    ):
         websocket_api.async_register_command(hass, command)

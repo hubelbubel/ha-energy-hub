@@ -5,6 +5,7 @@
  * Bereiche:
  *   Übersicht – der Tag in einem Satz, Strombilanz, Verbrauch je Stunde nach Herkunft, Auswertung der Woche
  *   Strom     – Bilanz jetzt, Kennwerte von heute, Verlauf von Netz, Batterie und Verbrauchern, Rangliste
+ *   PV        – Wechselrichter und Tigo-Optimierer: Paneele jetzt, Verlauf je Paneel, Abgleich, Auswertung, Export
  *   Wärme     – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch und Regeln, Export
  */
 
@@ -30,6 +31,15 @@ const SERIES = [
   { key: "outdoor", ent: "ent_outdoor", name: "Außen", cls: "s-outdoor" },
 ];
 
+// Paneele, die im Verlauf gleichzeitig farbig hervorgehoben werden können (Farben --p1 bis --p7)
+const PANEL_SLOTS = 7;
+const PV_INVERTER_KEYS = [
+  "ent_inv_status", "ent_mppt1_power", "ent_mppt1_voltage", "ent_mppt1_current", "ent_mppt2_power",
+  "ent_mppt2_voltage", "ent_mppt2_current", "ent_grid_frequency", "ent_pv_energy_today", "ent_pv_energy_total",
+  "ent_load_energy_today", "ent_load_energy_total", "ent_import_energy_today", "ent_import_energy_total",
+  "ent_export_energy_today", "ent_export_energy_total",
+];
+
 /* ---------------------------------------------------------------- Helfer */
 
 const nf0 = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 });
@@ -45,6 +55,12 @@ const fmtKwh = (v) => (isNum(v) ? `${nf1.format(v)} kWh` : "–");
 const fmtC = (v) => (isNum(v) ? `${nf1.format(v)} °C` : "–");
 const fmtClock = (iso) => (iso ? `${tfTime.format(new Date(iso))} Uhr` : "");
 const hhmm = (text) => String(text || "").slice(0, 5);
+const PV_METRICS = [
+  { key: "power", label: "Leistung", unit: "Watt", fmt: (v) => fmtW(v) },
+  { key: "voltage_in", label: "Spannung", unit: "Volt", fmt: (v) => (isNum(v) ? `${nf1.format(v)} V` : "–") },
+  { key: "current", label: "Strom", unit: "Ampere", fmt: (v) => (isNum(v) ? `${new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)} A` : "–") },
+  { key: "temperature", label: "Temperatur", unit: "°C", fmt: (v) => fmtC(v) },
+];
 
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
@@ -71,6 +87,21 @@ function s(tag, attrs, ...children) {
     el.append(child.nodeType ? child : document.createTextNode(String(child)));
   }
   return el;
+}
+
+/** Gruppe von Umschaltern; genau einer ist gedrückt. items: [[Wert, Text]] */
+function segmented(label, items, selected, onPick) {
+  const group = h("div", { class: "seg", role: "group", "aria-label": label });
+  for (const [value, text] of items) {
+    group.append(h("button", {
+      "aria-pressed": String(value === selected),
+      onclick: (e) => {
+        for (const b of group.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+        onPick(value);
+      },
+    }, text));
+  }
+  return group;
 }
 
 function minutesSince(iso) {
@@ -840,6 +871,405 @@ export function heatFindings(agg) {
   return out;
 }
 
+/* ------------------------------------------------------------- Photovoltaik */
+
+/** Betriebszustände von ZCS Azzurro und Sofar (Register 0x0404). */
+export const INVERTER_STATUS = {
+  0: "Wartet", 1: "Prüft", 2: "Am Netz", 3: "Notstrom", 4: "Behebbarer Fehler",
+  5: "Dauerhafter Fehler", 6: "Update", 7: "Selbstladung",
+};
+
+/** Status des Wechselrichters als Text; Codes 0 bis 7 werden übersetzt. fault = Fehlerzustand. */
+export function inverterStatus(raw) {
+  if (isGap(raw)) return null;
+  const text = String(raw).trim();
+  const code = /^\d+(\.0+)?$/.test(text) ? Number(text) : null;
+  if (code !== null) {
+    const name = INVERTER_STATUS[code];
+    return { code, text: name ?? `Code ${code}`, fault: code === 4 || code === 5, ok: code === 2 };
+  }
+  return { code: null, text, fault: /fehler|fault|error|störung/i.test(text), ok: /netz|grid|normal/i.test(text) };
+}
+
+export function median(values) {
+  const v = values.filter(isNum).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+/**
+ * Tigo-Strings mit ihren Paneelen und dem MPPT, an dem sie hängen.
+ * Zuordnung aus den Einstellungen (tigo_string_mppt1/2); ohne sie: ein einziger String
+ * gehört zu MPPT 1, zwei Strings bei zwei MPPTs in ihrer Reihenfolge.
+ */
+export function pvStrings(layout, settings = {}, entities = {}) {
+  const panels = layout?.panels || [];
+  const names = [];
+  for (const s of layout?.strings || []) if (!names.includes(s.name)) names.push(s.name);
+  for (const p of panels) if (p.string && !names.includes(p.string)) names.push(p.string);
+  const out = names.map((name) => ({ name, panels: panels.filter((p) => p.string === name).map((p) => p.label), mppt: null }));
+  const loose = panels.filter((p) => !p.string).map((p) => p.label);
+  if (loose.length) out.push({ name: null, panels: loose, mppt: null });
+  const has = (k) => Boolean(entities[`ent_mppt${k}_power`] || (entities[`ent_mppt${k}_voltage`] && entities[`ent_mppt${k}_current`]));
+  const wanted = [1, 2].map((k) => String(settings[`tigo_string_mppt${k}`] ?? "").trim().toLowerCase());
+  if (wanted.some(Boolean)) {
+    for (const s of out) {
+      const k = wanted.indexOf(String(s.name ?? "").toLowerCase());
+      if (s.name !== null && k >= 0) s.mppt = k + 1;
+    }
+  } else {
+    const named = out.filter((s) => s.name !== null && s.panels.length);
+    const all = out.filter((s) => s.panels.length);
+    if (all.length === 1 && has(1)) all[0].mppt = 1;
+    else if (named.length === 2 && all.length === 2 && has(1) && has(2)) [named[0].mppt, named[1].mppt] = [1, 2];
+  }
+  return out.filter((s) => s.panels.length);
+}
+
+/** Schwellen der PV-Auswertung. Setzungen dieses Projekts, siehe README. */
+export const PV_LIMITS = {
+  dayMinKwh: 0.15, // Tage, an denen das mittlere Paneel weniger liefert, zählen nicht
+  weakRatio: 0.9, // dauerhaft schwächer: unter 90 % des Medians ...
+  weakDayShare: 0.6, // ... an mindestens 60 % der Tage
+  shadeRatio: 0.8, // zeitweise schwächer: in einzelnen Stunden unter 80 %
+  shadeHourShare: 0.15, // nur Stunden mit mindestens 15 % der stärksten Stunde
+  evenRatio: 0.95, // gleichmäßig: alle Paneele mindestens 95 %
+  dropoutW: 1, // Paneel auf 0 W ...
+  dropoutOthersW: 20, // ... während die anderen im String mindestens 20 W lieferten
+  dropoutMinHours: 2,
+  hotC: 75,
+  matchDev: 0.06, // Optimierer und Wechselrichter stimmen überein bis 6 %
+  lossDev: 0.12, // auffällig, wenn am Wechselrichter über 12 % weniger ankommt
+};
+
+/**
+ * Auswertung der Optimierer über einen Zeitraum, gedacht für Stundenwerte über 7 Tage.
+ * input: { t0, step, n,
+ *   panels: [{ label, string, power: [W], powerMin?: [W], tempMax?: [°C] }],
+ *   strings: [{ name, mppt, panels: [label], inv?: [W] }], total?: [W] }
+ * Liefert je Paneel, String und Tag die Energie und das Verhältnis zum Median im String.
+ */
+export function pvAnalysis({ t0, step, n, panels, strings = [], total = null }) {
+  const factor = step / 3.6e9;
+  const L = PV_LIMITS;
+  const dayOf = (b) => {
+    const d = new Date(t0 + b * step);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const days = [];
+  const dayIdx = new Array(n);
+  for (let b = 0; b < n; b++) {
+    const d = dayOf(b);
+    if (days.at(-1) !== d) days.push(d);
+    dayIdx[b] = days.length - 1;
+  }
+  const byLabel = new Map(panels.map((p) => [p.label, p]));
+  const sumDays = (arr) => {
+    const out = new Array(days.length).fill(null);
+    if (!arr) return out;
+    for (let b = 0; b < n; b++) {
+      if (!isNum(arr[b])) continue;
+      out[dayIdx[b]] = (out[dayIdx[b]] ?? 0) + arr[b] * factor;
+    }
+    return out;
+  };
+  const groups = strings.length ? strings : [{ name: null, mppt: null, panels: panels.map((p) => p.label) }];
+  const panelOut = [];
+  const stringOut = [];
+  for (const s of groups) {
+    const members = s.panels.map((label) => byLabel.get(label)).filter(Boolean);
+    const kwhDays = new Map(members.map((p) => [p.label, sumDays(p.power)]));
+    const med = days.map((_d, i) => median(members.map((p) => kwhDays.get(p.label)[i])));
+    const valid = med.map((m) => isNum(m) && m >= L.dayMinKwh);
+    // Energie je Stunde des Tages, nur an gültigen Tagen
+    const hourly = new Map(members.map((p) => {
+      const e = new Array(24).fill(0);
+      for (let b = 0; b < n; b++) {
+        if (valid[dayIdx[b]] && isNum(p.power[b])) e[new Date(t0 + b * step).getHours()] += p.power[b] * factor;
+      }
+      return [p.label, e];
+    }));
+    const medHour = Array.from({ length: 24 }, (_x, hr) => median(members.map((p) => hourly.get(p.label)[hr])) ?? 0);
+    const peakHour = Math.max(0, ...medHour);
+    for (const p of members) {
+      const kd = kwhDays.get(p.label);
+      let own = 0;
+      let ref = 0;
+      let validDays = 0;
+      let below = 0;
+      const ratios = days.map((_d, i) => {
+        if (!valid[i] || !isNum(kd[i])) return null;
+        own += kd[i];
+        ref += med[i];
+        validDays += 1;
+        const r = kd[i] / med[i];
+        if (r < L.weakRatio) below += 1;
+        return r;
+      });
+      // längster Abschnitt aufeinanderfolgender Stunden unter der Schwelle
+      let run = null;
+      let cur = null;
+      for (let hr = 0; hr < 24; hr++) {
+        const considered = peakHour > 0 && medHour[hr] >= L.shadeHourShare * peakHour;
+        const r = considered ? hourly.get(p.label)[hr] / medHour[hr] : null;
+        if (r !== null && r < L.shadeRatio) {
+          cur = cur ? { ...cur, to: hr + 1, own: cur.own + hourly.get(p.label)[hr], ref: cur.ref + medHour[hr] }
+            : { from: hr, to: hr + 1, own: hourly.get(p.label)[hr], ref: medHour[hr] };
+          if (!run || cur.to - cur.from > run.to - run.from) run = cur;
+        } else {
+          cur = null;
+        }
+      }
+      // Aussetzer: Paneel auf 0 W, während die anderen im String liefern
+      let dropouts = 0;
+      if (members.length >= 3) {
+        for (let b = 0; b < n; b++) {
+          const mine = (p.powerMin || p.power)[b];
+          if (!isNum(mine) || mine > L.dropoutW) continue;
+          const others = median(members.filter((q) => q !== p).map((q) => (q.powerMin || q.power)[b]));
+          if (isNum(others) && others >= L.dropoutOthersW) dropouts += 1;
+        }
+      }
+      const temps = (p.tempMax || []).filter(isNum);
+      panelOut.push({
+        label: p.label, string: s.name,
+        kwh: kd.reduce((sum, v) => sum + (v ?? 0), 0),
+        kwhDays: kd,
+        ratioDays: ratios,
+        ratio: ref > 0 ? own / ref : null,
+        validDays, below,
+        shade: run ? {
+          from: run.from, to: run.to, ratio: run.ref > 0 ? run.own / run.ref : null,
+          // Anteil am Median in den übrigen Stunden: liegt er hoch, erklärt der Schatten die Einbuße
+          outside: (() => {
+            let own2 = 0;
+            let ref2 = 0;
+            for (let hr = 0; hr < 24; hr++) {
+              if (hr >= run.from && hr < run.to) continue;
+              own2 += hourly.get(p.label)[hr];
+              ref2 += medHour[hr];
+            }
+            return ref2 > 0 ? own2 / ref2 : null;
+          })(),
+        } : null,
+        dropouts, dropoutMin: (dropouts * step) / 60000,
+        tempMax: temps.length ? Math.max(...temps) : null,
+      });
+    }
+    // Abgleich mit dem MPPT: nur Raster, in denen alle Optimierer des Strings und der MPPT einen Wert haben
+    let tigo = 0;
+    let inv = 0;
+    let covered = 0;
+    if (s.inv) {
+      for (let b = 0; b < n; b++) {
+        if (!isNum(s.inv[b]) || !members.length || members.some((p) => !isNum(p.power[b]))) continue;
+        tigo += members.reduce((sum, p) => sum + p.power[b], 0) * factor;
+        inv += Math.max(0, s.inv[b]) * factor;
+        covered += 1;
+      }
+    }
+    stringOut.push({
+      name: s.name, mppt: s.mppt ?? null, panels: members.length,
+      medDays: med, validDays: valid.filter(Boolean).length,
+      tigoKwh: covered ? tigo : null, invKwh: covered ? inv : null,
+      dev: covered && inv >= 1 ? tigo / inv - 1 : null,
+    });
+  }
+  const tigoDays = days.map((_d, i) => {
+    const vals = panelOut.map((p) => p.kwhDays[i]).filter(isNum);
+    return vals.length ? vals.reduce((x, y) => x + y, 0) : null;
+  });
+  return { t0, step, n, days, panels: panelOut, strings: stringOut, tigoDays, invDays: total ? sumDays(total) : null };
+}
+
+const hourSpan = (from, to) => `zwischen ${from} und ${to} Uhr`;
+
+/**
+ * Auffälligkeiten bei der PV aus pvAnalysis. faults: { count, minutes } aus dem Status des Wechselrichters.
+ * Jede Aussage nennt ihre Zahlen; tone wie bei powerFindings.
+ */
+export function pvFindings(a, faults = null) {
+  const out = [];
+  if (!a) return out;
+  const L = PV_LIMITS;
+  const kwh = (v) => `${nf1.format(v)} kWh`;
+  const where = (p) => (p.string ? ` im String ${p.string}` : "");
+  if (faults && faults.count > 0) {
+    out.push({ tone: "warn", area: "PV", title: "Der Wechselrichter meldete einen Fehler",
+      text: `${faults.count}-mal, zusammen ${fmtDur(faults.minutes)}. Den genauen Fehlercode zeigt das Display oder die App des Wechselrichters.` });
+  }
+  const total = a.invDays?.some(isNum) ? a.invDays : a.tigoDays;
+  if (total.some(isNum)) {
+    const sum = total.reduce((x, y) => x + (y ?? 0), 0);
+    let best = 0;
+    total.forEach((v, i) => { if ((v ?? -1) > (total[best] ?? -1)) best = i; });
+    if (sum >= 0.5) {
+      out.push({ tone: "info", area: "PV", title: `PV-Ertrag ${kwh(sum)} in ${a.days.length} Tagen`,
+        text: `Bester Tag: ${tfShortDay.format(new Date(a.days[best]))} mit ${kwh(total[best])}. ${a.invDays?.some(isNum) ? "Gemessen am Wechselrichter." : "Summe der Optimierer."}` });
+    }
+  }
+  for (const s of a.strings) {
+    if (s.dev === null) continue;
+    const label = s.name ? `String ${s.name}` : "Optimierer";
+    const at = s.mppt ? `am MPPT ${s.mppt}` : "am Wechselrichter";
+    const numbers = `${label}: ${kwh(s.tigoKwh)} laut Tigo, ${kwh(s.invKwh)} ${at}.`;
+    if (Math.abs(s.dev) <= L.matchDev) {
+      out.push({ tone: "good", area: "PV", title: "Optimierer und Wechselrichter stimmen überein",
+        text: `${numbers} Das sind ${fmtPct(Math.abs(s.dev))} Unterschied, so viel kosten Optimierer und Kabel.` });
+    } else if (s.dev > L.lossDev) {
+      out.push({ tone: "warn", area: "PV", title: `Am Wechselrichter kommt ${fmtPct(1 - 1 / (1 + s.dev))} weniger an`,
+        text: `${numbers} Üblich sind wenige Prozent. Prüfe, ob alle Optimierer im richtigen String eingetragen sind und ob die Kabel in Ordnung sind.` });
+    } else if (s.dev < -L.matchDev) {
+      out.push({ tone: "info", area: "PV", title: "Der Wechselrichter misst mehr als die Optimierer",
+        text: `${numbers} Das passt, wenn Module ohne Optimierer im String hängen oder einzelne Optimierer kein Label haben.` });
+    } else {
+      out.push({ tone: "info", area: "PV", title: `Optimierer messen ${fmtPct(s.dev)} mehr als der Wechselrichter`,
+        text: `${numbers} Verluste in Optimierern und Kabeln erklären einen Teil davon.` });
+    }
+  }
+  // Fällt ein Paneel nur zu bestimmten Stunden ab und liegt sonst im Rahmen, ist es Schatten, nicht dauerhaft schwächer
+  const shadeOnly = (p) => p.shade && isNum(p.shade.outside) && p.shade.outside >= L.weakRatio;
+  const weak = a.panels
+    .filter((p) => p.validDays >= 3 && isNum(p.ratio) && p.ratio < L.weakRatio && p.below >= L.weakDayShare * p.validDays && !shadeOnly(p))
+    .sort((x, y) => x.ratio - y.ratio);
+  for (const p of weak.slice(0, 3)) {
+    out.push({ tone: "warn", area: "PV", title: `Paneel ${p.label} liefert dauerhaft weniger`,
+      text: `Im Mittel ${fmtPct(p.ratio)} des Medians${where(p)}, an ${p.below} von ${p.validDays} Tagen unter ${fmtPct(L.weakRatio)}. Mögliche Ursachen: Verschattung, Verschmutzung, ein Defekt am Modul oder am Optimierer.` });
+  }
+  const weakSet = new Set(weak.map((p) => p.label));
+  const shaded = a.panels
+    .filter((p) => p.shade && p.validDays >= 3 && !weakSet.has(p.label) && isNum(p.shade.ratio))
+    .sort((x, y) => x.shade.ratio - y.shade.ratio);
+  for (const p of shaded.slice(0, 3)) {
+    out.push({ tone: "warn", area: "PV", title: `Paneel ${p.label} fällt ${hourSpan(p.shade.from, p.shade.to)} ab`,
+      text: `In diesen Stunden ${fmtPct(p.shade.ratio)} des Medians${where(p)}, in den übrigen ${fmtPct(p.shade.outside)}, über den Tag ${fmtPct(p.ratio)}. Das sieht nach Schatten zu dieser Tageszeit aus, etwa von einem Baum, Kamin oder Nachbarhaus.` });
+  }
+  const dropped = a.panels.filter((p) => p.dropouts >= L.dropoutMinHours * (3.6e6 / a.step)).sort((x, y) => y.dropouts - x.dropouts);
+  for (const p of dropped.slice(0, 3)) {
+    const when = a.step >= 3600e3 ? `In ${p.dropouts} Stunden fiel er zeitweise` : `Zusammen ${fmtDur(p.dropoutMin)} lang fiel er`;
+    out.push({ tone: "warn", area: "PV", title: `Optimierer ${p.label} meldet sich zeitweise nicht`,
+      text: `${when} auf 0 W, während die anderen${where(p)} Strom lieferten. Das deutet auf eine abreißende Funkverbindung zum TAP oder einen Optimierer, der abschaltet.` });
+  }
+  for (const p of a.panels.filter((x) => isNum(x.tempMax) && x.tempMax >= L.hotC).sort((x, y) => y.tempMax - x.tempMax).slice(0, 2)) {
+    out.push({ tone: "warn", area: "PV", title: `Optimierer ${p.label} wurde ${nf0.format(p.tempMax)} °C heiß`,
+      text: "Optimierer sitzen hinter dem Modul. Ist es dort deutlich wärmer als bei den anderen, lohnt ein Blick auf Hinterlüftung und Montage." });
+  }
+  const rated = a.panels.filter((p) => p.validDays >= 3 && isNum(p.ratio));
+  if (rated.length >= 2 && !weak.length && !shaded.length && rated.every((p) => p.ratio >= L.evenRatio)) {
+    const low = rated.reduce((x, y) => (y.ratio < x.ratio ? y : x));
+    out.push({ tone: "good", area: "PV", title: "Alle Paneele liefern gleichmäßig",
+      text: `Das schwächste, ${low.label}, erreicht ${fmtPct(low.ratio)} des Medians seines Strings.` });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------- PV-Export */
+
+export const PV_EXPORT_RANGES = [
+  { hours: 24, step: 300e3, period: "5minute", label: "24 Stunden", detail: "ein Wert je 5 Minuten" },
+  { hours: 168, step: 300e3, period: "5minute", label: "7 Tage", detail: "ein Wert je 5 Minuten" },
+  { hours: 720, step: 3600e3, period: "hour", label: "30 Tage", detail: "ein Wert je Stunde" },
+];
+
+export const PV_PANEL_METRICS = [
+  ["power", "leistung_w"], ["voltage_in", "spannung_ein_v"], ["voltage_out", "spannung_aus_v"],
+  ["current", "strom_a"], ["temperature", "temperatur_c"], ["pwm", "pwm"],
+];
+
+/**
+ * CSV mit vier Tabellen, jede beginnt mit "# tabelle: name":
+ *   anlage        – Wechselrichter, MPPT und Summe der Optimierer je Raster
+ *   paneele       – eine Zeile je Raster und Paneel; Nachtzeilen ohne Werte entfallen
+ *   tage_paneele  – Ertrag je Tag und Paneel, Anteil am Median im String, Spitze, Temperatur, Aussetzer
+ *   tage_anlage   – Tageswerte des Wechselrichters und der Optimierer
+ * system: [{ name, entity, unit, values }]; panels: [{ label, string, values: { power: [...], ... } }]
+ * analysis: pvAnalysis über dasselbe Raster; counters: { pv, load, imp, exp } je Tag (Startzeit -> kWh)
+ */
+export function buildPvExport({ version, created, t0, step, n, system, panels, analysis, counters = {}, faultsByDay = {}, settings, entities }) {
+  const line = (cells) => cells.map(csvCell).join(",");
+  const filled = (b) => system.some((col) => col.values[b] !== null && col.values[b] !== undefined)
+    || panels.some((p) => Object.values(p.values).some((arr) => isNum(arr?.[b])));
+  let first = 0;
+  let last = n - 1;
+  while (first < n && !filled(first)) first++;
+  while (last >= first && !filled(last)) last--;
+  const rows = Math.max(0, last - first + 1);
+
+  const sysRows = [];
+  for (let b = first; b <= last; b++) sysRows.push(line([isoLocal(t0 + b * step), ...system.map((col) => col.values[b])]));
+  const panelRows = [];
+  for (let b = first; b <= last; b++) {
+    for (const p of panels) {
+      const vals = PV_PANEL_METRICS.map(([key]) => p.values[key]?.[b] ?? null);
+      const [power, , , , temp] = vals;
+      if (vals.every((v) => v === null) || (!(power > 0) && temp === null)) continue;
+      panelRows.push(line([isoLocal(t0 + b * step), p.label, p.string ?? "", ...vals]));
+    }
+  }
+  const dayRows = [];
+  const sysDayRows = [];
+  const date = (ms) => isoLocal(ms).slice(0, 10);
+  if (analysis) {
+    analysis.days.forEach((day, i) => {
+      for (const p of analysis.panels) {
+        const values = panels.find((x) => x.label === p.label)?.values || {};
+        let peak = null;
+        let hot = null;
+        for (let b = 0; b < n; b++) {
+          const d = new Date(t0 + b * step);
+          d.setHours(0, 0, 0, 0);
+          if (d.getTime() !== day) continue;
+          if (isNum(values.power?.[b])) peak = Math.max(peak ?? -Infinity, values.power[b]);
+          if (isNum(values.temperature?.[b])) hot = Math.max(hot ?? -Infinity, values.temperature[b]);
+        }
+        if (p.kwhDays[i] === null && peak === null) continue;
+        dayRows.push(line([date(day), p.label, p.string ?? "", p.kwhDays[i], p.ratioDays[i], peak, hot]));
+      }
+      // Der erste Tag liegt meist nur zum Teil im Zeitraum; die Zähler würden den ganzen Tag zählen
+      const partial = day < t0;
+      const count = (key) => (partial ? null : counters[key]?.[day] ?? null);
+      const tigo = analysis.tigoDays[i];
+      const inv = count("pv") ?? analysis.invDays?.[i] ?? null;
+      sysDayRows.push(line([date(day), inv, tigo, isNum(tigo) && inv > 0 ? tigo / inv - 1 : null,
+        count("load"), count("imp"), count("exp"), faultsByDay[day] ?? null]));
+    });
+  }
+  const meta = [
+    "Energy Hub Export Photovoltaik",
+    `version: ${version}`,
+    `erstellt: ${isoLocal(created)}`,
+    `von: ${rows ? isoLocal(t0 + first * step) : ""}`,
+    `bis: ${rows ? isoLocal(Math.min(created, t0 + (last + 1) * step)) : ""}`,
+    `raster_sekunden: ${step / 1000}`,
+    "quelle: Langzeitstatistik von Home Assistant (Mittelwert je Raster); Status aus dem Verlauf",
+    "zeit: Beginn des Rasters in Ortszeit; zahlen mit Dezimalpunkt; leer = kein Wert",
+    "tabellen: anlage, paneele, tage_paneele, tage_anlage; jede beginnt mit '# tabelle: name'",
+    "anlage.tigo_*: Summe der Eingangsleistung der Optimierer; wr_*: Messwerte des Wechselrichters",
+    "paneele: Zeilen ohne Leistung und ohne Temperatur (Nacht) entfallen; pwm ist der Rohwert 0 bis 255",
+    "tage_paneele.anteil_am_median: Ertrag geteilt durch den Median der Paneele im selben String; leer an Tagen unter "
+      + `${String(PV_LIMITS.dayMinKwh).replace(".", ",")} kWh je Paneel`,
+    "tage_anlage.wr_erzeugung_kwh: Zähler des Wechselrichters, sonst aus der Leistung aufsummiert; abweichung = tigo / wr - 1",
+    "tage_anlage: liegt der erste Tag nur zum Teil im Zeitraum, ist er aus der Leistung aufsummiert und die übrigen Zähler bleiben leer",
+    ...Object.entries(settings || {}).map(([k, v]) => `einstellung.${k}: ${v ?? ""}`),
+    ...system.map((col) => `spalte.anlage.${col.name}: ${col.entity || "nicht hinterlegt"}${col.unit ? ` [${col.unit}]` : ""}`),
+    ...panels.map((p) => `paneel.${p.label}: string ${p.string ?? "–"}; ${Object.values(p.entities || {}).join(", ")}`),
+    ...Object.entries(entities || {}).map(([k, v]) => `quelle.${k}: ${v || "nicht hinterlegt"}`),
+  ];
+  const out = [
+    ...meta.map((m) => `# ${String(m).replace(/[\r\n]+/g, " ")}`),
+    "# tabelle: anlage", line(["zeit", ...system.map((col) => col.name)]), ...sysRows,
+    "# tabelle: paneele", line(["zeit", "paneel", "string", ...PV_PANEL_METRICS.map(([, name]) => name)]), ...panelRows,
+    "# tabelle: tage_paneele",
+    line(["datum", "paneel", "string", "ertrag_kwh", "anteil_am_median", "spitze_w", "temperatur_max_c"]), ...dayRows,
+    "# tabelle: tage_anlage",
+    line(["datum", "wr_erzeugung_kwh", "tigo_kwh", "abweichung", "wr_hausverbrauch_kwh", "wr_netzbezug_kwh", "wr_einspeisung_kwh", "wr_fehler_min"]),
+    ...sysDayRows,
+  ];
+  return { csv: `﻿${out.join("\r\n")}\r\n`, rows, panelRows: panelRows.length, days: sysDayRows.length };
+}
+
 /* ------------------------------------------------------------------ Stile */
 
 const STYLE = `
@@ -857,6 +1287,7 @@ const STYLE = `
   --c-pv: #eda100;
   --c-store: #6250d6;
   --c-warn: #d03b3b;
+  --p1: #2a78d6; --p2: #eb6834; --p3: #1baf7a; --p4: #eda100; --p5: #e87ba4; --p6: #008300; --p7: #6250d6;
   display: block;
   min-height: 100vh;
   background: var(--plane);
@@ -873,6 +1304,7 @@ const STYLE = `
   --c-pv: #c98500;
   --c-store: #9085e9;
   --c-warn: #e66767;
+  --p1: #3987e5; --p2: #d95926; --p3: #199e70; --p4: #c98500; --p5: #d55181; --p6: #0ca30c; --p7: #9085e9;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -1076,6 +1508,52 @@ main[hidden] { display: none; }
   .bal-key { margin-left: 0; }
 }
 
+/* ---- PV ---- */
+.plots .line.dash { stroke-dasharray: 5 4; }
+.s-faint { color: color-mix(in srgb, var(--ink) 30%, transparent); stroke: color-mix(in srgb, var(--ink) 17%, transparent); }
+.s-p1 { color: var(--p1); stroke: var(--p1); } .s-p2 { color: var(--p2); stroke: var(--p2); }
+.s-p3 { color: var(--p3); stroke: var(--p3); } .s-p4 { color: var(--p4); stroke: var(--p4); }
+.s-p5 { color: var(--p5); stroke: var(--p5); } .s-p6 { color: var(--p6); stroke: var(--p6); }
+.s-p7 { color: var(--p7); stroke: var(--p7); }
+.k-p1 { background: var(--p1); } .k-p2 { background: var(--p2); } .k-p3 { background: var(--p3); }
+.k-p4 { background: var(--p4); } .k-p5 { background: var(--p5); } .k-p6 { background: var(--p6); }
+.k-p7 { background: var(--p7); } .k-warn { background: var(--c-warn); }
+.tiles { display: grid; gap: 16px; }
+.tile-group h3 { margin: 0 0 6px; font-size: 13px; font-weight: 400; color: var(--ink-2); }
+.tile-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+.tile {
+  --sel: transparent;
+  position: relative; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+  aspect-ratio: 4 / 5; padding: 6px 7px; overflow: hidden; cursor: pointer; text-align: left;
+  border: 1px solid var(--rule); border-radius: 6px; background: var(--surface);
+}
+.tile .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: color-mix(in srgb, var(--c-pv) 30%, transparent); transition: height 0.4s; }
+.tile span, .tile b { position: relative; }
+.tile span { font-size: 12px; color: var(--ink-2); }
+.tile b { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile.low { border-color: var(--c-warn); }
+.tile.off { border: 1px dashed var(--c-warn); }
+.tile[aria-pressed="true"] { border-color: var(--sel); box-shadow: inset 0 0 0 2px var(--sel); }
+.tile:hover { border-color: var(--ink-2); }
+.pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 6px 0 4px; }
+.pick small { color: var(--ink-2); font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chip-head { margin: 0 2px 0 6px; color: var(--ink-2); font-size: 13px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--rule); border-radius: 999px; background: transparent; cursor: pointer; font-size: 13px; font-variant-numeric: tabular-nums; }
+.chip:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.chip[aria-pressed="true"] { border-color: var(--ink); }
+.chip i { width: 10px; height: 10px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 18%, transparent); }
+.chips .plain { padding: 4px 10px; font-size: 13px; }
+.cmp { max-width: 1040px; overflow-x: auto; }
+.cmp table { min-width: 720px; }
+.rank-head { margin: 16px 0 2px; color: var(--ink-2); font-size: 13px; }
+.prank { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(var(--rows, 1), auto); grid-auto-flow: column; gap: 0 40px; max-width: 1040px; }
+.prow { display: grid; grid-template-columns: 44px minmax(0, 1fr) 76px 50px; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--rule); }
+.prow b { font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+.prow small { color: var(--ink-2); text-align: right; font-variant-numeric: tabular-nums; }
+.prow.weak small { color: var(--ink); }
+@media (max-width: 900px) { .prank { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-flow: row; } }
+
 /* ---- Logbuch und Regeln ---- */
 .lower { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 4fr); gap: 48px; align-items: start; }
 .day { margin: 22px 0 4px; color: var(--ink-2); font-size: 13px; }
@@ -1142,6 +1620,7 @@ class EnergyHubPanel extends HTMLElement {
       this._loadHistory();
       this._loadDraws();
       this._loadEnergy();
+      if (this._tab === "pv") this._loadPv();
       if (this._tab === "overview" && Date.now() - (this._analysisAt || 0) > 30 * 60000) this._loadAnalysis();
     }, 5 * 60000);
     if (this._hass) this._subscribe();
@@ -1152,6 +1631,7 @@ class EnergyHubPanel extends HTMLElement {
     clearInterval(this._refresh);
     this._resize?.disconnect();
     this._resize2?.disconnect();
+    this._resize3?.disconnect();
     if (this._unsub) this._unsub.then((unsub) => unsub()).catch(() => {});
     this._unsub = null;
   }
@@ -1170,6 +1650,7 @@ class EnergyHubPanel extends HTMLElement {
           this._loadDraws();
           this._loadEnergy();
           if (this._tab === "overview") this._loadAnalysis();
+          if (this._tab === "pv") this._loadPv();
         }
       },
       { type: `${DOMAIN}/subscribe` }
@@ -1270,7 +1751,7 @@ class EnergyHubPanel extends HTMLElement {
 
     $.exportBtn = h("button", { onclick: () => this._openExport() }, "Export");
     $.tabs = {};
-    const order = [["overview", "Übersicht"], ["power", "Strom"], ["heat", "Wärme"]];
+    const order = [["overview", "Übersicht"], ["power", "Strom"], ["pv", "PV"], ["heat", "Wärme"]];
     for (const [key, label] of order) {
       $.tabs[key] = h("button", { role: "tab", "aria-selected": "false", onclick: () => this._showTab(key) }, label);
     }
@@ -1285,13 +1766,17 @@ class EnergyHubPanel extends HTMLElement {
         $.tabs[next].focus();
       },
     }, Object.values($.tabs));
-    $.panes = { overview: this._buildOverview(settingsHref, nav), power: this._buildPower(settingsHref, nav) };
+    $.panes = {
+      overview: this._buildOverview(settingsHref, nav),
+      power: this._buildPower(settingsHref, nav),
+      pv: this._buildPv(settingsHref, nav),
+    };
 
     root.append(
       h("style", {}, STYLE),
       h("header", { class: "bar" }, this._menu, h("h1", {}, "Energie"),
         $.exportBtn, h("a", { href: settingsHref, onclick: nav }, "Einstellungen"), tablist),
-      $.panes.overview, $.panes.power,
+      $.panes.overview, $.panes.power, $.panes.pv,
       ($.panes.heat = h("main", { hidden: true },
         h("section", { class: "lage" },
           h("div", {},
@@ -1322,6 +1807,8 @@ class EnergyHubPanel extends HTMLElement {
     });
     this._resize2.observe($.pPlots);
     this._resize2.observe($.oHours);
+    this._resize3 = new ResizeObserver(() => this._drawPv());
+    this._resize3.observe($.vPlots);
     let tab = "overview";
     try {
       tab = localStorage.getItem("energy-hub-tab") || tab;
@@ -1480,6 +1967,7 @@ class EnergyHubPanel extends HTMLElement {
     this._renderRules();
     this._renderLog(false);
     this._renderLive();
+    if (this._tab === "pv") this._renderPv();
   }
 
   /** Kamin und Speicher aus den aktuellen Zuständen: Temperaturen, brennt, bereit, liefert. */
@@ -1664,9 +2152,15 @@ class EnergyHubPanel extends HTMLElement {
       btn.setAttribute("aria-selected", String(key === name));
       btn.tabIndex = key === name ? 0 : -1;
     }
-    $.exportBtn.hidden = name !== "heat";
+    $.exportBtn.hidden = name !== "heat" && name !== "pv";
     if (name === "heat") this._drawPlots();
     if (name === "power") this._drawPower();
+    if (name === "pv") {
+      this._renderPv();
+      this._drawPv();
+      this._renderPvFindings();
+      if (this._snap && (!this._pv48 || Date.now() - this._pv48.t1 > 5 * 60000)) this._loadPv();
+    }
     if (name === "overview") {
       this._drawHours();
       if (!this._analysisAt && this._snap) this._loadAnalysis();
@@ -1990,6 +2484,12 @@ class EnergyHubPanel extends HTMLElement {
       // Strom-Auswertung entfällt, die Wärme-Auswertung läuft trotzdem
     }
     try {
+      findings.push(...(Date.now() - (this._pvFindAt || 0) < 30 * 60000 && this._pvFind ? this._pvFind : await this._pvAnalysisLoad()));
+      if (this._tab === "pv") this._renderPvFindings();
+    } catch (_err) {
+      // ohne Daten von Wechselrichter und Optimierern gibt es keine PV-Auswertung
+    }
+    try {
       findings.push(...heatFindings(await this._heatWeek()));
     } catch (_err) {
       // ohne Verlauf der Wärmepumpe gibt es keine Wärme-Auswertung
@@ -2040,19 +2540,20 @@ class EnergyHubPanel extends HTMLElement {
   }
 
   _renderFindings() {
-    const host = this.$.oFind;
     const list = this._findings;
-    if (!list) {
-      host.replaceChildren(h("p", { class: "empty" }, "Die Auswertung wird geladen."));
-      return;
-    }
+    this.$.oFind.replaceChildren(...(list
+      ? this._findingsNodes(list, "Grundlage: die letzten 7 Tage, berechnet aus den Leistungs-Sensoren und dem Verlauf von Home Assistant. „Bis zu“ heißt: zeitgleich gemessen, nicht einzeln zugeordnet. Die Schwellen der Bewertungen stehen in der Anleitung.")
+      : [h("p", { class: "empty" }, "Die Auswertung wird geladen.")]));
+  }
+
+  /** Aussagen in drei Spalten: fällt auf, läuft gut, zur Einordnung. */
+  _findingsNodes(list, foot) {
     if (!list.length) {
-      host.replaceChildren(h("p", { class: "empty" },
-        "Für eine Auswertung liegen noch zu wenige Daten vor. Sie füllt sich, sobald die Sensoren ein paar Tage aufgezeichnet haben."));
-      return;
+      return [h("p", { class: "empty" },
+        "Für eine Auswertung liegen noch zu wenige Daten vor. Sie füllt sich, sobald die Sensoren ein paar Tage aufgezeichnet haben.")];
     }
     const groups = [["warn", "Fällt auf"], ["good", "Läuft gut"], ["info", "Zur Einordnung"]];
-    host.replaceChildren(
+    return [
       h("div", { class: "find" }, groups.map(([tone, title]) => {
         const items = list.filter((f) => f.tone === tone);
         return h("div", {},
@@ -2061,8 +2562,8 @@ class EnergyHubPanel extends HTMLElement {
             ? items.map((f) => h("div", { class: "fitem" }, h("b", {}, f.title), h("p", {}, f.text)))
             : h("div", { class: "fitem" }, h("p", { class: "none" }, tone === "warn" ? "Nichts Auffälliges." : "Noch nichts.")));
       })),
-      h("p", { class: "foot" },
-        "Grundlage: die letzten 7 Tage, berechnet aus den Leistungs-Sensoren und dem Verlauf von Home Assistant. „Bis zu“ heißt: zeitgleich gemessen, nicht einzeln zugeordnet. Die Schwellen der Bewertungen stehen in der Anleitung."));
+      h("p", { class: "foot" }, foot),
+    ];
   }
 
   /* -------------------------------------------------- Zeichnen für Strom */
@@ -2275,7 +2776,7 @@ class EnergyHubPanel extends HTMLElement {
         });
         if (pen && sr.kind === "area") area += `L${x(sr.vals.length - 1).toFixed(1)} ${y(0).toFixed(1)}L${x(start).toFixed(1)} ${y(0).toFixed(1)}Z`;
         if (area) svg.append(s("path", { d: area, class: `fillarea ${sr.cls}` }));
-        svg.append(s("path", { d: dstr, class: `line ${sr.cls}${sr.thin ? " thin" : ""}` }));
+        svg.append(s("path", { d: dstr, class: `line ${sr.cls}${sr.thin ? " thin" : ""}${sr.dash ? " dash" : ""}` }));
       }
       if (lastPlot) {
         for (const t of xticks) {
@@ -2312,12 +2813,846 @@ class EnergyHubPanel extends HTMLElement {
     host.onpointerleave = leave;
   }
 
+  /* ---------------------------------------------------------------- PV */
+
+  _buildPv(settingsHref, nav) {
+    const $ = this.$;
+    this._pvRange = 24;
+    this._pvView = "system";
+    this._pvMetric = "power";
+    this._pvSel = new Map(); // Label -> Farbplatz 1 bis PANEL_SLOTS; die Farbe bleibt beim Paneel
+    $.vHeadline = h("p", { class: "headline", role: "status" }, "Die PV-Daten werden geladen.");
+    $.vSub = h("p", { class: "reason" });
+    $.vFault = h("p", { class: "note error", hidden: true });
+    $.vNote = h("p", { class: "note", hidden: true },
+      "Für den Bereich PV ist noch nichts hinterlegt. Gebraucht werden die Sensoren des Wechselrichters oder die Integration tigo_rs485 für die Optimierer. ",
+      h("a", { href: settingsHref, onclick: nav }, "Wechselrichter hinterlegen"));
+    $.vTiles = h("div", { class: "tiles" });
+    $.vFacts = h("dl", { class: "facts" });
+    $.vViews = segmented("Ansicht", [["system", "Anlage"], ["panels", "Paneele"]], this._pvView, (view) => {
+      this._pvView = view;
+      this._pvShowPick();
+      this._pvLoadMetric().then(() => this._drawPv());
+    });
+    $.vRanges = segmented("Zeitraum", [[24, "24 Stunden"], [48, "48 Stunden"], [168, "7 Tage"]], this._pvRange, (hours) => {
+      this._pvRange = hours;
+      if (hours === 168 && !this._pvWeek) this._pvLoadWeek();
+      else this._pvLoadMetric().then(() => this._drawPv());
+    });
+    $.vMetrics = segmented("Messgröße", PV_METRICS.map((m) => [m.key, m.label]), this._pvMetric, (metric) => {
+      this._pvMetric = metric;
+      this._pvLoadMetric().then(() => this._drawPv());
+    });
+    $.vChips = h("div", { class: "chips", role: "group", "aria-label": "Paneele im Verlauf" });
+    $.vPickNote = h("small", {});
+    $.vPick = h("div", { class: "pick", hidden: true }, $.vMetrics, $.vChips, $.vPickNote);
+    $.vPlots = h("div", { class: "plots" });
+    $.vCompare = h("div", { class: "cmp" });
+    $.vRank = h("div", { class: "rank" });
+    $.vFind = h("div", {});
+    return h("main", { hidden: true },
+      h("section", { class: "lage" },
+        h("div", {}, $.vHeadline, $.vSub, $.vFault, $.vNote),
+        ($.vTilesWrap = h("div", { hidden: true }, h("h2", {}, "Paneele jetzt"), $.vTiles))),
+      ($.vFactsSec = h("section", {}, $.vFacts)),
+      ($.vSheet = h("section", { class: "sheet" },
+        h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.vViews, $.vRanges), $.vPick, $.vPlots)),
+      ($.vCmpSec = h("section", { hidden: true }, h("h2", {}, "Wechselrichter und Optimierer"), $.vCompare)),
+      ($.vRankSec = h("section", { hidden: true }, h("h2", {}, "Paneele heute"), $.vRank)),
+      ($.vFindSec = h("section", {}, h("h2", {}, "Die letzten 7 Tage"), $.vFind)));
+  }
+
+  _num(id, kind) {
+    if (!id) return null;
+    const st = this._hass?.states?.[id];
+    if (!st || isGap(st.state)) return null;
+    let value = Number(st.state);
+    if (!Number.isFinite(value)) return null;
+    const unit = String(st.attributes?.unit_of_measurement || "").toLowerCase();
+    if (kind === "power") value *= { kw: 1000, mw: 1e6 }[unit] || 1;
+    if (kind === "energy") value *= { wh: 0.001, mwh: 1000 }[unit] || 1;
+    return value;
+  }
+
+  _pvHasInverter() {
+    const cfg = this._snap?.entities || {};
+    return PV_INVERTER_KEYS.some((key) => cfg[key]);
+  }
+
+  _pvConfigured() {
+    return this._pvHasInverter() || Boolean(this._pvLayout?.panels?.length);
+  }
+
+  _pvStrings() {
+    return pvStrings(this._pvLayout, this._snap?.settings, this._snap?.entities);
+  }
+
+  async _pvEnsureLayout(force = false) {
+    if (this._pvLayout && !force) return this._pvLayout;
+    try {
+      this._pvLayout = await this._hass.callWS({ type: `${DOMAIN}/pv_layout` });
+    } catch (_err) {
+      this._pvLayout = { found: false, panels: [], strings: [], installation: {} };
+    }
+    const known = new Set(this._pvLayout.panels.map((p) => p.label));
+    for (const label of [...this._pvSel.keys()]) if (!known.has(label)) this._pvSel.delete(label);
+    this._buildTiles();
+    this._buildChips();
+    return this._pvLayout;
+  }
+
+  /** Aktuelle Werte von Wechselrichter und Optimierern. */
+  _pvLive() {
+    const cfg = this._snap.entities;
+    const mppt = [1, 2].map((k) => {
+      const v = this._num(cfg[`ent_mppt${k}_voltage`]);
+      const i = this._num(cfg[`ent_mppt${k}_current`]);
+      let p = this._num(cfg[`ent_mppt${k}_power`], "power");
+      if (p === null && isNum(v) && isNum(i)) p = v * i;
+      const configured = Boolean(cfg[`ent_mppt${k}_power`] || cfg[`ent_mppt${k}_voltage`] || cfg[`ent_mppt${k}_current`]);
+      return { k, configured, p, v, i };
+    });
+    const panels = (this._pvLayout?.panels || []).map((p) => ({
+      label: p.label, string: p.string,
+      power: this._num(p.entities.power, "power"),
+      vin: this._num(p.entities.voltage_in),
+      vout: this._num(p.entities.voltage_out),
+      current: this._num(p.entities.current),
+      temp: this._num(p.entities.temperature),
+      today: this._num(p.entities.energy_today, "energy"),
+    }));
+    const sum = (list) => (list.some(isNum) ? list.reduce((a, b) => a + (isNum(b) ? b : 0), 0) : null);
+    let total = this._num(cfg.ent_pv_power, "power");
+    if (total === null) total = sum(mppt.filter((m) => m.configured).map((m) => m.p));
+    const tigo = sum(panels.map((p) => p.power));
+    if (total === null) total = tigo;
+    const strings = this._pvStrings().map((s) => {
+      const members = panels.filter((p) => s.panels.includes(p.label));
+      return {
+        ...s, members,
+        median: median(members.map((p) => p.power)),
+        power: sum(members.map((p) => p.power)),
+        vout: sum(members.map((p) => p.vout)),
+        today: sum(members.map((p) => p.today)),
+      };
+    });
+    const instToday = this._num(this._pvLayout?.installation?.energy_today, "energy");
+    return {
+      total, tigo, mppt, panels, strings,
+      tigoToday: instToday ?? sum(panels.map((p) => p.today)),
+      status: inverterStatus(this._state("ent_inv_status")?.state),
+      freq: this._num(cfg.ent_grid_frequency),
+      pvToday: this._num(cfg.ent_pv_energy_today, "energy"),
+      loadToday: this._num(cfg.ent_load_energy_today, "energy"),
+      impToday: this._num(cfg.ent_import_energy_today, "energy"),
+      expToday: this._num(cfg.ent_export_energy_today, "energy"),
+    };
+  }
+
+  /** Kacheln „Paneele jetzt“, einmal je Layout gebaut und danach nur aktualisiert. */
+  _buildTiles() {
+    const $ = this.$;
+    this._tiles = new Map();
+    const groups = this._pvStrings();
+    $.vTiles.replaceChildren(...groups.map((s) => h("div", { class: "tile-group" },
+      groups.length > 1 || s.name ? h("h3", {}, s.name ? `String ${s.name}` : "Ohne String") : null,
+      h("div", { class: "tile-row" }, s.panels.map((label) => {
+        const fill = h("i", { class: "fill" });
+        const value = h("b", {}, "–");
+        const btn = h("button", { class: "tile", "aria-pressed": "false", onclick: () => this._togglePanel(label, true) },
+          fill, h("span", {}, label), value);
+        this._tiles.set(label, { btn, fill, value });
+        return btn;
+      })))));
+  }
+
+  _buildChips() {
+    const $ = this.$;
+    this._chips = new Map();
+    const groups = this._pvStrings();
+    const nodes = [];
+    for (const s of groups) {
+      if (groups.length > 1) nodes.push(h("span", { class: "chip-head" }, s.name ? `String ${s.name}` : "Ohne String"));
+      for (const label of s.panels) {
+        const sw = h("i", {});
+        const btn = h("button", { class: "chip", "aria-pressed": "false", onclick: () => this._togglePanel(label) }, sw, label);
+        this._chips.set(label, { btn, sw });
+        nodes.push(btn);
+      }
+    }
+    nodes.push(h("button", { class: "plain", onclick: () => { this._pvSel.clear(); this._pvSelChanged(); } }, "Keins hervorheben"));
+    $.vChips.replaceChildren(...nodes);
+    this._pvSelChanged(false);
+  }
+
+  _togglePanel(label, fromTile = false) {
+    if (this._pvSel.has(label)) {
+      this._pvSel.delete(label);
+    } else {
+      const used = new Set(this._pvSel.values());
+      const slot = Array.from({ length: PANEL_SLOTS }, (_x, i) => i + 1).find((i) => !used.has(i));
+      if (!slot) {
+        this.$.vPickNote.textContent = `Höchstens ${PANEL_SLOTS} Paneele gleichzeitig. Wähle zuerst eines ab.`;
+        return;
+      }
+      this._pvSel.set(label, slot);
+    }
+    if (fromTile && this._pvView !== "panels") {
+      this._pvView = "panels";
+      for (const b of this.$.vViews.children) b.setAttribute("aria-pressed", String(b.textContent === "Paneele"));
+      this._pvShowPick();
+    }
+    this._pvSelChanged();
+  }
+
+  _pvSelChanged(draw = true) {
+    for (const [label, ref] of this._chips || []) {
+      const slot = this._pvSel.get(label);
+      ref.btn.setAttribute("aria-pressed", String(Boolean(slot)));
+      ref.sw.style.background = slot ? `var(--p${slot})` : "";
+    }
+    for (const [label, ref] of this._tiles || []) {
+      const slot = this._pvSel.get(label);
+      ref.btn.setAttribute("aria-pressed", String(Boolean(slot)));
+      ref.btn.style.setProperty("--sel", slot ? `var(--p${slot})` : "transparent");
+    }
+    this.$.vPickNote.textContent = this._pvSel.size ? "" : "Wähle Paneele, um sie hervorzuheben. Grau: alle übrigen.";
+    if (draw) this._pvLoadMetric().then(() => this._drawPv());
+  }
+
+  _pvShowPick() {
+    this.$.vPick.hidden = this._pvView !== "panels" || !this._pvLayout?.panels?.length;
+  }
+
+  _renderPv() {
+    const $ = this.$;
+    if (!this._snap || !$.vHeadline) return;
+    const configured = this._pvConfigured();
+    const hasTigo = Boolean(this._pvLayout?.panels?.length);
+    $.vNote.hidden = configured || !this._pvLayout;
+    for (const el of [$.vFactsSec, $.vSheet, $.vFindSec]) el.hidden = !configured;
+    $.vTilesWrap.hidden = !hasTigo;
+    $.vRankSec.hidden = !hasTigo;
+    $.vCmpSec.hidden = !(hasTigo && this._pvHasInverter());
+    $.vViews.hidden = !hasTigo;
+    this._pvShowPick();
+    if (!configured) {
+      $.vHeadline.textContent = this._pvLayout ? "Noch keine PV-Daten." : "Die PV-Daten werden geladen.";
+      $.vSub.textContent = "";
+      $.vFault.hidden = true;
+      return;
+    }
+    const v = this._pvLive();
+    $.vHeadline.textContent = isNum(v.total) && v.total > 30 ? `Das Dach liefert gerade ${fmtKw(v.total)}.` : "Das Dach liefert gerade nichts.";
+    const bits = [];
+    const today = v.pvToday ?? this._pvToday?.inv ?? v.tigoToday;
+    if (isNum(today)) bits.push(`Heute ${fmtKwh(today)} erzeugt.`);
+    if (hasTigo) {
+      const awake = v.panels.filter((p) => p.power > 0).length;
+      const anyLight = v.strings.some((s) => s.median >= PV_LIMITS.dropoutOthersW);
+      if (!awake) bits.push("Die Optimierer melden sich, sobald wieder Licht auf die Module fällt.");
+      else if (awake === v.panels.length) bits.push(`Alle ${v.panels.length} Optimierer melden sich.`);
+      else if (anyLight) bits.push(`${awake} von ${v.panels.length} Optimierern melden sich.`);
+      const notes = [];
+      for (const s of v.strings) {
+        if (!(s.median >= 50)) continue;
+        for (const p of s.members) {
+          if (!isNum(p.power) || p.power <= PV_LIMITS.dropoutW) notes.push([0, `${p.label} liefert gerade nichts.`]);
+          else if (p.power < 0.8 * s.median) notes.push([p.power / s.median, `${p.label} liefert gerade ${fmtPct(1 - p.power / s.median)} weniger als der Median im String.`]);
+        }
+      }
+      notes.sort((a, b) => a[0] - b[0]);
+      bits.push(...notes.slice(0, 2).map((n) => n[1]));
+    }
+    // „Wartet“ ist nachts normal; erwähnt wird ein anderer Zustand nur, solange Licht da ist
+    if (v.status && !v.status.ok && !v.status.fault && (v.total > 30 || ![0, 1].includes(v.status.code))) {
+      bits.push(`Wechselrichter: ${v.status.text}.`);
+    }
+    $.vSub.textContent = bits.join(" ");
+    $.vFault.hidden = !v.status?.fault;
+    if (v.status?.fault) {
+      $.vFault.textContent = `Der Wechselrichter meldet einen Fehler: ${v.status.text}${v.status.code !== null ? ` (Code ${v.status.code})` : ""}.`;
+    }
+
+    // Kacheln
+    const max = Math.max(1, ...v.panels.map((p) => (isNum(p.power) ? p.power : 0)));
+    for (const s of v.strings) {
+      for (const p of s.members) {
+        const ref = this._tiles?.get(p.label);
+        if (!ref) continue;
+        ref.value.textContent = isNum(p.power) ? fmtW(p.power) : "–";
+        ref.fill.style.height = `${((isNum(p.power) ? p.power : 0) / max) * 100}%`;
+        const lit = s.median >= 50;
+        ref.btn.classList.toggle("off", lit && !(p.power > PV_LIMITS.dropoutW));
+        ref.btn.classList.toggle("low", lit && p.power > PV_LIMITS.dropoutW && p.power < 0.8 * s.median);
+        const details = [isNum(p.vin) && `${nf1.format(p.vin)} V`, isNum(p.current) && `${nf1.format(p.current)} A`,
+          isNum(p.temp) && fmtC(p.temp), isNum(p.today) && `heute ${fmtKwh(p.today)}`].filter(Boolean).join(", ");
+        ref.btn.title = `${p.label}${details ? `: ${details}` : ""}`;
+        ref.btn.setAttribute("aria-label", `Paneel ${p.label}, ${ref.value.textContent}${details ? `, ${details}` : ""}`);
+      }
+    }
+
+    // Kennwerte
+    const items = [];
+    if (isNum(today)) {
+      const hint = this._pvHasInverter() && hasTigo && isNum(v.tigoToday) ? `Optimierer: ${fmtKwh(v.tigoToday)}` : "";
+      items.push(["Erzeugung heute", fmtKwh(today), hint]);
+    }
+    const peak = this._pvToday?.peak;
+    if (peak) items.push(["Spitze heute", fmtKw(peak.w), `um ${tfTime.format(new Date(peak.t))} Uhr`]);
+    if (isNum(v.pvToday) && isNum(v.expToday) && v.pvToday > 0) {
+      items.push(["Eigenverbrauch", fmtPct(clamp01((v.pvToday - v.expToday) / v.pvToday)), `${fmtKwh(v.expToday)} eingespeist`]);
+    }
+    if (isNum(v.loadToday)) items.push(["Hausverbrauch heute", fmtKwh(v.loadToday), isNum(v.impToday) ? `${fmtKwh(v.impToday)} aus dem Netz` : ""]);
+    for (const m of v.mppt.filter((x) => x.configured)) {
+      const value = [isNum(m.v) && `${nf0.format(m.v)} V`, isNum(m.i) && `${nf1.format(m.i)} A`].filter(Boolean).join(" · ") || fmtW(m.p);
+      items.push([`MPPT ${m.k}`, value, isNum(m.p) && value !== fmtW(m.p) ? fmtW(m.p) : ""]);
+    }
+    if (v.status) items.push(["Wechselrichter", v.status.text, isNum(v.freq) ? `Netz ${nf1.format(v.freq)} Hz` : ""]);
+    else if (isNum(v.freq)) items.push(["Netzfrequenz", `${nf1.format(v.freq)} Hz`]);
+    if (hasTigo) {
+      const temps = v.panels.map((p) => p.temp).filter(isNum);
+      items.push(["Optimierer", `${v.panels.filter((p) => p.power > 0).length} von ${v.panels.length}`,
+        temps.length ? `melden sich, bis ${fmtC(Math.max(...temps))}` : "melden sich"]);
+    }
+    $.vFacts.replaceChildren(...items.map(([label, value, hint]) =>
+      h("div", {}, h("dt", {}, label), h("dd", {}, value, hint ? h("small", {}, hint) : null))));
+
+    if (hasTigo && this._pvHasInverter()) this._renderPvCompare(v);
+    if (hasTigo) this._renderPvRank(v);
+  }
+
+  /** Je String: Optimierer und MPPT nebeneinander, jetzt und heute. */
+  _renderPvCompare(v) {
+    const t = this._pvToday;
+    const rows = v.strings.map((s) => {
+      const m = s.mppt ? v.mppt[s.mppt - 1] : null;
+      const inv = m ? m.p : v.strings.length === 1 ? v.total : null;
+      const dev = isNum(s.power) && inv > 50 ? s.power / inv - 1 : null;
+      const tToday = t?.strings?.[s.name ?? ""];
+      return h("tr", {},
+        h("td", {}, s.name ? `String ${s.name}` : "Ohne String"),
+        h("td", {}, m ? `MPPT ${m.k}` : v.strings.length === 1 ? "gesamt" : "–"),
+        h("td", {}, fmtW(s.power)), h("td", {}, fmtW(inv)),
+        h("td", {}, isNum(dev) ? `${dev >= 0 ? "+" : "−"}${fmtPct(Math.abs(dev))}` : "–"),
+        h("td", {}, isNum(s.vout) && s.power > 0 ? `${nf0.format(s.vout)} V` : "–"),
+        h("td", {}, m && isNum(m.v) ? `${nf0.format(m.v)} V` : "–"),
+        h("td", {}, tToday ? fmtKwh(tToday.tigo) : "–"), h("td", {}, tToday ? fmtKwh(tToday.inv) : "–"));
+    });
+    this.$.vCompare.replaceChildren(
+      h("table", {},
+        h("thead", {}, h("tr", {}, ["String", "Eingang", "Optimierer", "Wechselrichter", "Unterschied",
+          "Spannung Optimierer", "Spannung MPPT", "Heute Optimierer", "Heute Wechselrichter"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, rows)),
+      h("p", { class: "foot" },
+        "Die Optimierer messen die Leistung am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit. Die Spannung der Optimierer ist die Summe ihrer Ausgangsspannungen und sollte nahe an der des MPPT liegen. „Heute“ ist aus der Leistung aufsummiert."));
+  }
+
+  /** Ertrag je Paneel heute, mit Anteil am Median im String. */
+  _renderPvRank(v) {
+    const nodes = [];
+    const fromGrid = this._pvToday?.panels || {};
+    const kwh2 = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    for (const s of v.strings) {
+      const values = s.members.map((p) => ({ label: p.label, kwh: p.today ?? fromGrid[p.label] ?? null }));
+      const med = median(values.map((x) => x.kwh));
+      const max = Math.max(0.001, ...values.map((x) => x.kwh ?? 0));
+      if (v.strings.length > 1) nodes.push(h("p", { class: "rank-head" }, s.name ? `String ${s.name}` : "Ohne String"));
+      nodes.push(h("div", { class: "prank", style: `--rows:${Math.ceil(values.length / 2)}` }, values.map((x) => {
+        const ratio = med > 0 && isNum(x.kwh) ? x.kwh / med : null;
+        const weak = med >= 0.05 && isNum(ratio) && ratio < PV_LIMITS.weakRatio;
+        return h("div", { class: `prow${weak ? " weak" : ""}` },
+          h("span", {}, x.label),
+          h("div", { class: "rank-bar" }, h("i", { class: weak ? "k-warn" : "k-pv", style: `width:${Math.max(0.5, ((x.kwh ?? 0) / max) * 100).toFixed(1)}%` })),
+          h("b", {}, isNum(x.kwh) ? `${kwh2.format(x.kwh)} kWh` : "–"),
+          h("small", {}, isNum(ratio) ? `${fmtPct(ratio)}${weak ? " ↓" : ""}` : ""));
+      })));
+    }
+    this.$.vRank.replaceChildren(...nodes,
+      h("p", { class: "foot" }, "Prozent: Anteil am Median der Paneele im selben String. Ein Pfeil markiert Paneele unter 90 %."));
+  }
+
+  /* ------------------------------------------------------- Daten für PV */
+
+  async _loadPv(force = false) {
+    if (!this._snap || !this._hass?.callWS) return;
+    await this._pvEnsureLayout(force);
+    if (!this._pvConfigured()) {
+      this._renderPv();
+      return;
+    }
+    try {
+      this._pv48 = await this._pvSet(48, 300e3, "5minute", this._pvView === "panels" ? [this._pvMetric] : []);
+      this._pvToday = this._pvTodayFrom(this._pv48);
+      this._pvWeek = this._pvRange === 168
+        ? await this._pvSet(168, 3600e3, "hour", this._pvView === "panels" ? [this._pvMetric] : []) : null;
+    } catch (err) {
+      this.$.vSub.textContent = `Die PV-Daten konnten nicht geladen werden: ${err?.message || err}`;
+    }
+    this._renderPv();
+    this._drawPv();
+    if (Date.now() - (this._pvFindAt || 0) > 30 * 60000) this._pvAnalysisLoad().then(() => this._renderPvFindings());
+  }
+
+  async _pvLoadWeek() {
+    this.$.vPlots.classList.add("loading");
+    try {
+      this._pvWeek = await this._pvSet(168, 3600e3, "hour", this._pvView === "panels" ? [this._pvMetric] : []);
+    } catch (_err) {
+      this._pvWeek = null;
+    }
+    this.$.vPlots.classList.remove("loading");
+    this._drawPv();
+  }
+
+  /** Lädt die gewählte Messgröße der Paneele nach, wenn sie im Raster noch fehlt. */
+  async _pvLoadMetric() {
+    const set = this._pvRange === 168 ? this._pvWeek : this._pv48;
+    if (!set || this._pvView !== "panels" || set.panels[this._pvMetric]) return;
+    const metric = this._pvMetric;
+    const panels = this._pvLayout?.panels || [];
+    const ids = panels.map((p) => p.entities[metric]).filter(Boolean);
+    this.$.vPlots.classList.add("loading");
+    try {
+      const grids = await this._grids(ids, set.t0, set.t1, set.step, set.n, set.period);
+      set.panels[metric] = new Map(panels.map((p) => [p.label, grids[p.entities[metric]] || new Array(set.n).fill(null)]));
+    } catch (err) {
+      this.$.vPlots.replaceChildren(h("p", { class: "empty" }, `Die Werte der Paneele konnten nicht geladen werden: ${err?.message || err}`));
+    } finally {
+      this.$.vPlots.classList.remove("loading");
+    }
+  }
+
+  /** Raster für Wechselrichter und Optimierer. metrics: weitere Messgrößen der Paneele außer der Leistung. */
+  async _pvSet(hours, step, period, metrics = []) {
+    const cfg = this._snap.entities;
+    const t1 = Math.ceil(Date.now() / step) * step;
+    const t0 = t1 - hours * 3600e3;
+    const n = Math.round((t1 - t0) / step);
+    const inv = { total: cfg.ent_pv_power };
+    for (const k of [1, 2]) {
+      inv[`p${k}`] = cfg[`ent_mppt${k}_power`];
+      inv[`v${k}`] = cfg[`ent_mppt${k}_voltage`];
+      inv[`i${k}`] = cfg[`ent_mppt${k}_current`];
+    }
+    const panels = this._pvLayout?.panels || [];
+    const want = new Set(["power", ...metrics]);
+    if (inv.v1 || inv.v2) want.add("voltage_out");
+    const ids = [...new Set([...Object.values(inv), ...panels.flatMap((p) => [...want].map((m) => p.entities[m]))].filter(Boolean))];
+    const grids = await this._grids(ids, t0, t1, step, n, period);
+    const pick = (id, kind) => (id && grids[id]
+      ? grids[id].map((v) => (v === null ? null : kind === "power" ? v * this._powerFactor(id) : v)) : null);
+    const set = { t0, t1, n, step, period, inv: {}, panels: {} };
+    for (const [key, id] of Object.entries(inv)) set.inv[key] = pick(id, key === "total" || key.startsWith("p") ? "power" : null);
+    for (const k of [1, 2]) {
+      const v = set.inv[`v${k}`];
+      const i = set.inv[`i${k}`];
+      if (!set.inv[`p${k}`] && v && i) set.inv[`p${k}`] = v.map((x, b) => (isNum(x) && isNum(i[b]) ? x * i[b] : null));
+    }
+    if (!set.inv.total && (set.inv.p1 || set.inv.p2)) {
+      set.inv.total = new Array(n).fill(null).map((_x, b) => {
+        const parts = [set.inv.p1?.[b], set.inv.p2?.[b]].filter(isNum);
+        return parts.length ? parts.reduce((x, y) => x + y, 0) : null;
+      });
+    }
+    for (const m of want) {
+      set.panels[m] = new Map(panels.map((p) => [p.label, pick(p.entities[m], m === "power" ? "power" : null) || new Array(n).fill(null)]));
+    }
+    return set;
+  }
+
+  /** Heute seit Mitternacht: Spitze, Energie je Paneel und je String aus dem 5-Minuten-Raster. */
+  _pvTodayFrom(set) {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const i0 = Math.max(0, Math.round((midnight.getTime() - set.t0) / set.step));
+    const factor = set.step / 3.6e9;
+    const sum = (arr) => {
+      if (!arr) return null;
+      let total = 0;
+      let known = false;
+      for (let b = i0; b < set.n; b++) if (isNum(arr[b])) { total += arr[b] * factor; known = true; }
+      return known ? total : null;
+    };
+    let peak = null;
+    const source = set.inv.total || this._pvTigoSum(set, null);
+    for (let b = i0; b < set.n; b++) {
+      if (isNum(source?.[b]) && source[b] > 0 && (!peak || source[b] > peak.w)) peak = { w: source[b], t: set.t0 + (b + 0.5) * set.step };
+    }
+    const powers = set.panels.power || new Map();
+    const panels = {};
+    for (const [label, arr] of powers) panels[label] = sum(arr);
+    const strings = {};
+    for (const s of this._pvStrings()) {
+      const inv = s.mppt ? set.inv[`p${s.mppt}`] : this._pvStrings().length === 1 ? set.inv.total : null;
+      const tigo = s.panels.map((label) => panels[label]).filter(isNum);
+      strings[s.name ?? ""] = { tigo: tigo.length ? tigo.reduce((x, y) => x + y, 0) : null, inv: sum(inv) };
+    }
+    return { peak, panels, strings, inv: sum(set.inv.total) };
+  }
+
+  /** Summe der Optimierer je Raster, für einen String (Labels) oder alle (null). */
+  _pvTigoSum(set, labels, metric = "power") {
+    const map = set.panels[metric];
+    if (!map || !map.size) return null;
+    const arrays = [...map.entries()].filter(([label]) => !labels || labels.includes(label)).map(([, arr]) => arr);
+    if (!arrays.length) return null;
+    return new Array(set.n).fill(null).map((_x, b) => {
+      const vals = arrays.map((arr) => arr[b]).filter(isNum);
+      return vals.length ? vals.reduce((x, y) => x + y, 0) : null;
+    });
+  }
+
+  _drawPv() {
+    const host = this.$?.vPlots;
+    const full = this._pvRange === 168 ? this._pvWeek : this._pv48;
+    if (!host || !full || this._tab !== "pv") return;
+    const keep = this._pvRange === 24 ? Math.round(86400e3 / full.step) : full.n;
+    const from = full.n - keep;
+    const cut = (arr) => (arr ? arr.slice(from) : null);
+    const g = { t0: full.t0 + from * full.step, t1: full.t1, n: keep, step: full.step };
+    const any = (arr) => Boolean(arr && arr.some((v) => v !== null));
+    const last = (arr) => arr?.findLast((v) => v !== null) ?? null;
+    const hasTigo = Boolean(this._pvLayout?.panels?.length);
+    if (this._pvView === "panels" && hasTigo) {
+      this._drawPvPanels(host, full, g, cut);
+      return;
+    }
+    const strings = this._pvStrings();
+    const fmtV = (x) => `${nf0.format(x)} V`;
+    const fmtA = (x) => `${nf1.format(x)} A`;
+    const line = (vals, cls, name, fmt, extra = {}) => ({ vals, cls, kind: "line", name, fmt, value: fmt(last(vals)), ...extra });
+    const plots = [];
+    const total = cut(full.inv.total);
+    const tigo = cut(this._pvTigoSum(full, null));
+    if (any(total) || any(tigo)) {
+      plots.push({ title: "Leistung in Watt", height: 170, zero: true, series: [
+        any(total) && line(total, "s-pv", "Wechselrichter", fmtW, { kind: "area" }),
+        any(tigo) && line(tigo, "s-ink", "Optimierer", fmtW, { thin: true }),
+      ].filter(Boolean) });
+    }
+    const volt = [];
+    const amp = [];
+    for (const k of [1, 2]) {
+      const cls = k === 1 ? "s-return" : "s-store";
+      const v = cut(full.inv[`v${k}`]);
+      const i = cut(full.inv[`i${k}`]);
+      if (any(v)) volt.push(line(v, cls, `MPPT ${k}`, fmtV));
+      if (any(i)) amp.push(line(i, cls, `MPPT ${k}`, fmtA));
+      const s = strings.find((x) => x.mppt === k);
+      const vout = s ? cut(this._pvTigoSum(full, s.panels, "voltage_out")) : null;
+      if (any(v) && any(vout)) {
+        volt.push(line(vout, "s-ink", `Optimierer${s.name ? ` String ${s.name}` : ""}`, fmtV, { thin: true, dash: true }));
+      }
+    }
+    if (volt.length) plots.push({ title: "Spannung in Volt", note: "Optimierer: Summe der Ausgangsspannungen", height: 120, series: volt });
+    if (amp.length) plots.push({ title: "Strom in Ampere", height: 100, zero: true, series: amp });
+    if (!plots.length) {
+      host.replaceChildren(h("p", { class: "empty" }, "Für diesen Zeitraum liegen noch keine PV-Daten vor."));
+      return;
+    }
+    const tips = plots.flatMap((plot) => plot.series);
+    this._stack(host, g, plots, (i) => {
+      const lines = tips.map((sr) => [sr.cls, sr.name, isNum(sr.vals[i]) ? sr.fmt(sr.vals[i]) : "–"]);
+      if (isNum(total?.[i]) && isNum(tigo?.[i]) && total[i] > 50) {
+        lines.push(["s-outdoor", "Unterschied", `${tigo[i] >= total[i] ? "+" : "−"}${fmtPct(Math.abs(tigo[i] / total[i] - 1))}`]);
+      }
+      return lines;
+    });
+  }
+
+  _drawPvPanels(host, full, g, cut) {
+    const metric = PV_METRICS.find((m) => m.key === this._pvMetric) || PV_METRICS[0];
+    const map = full.panels[metric.key];
+    if (!map) {
+      host.replaceChildren(h("p", { class: "empty" }, "Die Werte der Paneele werden geladen."));
+      return;
+    }
+    const strings = this._pvStrings();
+    const series = [];
+    const rows = [...map.entries()].map(([label, arr]) => [label, cut(arr)]);
+    const med = new Array(g.n).fill(null).map((_x, b) => median(rows.map(([, arr]) => arr[b])));
+    for (const [label, arr] of rows) {
+      if (!this._pvSel.has(label) && arr.some(isNum)) series.push({ vals: arr, cls: "s-faint", kind: "line", thin: true });
+    }
+    if (med.some(isNum)) series.push({ vals: med, cls: "s-outdoor", kind: "line", dash: true, name: strings.length > 1 ? "Median aller Paneele" : "Median", value: metric.fmt(med.findLast(isNum)) });
+    const picked = [...this._pvSel.entries()].sort((a, b) => a[1] - b[1]);
+    for (const [label, slot] of picked) {
+      const arr = rows.find(([l]) => l === label)?.[1];
+      if (arr) series.push({ vals: arr, cls: `s-p${slot}`, kind: "line", name: label, value: metric.fmt(arr.findLast(isNum)) });
+    }
+    if (!series.length) {
+      host.replaceChildren(h("p", { class: "empty" }, "Für diesen Zeitraum liegen noch keine Werte der Paneele vor."));
+      return;
+    }
+    this._stack(host, g, [{ title: `${metric.label} je Paneel in ${metric.unit}`, height: 260, zero: metric.key !== "temperature", series }], (i) => {
+      const lines = [];
+      if (picked.length) {
+        for (const [label, slot] of picked) {
+          const arr = rows.find(([l]) => l === label)?.[1];
+          lines.push([`s-p${slot}`, label, isNum(arr?.[i]) ? metric.fmt(arr[i]) : "–"]);
+        }
+      } else {
+        const known = rows.filter(([, arr]) => isNum(arr[i]));
+        if (known.length) {
+          const hi = known.reduce((a, b) => (b[1][i] > a[1][i] ? b : a));
+          const lo = known.reduce((a, b) => (b[1][i] < a[1][i] ? b : a));
+          lines.push(["s-ink", `höchster: ${hi[0]}`, metric.fmt(hi[1][i])], ["s-ink", `niedrigster: ${lo[0]}`, metric.fmt(lo[1][i])]);
+        }
+      }
+      lines.push(["s-outdoor", "Median", isNum(med[i]) ? metric.fmt(med[i]) : "–"]);
+      return lines;
+    });
+  }
+
+  /** Auswertung der letzten 7 Tage aus Stundenwerten der Statistik; für PV und Übersicht. */
+  async _pvAnalysisLoad() {
+    if (!this._snap || !this._hass?.callWS) return [];
+    this._pvFindAt = Date.now();
+    await this._pvEnsureLayout();
+    const cfg = this._snap.entities;
+    const panels = this._pvLayout?.panels || [];
+    if (!panels.length && !this._pvHasInverter()) {
+      this._pvFind = [];
+      return this._pvFind;
+    }
+    // Sieben Kalendertage: heute und die sechs Tage davor
+    const step = 3600e3;
+    const now = Date.now();
+    const first = new Date(now);
+    first.setHours(0, 0, 0, 0);
+    first.setDate(first.getDate() - 6);
+    const t0 = first.getTime();
+    const n = Math.ceil((now - t0) / step);
+    const t1 = t0 + n * step;
+    const strings = this._pvStrings();
+    const invIds = { total: cfg.ent_pv_power, p1: cfg.ent_mppt1_power, p2: cfg.ent_mppt2_power,
+      v1: cfg.ent_mppt1_voltage, i1: cfg.ent_mppt1_current, v2: cfg.ent_mppt2_voltage, i2: cfg.ent_mppt2_current };
+    const ids = [...new Set([...Object.values(invIds),
+      ...panels.flatMap((p) => [p.entities.power, p.entities.temperature])].filter(Boolean))];
+    let stats = {};
+    try {
+      stats = await this._hass.callWS({
+        type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
+        end_time: new Date(t1).toISOString(), statistic_ids: ids, period: "hour", types: ["mean", "min", "max"],
+      }) || {};
+    } catch (_err) {
+      stats = {};
+    }
+    const grid = (id, type, kind) => {
+      if (!id || !stats[id]?.length) return null;
+      const factor = kind === "power" ? this._powerFactor(id) : 1;
+      return rowsToGrid(stats[id].filter((r) => isNum(r[type])).map((r) => [new Date(r.start).getTime(), r[type] * factor]), t0, step, n);
+    };
+    const inv = {};
+    for (const [key, id] of Object.entries(invIds)) inv[key] = grid(id, "mean", key === "total" || key.startsWith("p") ? "power" : null);
+    for (const k of [1, 2]) {
+      if (!inv[`p${k}`] && inv[`v${k}`] && inv[`i${k}`]) inv[`p${k}`] = inv[`v${k}`].map((x, b) => (isNum(x) && isNum(inv[`i${k}`][b]) ? x * inv[`i${k}`][b] : null));
+    }
+    if (!inv.total && (inv.p1 || inv.p2)) {
+      inv.total = new Array(n).fill(null).map((_x, b) => {
+        const parts = [inv.p1?.[b], inv.p2?.[b]].filter(isNum);
+        return parts.length ? parts.reduce((x, y) => x + y, 0) : null;
+      });
+    }
+    const analysis = pvAnalysis({
+      t0, step, n,
+      panels: panels.map((p) => ({
+        label: p.label, string: p.string,
+        power: grid(p.entities.power, "mean", "power") || new Array(n).fill(null),
+        powerMin: grid(p.entities.power, "min", "power"),
+        tempMax: grid(p.entities.temperature, "max"),
+      })),
+      strings: strings.map((s) => ({ ...s, inv: s.mppt ? inv[`p${s.mppt}`] : strings.length === 1 ? inv.total : null })),
+      total: inv.total,
+    });
+    let faults = null;
+    if (cfg.ent_inv_status) {
+      try {
+        const eps = episodes(await this._history(cfg.ent_inv_status, t0, now), (raw) => inverterStatus(raw)?.fault, t0, now);
+        faults = { count: eps.length, minutes: eps.reduce((sum, e) => sum + (e.end - e.start), 0) / 60000 };
+      } catch (_err) {
+        faults = null;
+      }
+    }
+    this._pvFind = pvFindings(analysis, faults);
+    return this._pvFind;
+  }
+
+  _renderPvFindings() {
+    const list = this._pvFind;
+    this.$.vFind.replaceChildren(...(list
+      ? this._findingsNodes(list, "Grundlage: die letzten 7 Tage aus den Stundenwerten der Statistik von Home Assistant. Median: der mittlere Wert der Paneele im selben String. Die Schwellen stehen in der Anleitung.")
+      : [h("p", { class: "empty" }, "Die Auswertung wird geladen.")]));
+  }
+
+  /* ---------------------------------------------------------- PV-Export */
+
+  async _buildPvFile(range, created, say, token) {
+    await this._pvEnsureLayout();
+    const snap = this._snap;
+    const cfg = snap.entities;
+    const step = range.step;
+    const t1 = Math.ceil(created / step) * step;
+    const t0 = t1 - range.hours * 3600e3;
+    const n = Math.round((t1 - t0) / step);
+    const panels = this._pvLayout?.panels || [];
+    const strings = this._pvStrings();
+    const power = (id) => this._powerFactor(id);
+    const sysPlan = [
+      ["wr_pv_leistung_w", cfg.ent_pv_power, "W", "mean", power],
+      ...[1, 2].flatMap((k) => [
+        [`wr_mppt${k}_leistung_w`, cfg[`ent_mppt${k}_power`], "W", "mean", power],
+        [`wr_mppt${k}_spannung_v`, cfg[`ent_mppt${k}_voltage`], "V", "mean"],
+        [`wr_mppt${k}_strom_a`, cfg[`ent_mppt${k}_current`], "A", "mean"],
+      ]),
+      ["wr_netzfrequenz_hz", cfg.ent_grid_frequency, "Hz", "mean"],
+      ["wr_erzeugung_heute_kwh", cfg.ent_pv_energy_today, "kWh", "state"],
+      ["wr_hausverbrauch_heute_kwh", cfg.ent_load_energy_today, "kWh", "state"],
+      ["wr_netzbezug_heute_kwh", cfg.ent_import_energy_today, "kWh", "state"],
+      ["wr_einspeisung_heute_kwh", cfg.ent_export_energy_today, "kWh", "state"],
+    ];
+    const metricIds = panels.flatMap((p) => PV_PANEL_METRICS.map(([key]) => p.entities[key])).filter(Boolean);
+    const meanIds = [...new Set([...sysPlan.filter((x) => x[3] === "mean").map((x) => x[1]), ...metricIds].filter(Boolean))];
+    const stateIds = [...new Set(sysPlan.filter((x) => x[3] === "state").map((x) => x[1]).filter(Boolean))];
+    say(`Lade Statistik für ${meanIds.length + stateIds.length} Sensoren …`);
+    const statGrids = async (ids, type) => {
+      if (!ids.length) return {};
+      const stats = await this._hass.callWS({
+        type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
+        end_time: new Date(t1).toISOString(), statistic_ids: ids, period: range.period, types: [type],
+      }) || {};
+      const out = {};
+      let done = 0;
+      for (const id of ids) {
+        const rows = (stats[id] || []).filter((r) => isNum(r[type])).map((r) => [new Date(r.start).getTime(), r[type]]);
+        if (rows.length) {
+          out[id] = rowsToGrid(rows, t0, step, n);
+        } else {
+          say(`Lade Verlauf ${++done}: ${id}`);
+          out[id] = stepSeries(await this._history(id, t0, created), t0, step, n, created);
+        }
+        if (token !== this._exportToken) return null;
+      }
+      return out;
+    };
+    const means = await statGrids(meanIds, "mean");
+    if (!means) return null;
+    const states = await statGrids(stateIds, "state");
+    if (!states) return null;
+    const value = (id, kind, factorFn) => {
+      const arr = (kind === "state" ? states : means)[id];
+      if (!id || !arr) return new Array(n).fill(null);
+      const f = factorFn ? factorFn(id) : 1;
+      return arr.map((v) => (v === null ? null : v * f));
+    };
+    const system = sysPlan.map(([name, id, unit, kind, factorFn]) => ({ name, entity: id, unit, values: value(id, kind, factorFn) }));
+    for (const k of [1, 2]) {
+      const p = system.find((c) => c.name === `wr_mppt${k}_leistung_w`);
+      const v = system.find((c) => c.name === `wr_mppt${k}_spannung_v`).values;
+      const i = system.find((c) => c.name === `wr_mppt${k}_strom_a`).values;
+      if (!p.entity && v.some(isNum) && i.some(isNum)) {
+        p.values = v.map((x, b) => (isNum(x) && isNum(i[b]) ? x * i[b] : null));
+        p.entity = "Spannung × Strom";
+      }
+    }
+    let statusText = new Array(n).fill(null);
+    const faultsByDay = {};
+    if (cfg.ent_inv_status) {
+      say("Lade Status des Wechselrichters …");
+      const rows = await this._history(cfg.ent_inv_status, t0, created);
+      if (token !== this._exportToken) return null;
+      statusText = stepText(rows, t0, step, n, created).map((raw) => inverterStatus(raw)?.text ?? null);
+      for (const e of episodes(rows, (raw) => inverterStatus(raw)?.fault, t0, created)) {
+        for (let t = e.start; t < e.end;) {
+          const d = new Date(t);
+          d.setHours(24, 0, 0, 0);
+          const end = Math.min(e.end, d.getTime());
+          d.setDate(d.getDate() - 1);
+          faultsByDay[d.getTime()] = (faultsByDay[d.getTime()] ?? 0) + Math.round((end - t) / 60000);
+          t = end;
+        }
+      }
+    }
+    system.push({ name: "wr_status", entity: cfg.ent_inv_status, values: statusText });
+    const panelValues = panels.map((p) => ({
+      label: p.label, string: p.string, entities: p.entities,
+      values: Object.fromEntries(PV_PANEL_METRICS.map(([key]) => [key, value(p.entities[key], "mean", key === "power" ? power : null)])),
+    }));
+    const sumOf = (list) => new Array(n).fill(null).map((_x, b) => {
+      const vals = list.map((p) => p.values.power[b]).filter(isNum);
+      return vals.length ? vals.reduce((x, y) => x + y, 0) : null;
+    });
+    if (panels.length) {
+      system.push({ name: "tigo_summe_w", entity: "Summe der Optimierer", unit: "W", values: sumOf(panelValues) });
+      if (strings.length > 1) {
+        for (const s of strings) {
+          system.push({ name: `tigo_string_${s.name ?? "ohne"}_w`, entity: `Summe String ${s.name ?? "ohne"}`, unit: "W",
+            values: sumOf(panelValues.filter((p) => s.panels.includes(p.label))) });
+        }
+      }
+    }
+    const col = (name) => system.find((c) => c.name === name)?.values;
+    const total = col("wr_pv_leistung_w").some(isNum) ? col("wr_pv_leistung_w")
+      : new Array(n).fill(null).map((_x, b) => {
+        const parts = [col("wr_mppt1_leistung_w")[b], col("wr_mppt2_leistung_w")[b]].filter(isNum);
+        return parts.length ? parts.reduce((x, y) => x + y, 0) : null;
+      });
+    say("Werte aus …");
+    const analysis = pvAnalysis({
+      t0, step, n,
+      panels: panelValues.map((p) => ({ label: p.label, string: p.string, power: p.values.power, tempMax: p.values.temperature })),
+      strings: strings.map((s) => ({ ...s, inv: s.mppt ? col(`wr_mppt${s.mppt}_leistung_w`) : strings.length === 1 ? total : null })),
+      total: total.some(isNum) ? total : null,
+    });
+    // Tageswerte der Zähler: Zunahme je Tag aus der Langzeitstatistik
+    const counters = {};
+    const counterIds = {
+      pv: cfg.ent_pv_energy_total || cfg.ent_pv_energy_today,
+      load: cfg.ent_load_energy_total || cfg.ent_load_energy_today,
+      imp: cfg.ent_import_energy_total || cfg.ent_import_energy_today,
+      exp: cfg.ent_export_energy_total || cfg.ent_export_energy_today,
+    };
+    const dayIds = [...new Set(Object.values(counterIds).filter(Boolean))];
+    if (dayIds.length) {
+      try {
+        const stats = await this._hass.callWS({
+          type: "recorder/statistics_during_period", start_time: new Date(analysis.days[0] ?? t0).toISOString(),
+          end_time: new Date(t1).toISOString(), statistic_ids: dayIds, period: "day", types: ["change"],
+        }) || {};
+        for (const [key, id] of Object.entries(counterIds)) {
+          if (!id || !stats[id]) continue;
+          const unit = String(this._hass.states?.[id]?.attributes?.unit_of_measurement || "").toLowerCase();
+          const f = { wh: 0.001, mwh: 1000 }[unit] || 1;
+          counters[key] = Object.fromEntries(stats[id].filter((r) => isNum(r.change)).map((r) => {
+            const d = new Date(r.start);
+            d.setHours(0, 0, 0, 0);
+            return [d.getTime(), r.change * f];
+          }));
+        }
+      } catch (_err) {
+        // ohne Tageswerte der Zähler bleibt nur die aufsummierte Leistung
+      }
+    }
+    const built = buildPvExport({
+      version: snap.version, created, t0, step, n, system, panels: panelValues, analysis, counters, faultsByDay,
+      settings: { tigo_string_mppt1: snap.settings.tigo_string_mppt1, tigo_string_mppt2: snap.settings.tigo_string_mppt2,
+        zuordnung: strings.map((s) => `${s.name ?? "ohne"}=${s.mppt ? `MPPT ${s.mppt}` : "keiner"}`).join(" ") },
+      entities: Object.fromEntries(PV_INVERTER_KEYS.map((key) => [key, cfg[key]])),
+    });
+    if (!panels.length) built.note = "Es wurden keine Tigo-Optimierer gefunden, die Tabellen der Paneele bleiben leer.";
+    else if (!this._pvHasInverter()) built.note = "Für den Wechselrichter ist nichts hinterlegt, seine Spalten bleiben leer.";
+    return built;
+  }
+
   /* ------------------------------------------------------------- Export */
 
   _buildExportDialog(settingsHref, nav) {
     const $ = this.$;
     this._exportRange = EXPORT_RANGES[1];
+    this._pvExportRange = PV_EXPORT_RANGES[1];
     this._exportKind = "verlauf";
+    this._exportScope = "heat";
     $.expStatus = h("p", { class: "dlg-status", role: "status" });
     $.expMake = h("button", { class: "solid", onclick: () => this._runExport() }, "Export erstellen");
     $.expSave = h("button", { class: "solid", hidden: true, onclick: () => this._saveExport() }, "Herunterladen");
@@ -2328,10 +3663,11 @@ class EnergyHubPanel extends HTMLElement {
       ["verlauf", "Verlauf und Entscheidungen", "Messwerte im Zeitraster, Regelzustand, Logbuch"],
       ["effizienz", "Effizienz", "Stundenwerte, Verdichterläufe und Speicherentnahmen"],
     ];
+    $.expIntro = h("p", {});
     $.expDialog = h("dialog", { "aria-labelledby": "exp-title" },
       h("h2", { id: "exp-title" }, "Daten exportieren"),
-      h("p", {}, "Eine CSV-Datei zum Auswerten. Die Regeln und die Zuordnung der Sensoren stehen im Kopf der Datei."),
-      h("fieldset", {},
+      $.expIntro,
+      ($.expKindSet = h("fieldset", {},
         h("legend", {}, "Inhalt"),
         kinds.map(([kind, label, detail]) => h("label", {},
           h("input", {
@@ -2342,8 +3678,8 @@ class EnergyHubPanel extends HTMLElement {
               this._resetExport();
             },
           }),
-          h("span", { class: "opt stack" }, label, h("span", { class: "sub" }, detail))))),
-      h("fieldset", {},
+          h("span", { class: "opt stack" }, label, h("span", { class: "sub" }, detail)))))),
+      ($.expRangeSet = h("fieldset", {},
         h("legend", {}, "Zeitraum"),
         EXPORT_RANGES.map((r) => {
           const detail = h("span", { class: "sub" }, r.detail);
@@ -2354,7 +3690,15 @@ class EnergyHubPanel extends HTMLElement {
               onchange: () => { this._exportRange = r; this._resetExport(); },
             }),
             h("span", { class: "opt" }, r.label, detail));
-        })),
+        }))),
+      ($.expPvRangeSet = h("fieldset", { hidden: true },
+        h("legend", {}, "Zeitraum"),
+        PV_EXPORT_RANGES.map((r) => h("label", {},
+          h("input", {
+            type: "radio", name: "exp-pv-range", checked: r === this._pvExportRange,
+            onchange: () => { this._pvExportRange = r; this._resetExport(); },
+          }),
+          h("span", { class: "opt" }, r.label, h("span", { class: "sub" }, r.detail)))))),
       $.expExtra,
       $.expStatus,
       h("div", { class: "dlg-actions" },
@@ -2366,12 +3710,27 @@ class EnergyHubPanel extends HTMLElement {
 
   _openExport() {
     if (!this._snap) return;
-    const count = (this._snap.export_extra || []).length;
-    this.$.expExtra.replaceChildren(
-      count
-        ? `Im Verlauf werden zusätzlich ${count} weitere Sensoren exportiert. `
-        : "Zähler, Heizstab und weitere Sensoren lassen sich in den Einstellungen hinzufügen. ",
-      this.$.expExtraLink);
+    const $ = this.$;
+    const pv = this._tab === "pv";
+    this._exportScope = pv ? "pv" : "heat";
+    $.expKindSet.hidden = pv;
+    $.expRangeSet.hidden = pv;
+    $.expPvRangeSet.hidden = !pv;
+    if (pv) {
+      const panels = this._pvLayout?.panels?.length || 0;
+      $.expIntro.textContent = "Eine CSV-Datei mit vier Tabellen: Wechselrichter und Summe der Optimierer im Zeitraster, jedes Paneel im Zeitraster, Tageswerte je Paneel und Tageswerte der Anlage. Die Zuordnung der Sensoren steht im Kopf der Datei.";
+      $.expExtra.replaceChildren(panels
+        ? `Enthalten sind ${panels} Optimierer mit Leistung, Spannung am Ein- und Ausgang, Strom, Temperatur und PWM.`
+        : "Es wurden keine Tigo-Optimierer gefunden; exportiert wird nur der Wechselrichter.");
+    } else {
+      const count = (this._snap.export_extra || []).length;
+      $.expIntro.textContent = "Eine CSV-Datei zum Auswerten. Die Regeln und die Zuordnung der Sensoren stehen im Kopf der Datei.";
+      $.expExtra.replaceChildren(
+        count
+          ? `Im Verlauf werden zusätzlich ${count} weitere Sensoren exportiert. `
+          : "Zähler, Heizstab und weitere Sensoren lassen sich in den Einstellungen hinzufügen. ",
+        $.expExtraLink);
+    }
     this._resetExport();
     this.$.expDialog.showModal();
   }
@@ -2448,8 +3807,9 @@ class EnergyHubPanel extends HTMLElement {
 
   async _runExport() {
     const $ = this.$;
-    const range = this._exportRange;
-    const kind = this._exportKind;
+    const pv = this._exportScope === "pv";
+    const range = pv ? this._pvExportRange : this._exportRange;
+    const kind = pv ? "pv" : this._exportKind;
     const token = this._exportToken;
     const say = (text, error = false) => {
       if (token !== this._exportToken) return;
@@ -2461,9 +3821,11 @@ class EnergyHubPanel extends HTMLElement {
     let built;
     let summary;
     try {
-      built = kind === "effizienz"
-        ? await this._buildEfficiency(range, created, say, token)
-        : await this._buildHistory(range, created, say, token);
+      built = kind === "pv"
+        ? await this._buildPvFile(range, created, say, token)
+        : kind === "effizienz"
+          ? await this._buildEfficiency(range, created, say, token)
+          : await this._buildHistory(range, created, say, token);
     } catch (err) {
       say(`Der Export ist fehlgeschlagen: ${err?.message || err}`, true);
       $.expMake.disabled = false;
@@ -2480,9 +3842,11 @@ class EnergyHubPanel extends HTMLElement {
     const bytes = new Blob([built.csv]).size;
     const size = bytes > 1e6 ? `${nf1.format(bytes / 1e6)} MB` : `${nf0.format(Math.max(1, bytes / 1000))} kB`;
     this._export = { csv: built.csv, filename };
-    summary = kind === "effizienz"
-      ? `Fertig: ${nf0.format(built.rows)} Stunden, ${nf0.format(built.cycles)} Verdichterläufe, ${nf0.format(built.draws)} Speicherentnahmen, ${size}.`
-      : `Fertig: ${nf0.format(built.rows)} Zeilen, ${built.columns} Spalten, ${size}.`;
+    summary = kind === "pv"
+      ? `Fertig: ${nf0.format(built.rows)} Zeitpunkte, ${nf0.format(built.panelRows)} Zeilen für die Paneele, ${nf0.format(built.days)} Tage, ${size}.`
+      : kind === "effizienz"
+        ? `Fertig: ${nf0.format(built.rows)} Stunden, ${nf0.format(built.cycles)} Verdichterläufe, ${nf0.format(built.draws)} Speicherentnahmen, ${size}.`
+        : `Fertig: ${nf0.format(built.rows)} Zeilen, ${built.columns} Spalten, ${size}.`;
     say(built.note ? `${summary} ${built.note}` : summary);
     $.expMake.hidden = true;
     $.expSave.hidden = false;

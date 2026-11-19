@@ -56,6 +56,36 @@
           "ent_forecast_tomorrow": "Display only."
         }
       },
+      "inverter": {
+        "title": "Inverter",
+        "description": "For the PV area. Display and analysis only, nothing is controlled here. Everything is optional. The panel finds Tigo optimizers by itself when the tigo_rs485 integration is set up.",
+        "data": {
+          "ent_inv_status": "Inverter status",
+          "ent_mppt1_power": "MPPT 1: power",
+          "ent_mppt1_voltage": "MPPT 1: voltage",
+          "ent_mppt1_current": "MPPT 1: current",
+          "ent_mppt2_power": "MPPT 2: power",
+          "ent_mppt2_voltage": "MPPT 2: voltage",
+          "ent_mppt2_current": "MPPT 2: current",
+          "ent_pv_energy_today": "Generation today",
+          "ent_pv_energy_total": "Generation total",
+          "ent_load_energy_today": "House consumption today",
+          "ent_load_energy_total": "House consumption total",
+          "ent_import_energy_today": "Grid import today",
+          "ent_import_energy_total": "Grid import total",
+          "ent_export_energy_today": "Grid export today",
+          "ent_export_energy_total": "Grid export total",
+          "ent_grid_frequency": "Grid frequency",
+          "tigo_string_mppt1": "Tigo string on MPPT 1",
+          "tigo_string_mppt2": "Tigo string on MPPT 2"
+        },
+        "data_description": {
+          "ent_inv_status": "Text or code. Codes 0 to 7 of ZCS Azzurro and Sofar are translated, for example 2 = on grid.",
+          "ent_mppt1_power": "Power at the DC input in W or kW. Leave empty to calculate it from voltage times current.",
+          "ent_pv_energy_today": "Counters of the inverter in kWh. They are shown in the PV area, compared with the optimizers and exported.",
+          "tigo_string_mppt1": "String name as in tigo_rs485, for example A. Leave empty: if there is only one string, it belongs to MPPT 1."
+        }
+      },
       "storage": {
         "title": "Fireplace and storage tank",
         "description": "For systems with a water-jacket fireplace and a storage tank the heating draws from. Everything is optional; without a tank leave this step empty.",
@@ -157,6 +187,7 @@
           "heatpump": "Heat pump",
           "power": "Electricity",
           "pv": "Photovoltaics",
+          "inverter": "Inverter",
           "storage": "Fireplace and storage tank",
           "rules": "Rules",
           "actuator": "Action on the heat pump",
@@ -216,6 +247,36 @@
           "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export.",
           "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering in the morning.",
           "ent_forecast_tomorrow": "Display only."
+        }
+      },
+      "inverter": {
+        "title": "Inverter",
+        "description": "For the PV area. Display and analysis only, nothing is controlled here. Everything is optional. The panel finds Tigo optimizers by itself when the tigo_rs485 integration is set up.",
+        "data": {
+          "ent_inv_status": "Inverter status",
+          "ent_mppt1_power": "MPPT 1: power",
+          "ent_mppt1_voltage": "MPPT 1: voltage",
+          "ent_mppt1_current": "MPPT 1: current",
+          "ent_mppt2_power": "MPPT 2: power",
+          "ent_mppt2_voltage": "MPPT 2: voltage",
+          "ent_mppt2_current": "MPPT 2: current",
+          "ent_pv_energy_today": "Generation today",
+          "ent_pv_energy_total": "Generation total",
+          "ent_load_energy_today": "House consumption today",
+          "ent_load_energy_total": "House consumption total",
+          "ent_import_energy_today": "Grid import today",
+          "ent_import_energy_total": "Grid import total",
+          "ent_export_energy_today": "Grid export today",
+          "ent_export_energy_total": "Grid export total",
+          "ent_grid_frequency": "Grid frequency",
+          "tigo_string_mppt1": "Tigo string on MPPT 1",
+          "tigo_string_mppt2": "Tigo string on MPPT 2"
+        },
+        "data_description": {
+          "ent_inv_status": "Text or code. Codes 0 to 7 of ZCS Azzurro and Sofar are translated, for example 2 = on grid.",
+          "ent_mppt1_power": "Power at the DC input in W or kW. Leave empty to calculate it from voltage times current.",
+          "ent_pv_energy_today": "Counters of the inverter in kWh. They are shown in the PV area, compared with the optimizers and exported.",
+          "tigo_string_mppt1": "String name as in tigo_rs485, for example A. Leave empty: if there is only one string, it belongs to MPPT 1."
         }
       },
       "storage": {
