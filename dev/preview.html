@@ -25,6 +25,8 @@
   Start:  python3 -m http.server 8000   (im Hauptordner des Repositories)
   Dann:   http://localhost:8000/dev/preview.html
   Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty  ?tab=overview|power|pv|heat
+             ?ohne=wp,speicher,regelung,strom,batterie,wallbox,wr,tigo  (diese Teile sind nicht hinterlegt)
+             ?weg=wp  (Wärmepumpe hinterlegt, aber nicht erreichbar, etwa ohne Modbus-Karte)
 -->
 <script type="module">
   import "../custom_components/energy_hub/frontend/energy-hub-panel.js";
@@ -65,7 +67,7 @@
     "sensor.badheizung_leistung": "Badheizung Leistung", "sensor.waschmaschine_leistung": "Waschmaschine Leistung",
     "sensor.trockner_leistung": "Trockner Leistung", "sensor.spuelmaschine_leistung": "Spülmaschine Leistung",
   };
-  // PV: ZCS Azzurro mit einem String an MPPT 1, darin 14 Module mit Tigo-Optimierern.
+  // PV: ZCS Azzurro mit einem String an MPPT 1, darin 16 Module mit Tigo-Optimierern.
   // A4 ist verschmutzt, A9 liegt nachmittags im Schatten, A12 verliert ab und zu die Funkverbindung, A2 wird warm.
   const inv = {
     ent_inv_status: "sensor.azzurro_status", ent_mppt1_power: "sensor.pv_power",
@@ -77,7 +79,7 @@
     ent_import_energy_today: "sensor.azzurro_netzbezug_heute", ent_import_energy_total: "sensor.azzurro_netzbezug_gesamt",
     ent_export_energy_today: "sensor.azzurro_netzeinspeisung_heute", ent_export_energy_total: "sensor.azzurro_netzeinspeisung_gesamt",
   };
-  const LABELS = Array.from({ length: 14 }, (_x, i) => `A${i + 1}`);
+  const LABELS = Array.from({ length: 16 }, (_x, i) => `A${i + 1}`);
   const METRICS = ["power", "voltage_in", "voltage_out", "current", "temperature", "pwm", "energy_today"];
   const pid = (label, key) => `sensor.panel_${label.toLowerCase()}_${key}`;
   const layout = {
@@ -241,7 +243,7 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.5.0",
+    version: "0.5.1",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
@@ -273,6 +275,35 @@
     },
     log, log_rev: 1,
   };
+
+  // Teile der Anlage weglassen, um zu sehen, wie das Panel ohne sie aussieht
+  const without = new Set((q.get("ohne") || "").split(",").filter(Boolean));
+  const gone = new Set((q.get("weg") || "").split(",").filter(Boolean));
+  const PARTS = {
+    wp: ["ent_flow", "ent_return", "ent_return_target", "ent_dhw", "ent_dhw_target", "ent_outdoor", "ent_status",
+      "ent_compressor", "ent_power_el", "ent_power_heat", "ent_energy_el", "ent_energy_heat", "ent_energy_dhw",
+      "ent_energy_env", "ent_heater", "ent_second_heat", "ent_smart_grid", "ent_shift"],
+    speicher: ["ent_storage", "ent_lock", "ent_fireplace", "ent_fireplace_status"],
+    regelung: ["ent_pv_surplus", "ent_forecast_today", "ent_forecast_tomorrow"],
+    strom: ["ent_grid_power", "ent_pv_power", "ent_battery_power", "ent_battery_soc", "ent_house_power", "ent_wallbox_power"],
+    batterie: ["ent_battery_power", "ent_battery_soc"],
+    wallbox: ["ent_wallbox_power"],
+    wr: Object.keys(inv),
+  };
+  snapshot.entities = { ...snapshot.entities };
+  for (const part of without) for (const key of PARTS[part] || []) snapshot.entities[key] = null;
+  if (without.has("strom")) snapshot.consumers = [];
+  if (without.has("wp") || gone.has("wp")) {
+    snapshot.settings.actuator = "dry_run";
+    snapshot.state.dry_run = true;
+  }
+  if (without.has("wp")) snapshot.export_extra = [];
+  if (without.has("tigo")) layout.panels = [];
+  if (without.has("tigo")) layout.strings = [];
+  if (without.has("speicher")) snapshot.settings.storage_ready_c = null;
+  // nicht erreichbar: Zustand unavailable, kein Verlauf, keine Statistik
+  const unreachable = new Set([...gone].flatMap((part) => (PARTS[part] || []).map((key) => snapshot.entities[key]).filter(Boolean)));
+  for (const id of unreachable) states[id] = { state: "unavailable", attributes: {} };
 
   // Erfundener Tagesverlauf: Sonne mittags, Heizung taktet, Warmwasser wird mittags geladen
   function history(id, t0, t1) {
@@ -330,7 +361,7 @@
       if (msg.type === "history/history_during_period") {
         const t0 = new Date(msg.start_time).getTime();
         const t1 = new Date(msg.end_time).getTime();
-        return Object.fromEntries(msg.entity_ids.map((id) => [id, scene === "empty" ? [] : history(id, t0, t1)]));
+        return Object.fromEntries(msg.entity_ids.map((id) => [id, scene === "empty" || unreachable.has(id) ? [] : history(id, t0, t1)]));
       }
       if (msg.type === "recorder/statistics_during_period") {
         // Statistik nur für die Strom-Sensoren; alles andere holt das Panel aus dem Verlauf
@@ -340,7 +371,7 @@
         const res = {};
         if (msg.period === "day") {
           for (const id of msg.statistic_ids) {
-            const values = sim[id];
+            const values = unreachable.has(id) ? null : sim[id];
             if (!values) continue;
             res[id] = [];
             const d = new Date(t0);
@@ -358,7 +389,7 @@
         }
         const per = msg.period === "hour" ? 12 : 1;
         for (const id of msg.statistic_ids) {
-          const values = sim[id];
+          const values = unreachable.has(id) ? null : sim[id];
           if (!values) continue;
           res[id] = [];
           for (let i = 0; i + per <= values.length; i += per) {

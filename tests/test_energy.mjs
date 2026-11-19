@@ -154,7 +154,11 @@ test("heatFindings: Taktung, Arbeitszahl, Heizstab, Probebetrieb", () => {
   assert.equal(tones["Arbeitszahl 2,2"], "warn");
   assert.equal(tones["Der Heizstab lief 1 h 15 min"], "warn");
   assert.equal(tones["Der Kamin-Speicher hat mitgeheizt"], "good");
-  assert.equal(tones["PV-Überschuss floss in die Heizung"], "good");
+  // Im Probebetrieb wurde nichts angehoben, nur protokolliert
+  assert.equal(tones["Im Probebetrieb hätte die Regelung angehoben"], "info");
+  assert.equal(tones["PV-Überschuss floss in die Heizung"], undefined);
+  const real = m.heatFindings({ ...base, boostMin: 90 });
+  assert.equal(real.find((f) => f.title === "PV-Überschuss floss in die Heizung")?.tone, "good");
 
   assert.deepEqual(m.heatFindings({ days: 0, starts: 0, cycles: 0, meanRunMin: null, elKwh: 0, heatKwh: 0, heaterMin: null, draws: 0, drawMin: 0, boostMin: 0, dryRun: false }), []);
 });

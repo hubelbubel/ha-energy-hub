@@ -31,6 +31,11 @@ const SERIES = [
   { key: "outdoor", ent: "ent_outdoor", name: "Außen", cls: "s-outdoor" },
 ];
 
+// Sensoren der Wärmepumpe; ist keiner hinterlegt, zeigt das Panel den Bereich Wärme ohne Anlagenschema
+const HEATPUMP_KEYS = [
+  "ent_flow", "ent_return", "ent_return_target", "ent_dhw", "ent_dhw_target", "ent_outdoor",
+  "ent_status", "ent_compressor", "ent_power_el", "ent_power_heat",
+];
 // Paneele, die im Verlauf gleichzeitig farbig hervorgehoben werden können (Farben --p1 bis --p7)
 const PANEL_SLOTS = 7;
 const PV_INVERTER_KEYS = [
@@ -864,7 +869,10 @@ export function heatFindings(agg) {
     out.push({ tone: "good", area: "Wärme", title: "Der Kamin-Speicher hat mitgeheizt",
       text: `${agg.draws}-mal, zusammen ${fmtDur(agg.drawMin)}. In dieser Zeit stand die Wärmepumpe.` });
   }
-  if (agg.boostMin > 0) {
+  if (agg.boostMin > 0 && agg.dryRun) {
+    out.push({ tone: "info", area: "Wärme", title: "Im Probebetrieb hätte die Regelung angehoben",
+      text: `Zusammen ${fmtDur(agg.boostMin)}. Gesendet wurde nichts.` });
+  } else if (agg.boostMin > 0) {
     out.push({ tone: "good", area: "Wärme", title: "PV-Überschuss floss in die Heizung",
       text: `Die Heizung war ${fmtDur(agg.boostMin)} angehoben.` });
   }
@@ -1706,6 +1714,10 @@ class EnergyHubPanel extends HTMLElement {
       "Es ist noch kein Sensor für den PV-Überschuss hinterlegt. Ohne ihn bleibt die Heizung im Normalbetrieb. ",
       h("a", { href: settingsHref, onclick: nav }, "Sensor hinterlegen")
     );
+    $.nohp = h("p", { class: "note", hidden: true });
+    $.nohpLink = h("a", { href: settingsHref, onclick: nav }, "Wärmepumpe hinterlegen");
+    $.silent = h("p", { class: "note error", hidden: true },
+      "Die Wärmepumpe meldet gerade keine Werte: Alle ihre Sensoren sind nicht verfügbar. Prüfe die Verbindung zur Wärmepumpe, etwa die Modbus-Karte oder den RS485-Umsetzer.");
     $.error = h("p", { class: "note error", hidden: true });
 
     $.auto = h("button", {
@@ -1780,7 +1792,7 @@ class EnergyHubPanel extends HTMLElement {
       ($.panes.heat = h("main", { hidden: true },
         h("section", { class: "lage" },
           h("div", {},
-            $.headline, $.reason, $.dry, $.nopv, $.error,
+            $.headline, $.reason, $.nohp, $.silent, $.dry, $.nopv, $.error,
             h("div", { class: "controls" },
               h("div", { class: "row" }, h("span", { class: "label" }, "Automatik"), h("div", { class: "ctl" }, $.auto, $.autoText)),
               h("div", { class: "row" }, h("span", { class: "label" }, "Von Hand"),
@@ -1908,10 +1920,23 @@ class EnergyHubPanel extends HTMLElement {
     const st = snap.state;
     const cfg = snap.entities;
 
-    const headline = this._heatHeadline(st);
-    $.headline.textContent = headline;
-    $.reason.textContent = st.override ? "" : st.reason;
-    $.dry.hidden = !st.dry_run;
+    const hasHp = this._hasHeatPump();
+    $.headline.textContent = hasHp ? this._heatHeadline(st) : "Noch keine Wärmepumpe hinterlegt.";
+    if (hasHp) {
+      $.reason.textContent = st.override ? "" : st.reason;
+    } else {
+      $.reason.textContent = cfg.ent_pv_surplus && !st.override ? `Die Regelung stünde gerade auf ${MODE_NAME[st.mode]}. ${st.reason}` : "";
+    }
+    $.nohp.hidden = hasHp;
+    if (!hasHp) {
+      $.nohp.replaceChildren(
+        "Für die Wärmepumpe sind noch keine Sensoren hinterlegt. ",
+        cfg.ent_pv_surplus ? "Die Regelung läuft trotzdem mit und schreibt ins Logbuch, wann sie angehoben oder abgesenkt hätte. " : "",
+        $.nohpLink);
+    }
+    $.silent.hidden = !hasHp || !this._heatPumpSilent();
+    $.schema.toggleAttribute("hidden", !hasHp); // SVG kennt die Eigenschaft hidden nicht
+    $.dry.hidden = !st.dry_run || !hasHp;
     $.nopv.hidden = Boolean(cfg.ent_pv_surplus);
     if (st.last_error) {
       this._fail(`Die Wärmepumpe hat die letzte Vorgabe nicht angenommen: ${st.last_error}`);
@@ -1928,10 +1953,11 @@ class EnergyHubPanel extends HTMLElement {
     $.endOverride.hidden = !st.override;
 
     // Anlagenschema
-    const running = this._state("ent_compressor")?.state === "on";
+    const comp = this._state("ent_compressor")?.state;
+    const running = comp === "on";
     $.schema.classList.toggle("running", running);
     $.sOutdoor.textContent = cfg.ent_outdoor ? fmtC(this._value("ent_outdoor")) : "";
-    $.sCompressor.textContent = cfg.ent_compressor ? (running ? "Verdichter läuft" : "Verdichter steht") : "";
+    $.sCompressor.textContent = !cfg.ent_compressor ? "" : running ? "Verdichter läuft" : comp === "off" ? "Verdichter steht" : "Verdichter: kein Wert";
     const status = this._state("ent_status")?.state;
     $.sStatus.textContent = status && !["unknown", "unavailable"].includes(status) ? status : "";
     $.sDhw.textContent = cfg.ent_dhw ? fmtC(this._value("ent_dhw")) : "";
@@ -2238,6 +2264,21 @@ class EnergyHubPanel extends HTMLElement {
     return name.replace(/\s+(Leistung|Power|Wirkleistung|power)$/i, "");
   }
 
+  _hasHeatPump() {
+    const cfg = this._snap?.entities || {};
+    return HEATPUMP_KEYS.some((key) => cfg[key]);
+  }
+
+  /** Wärmepumpe hinterlegt, aber keiner ihrer Sensoren hat einen Wert (etwa ohne Modbus-Verbindung). */
+  _heatPumpSilent() {
+    const cfg = this._snap?.entities || {};
+    const ids = HEATPUMP_KEYS.map((key) => cfg[key]).filter(Boolean);
+    return ids.length > 0 && ids.every((id) => {
+      const st = this._hass?.states?.[id];
+      return !st || isGap(st.state);
+    });
+  }
+
   _heatHeadline(st) {
     const since = fmtClock(st.since);
     if (st.override) {
@@ -2308,9 +2349,10 @@ class EnergyHubPanel extends HTMLElement {
     $.pNote.hidden = has;
     $.oNote.hidden = has;
     for (const el of [$.oBalWrap, $.oFactsSec, $.oHoursSec, $.pBalWrap, $.pFactsSec, $.pSheet, $.pRankSec]) el.hidden = !has;
-    const heat = this._heatHeadline(snap.state);
+    const hasHp = this._hasHeatPump();
+    const heat = hasHp ? this._heatHeadline(snap.state) : null;
     const aux = this._liveAux();
-    const heatBits = [heat];
+    const heatBits = heat ? [heat] : [];
     if (aux.fireOn) heatBits.push("Der Kamin brennt.");
     if (aux.drawing) heatBits.push("Der Speicher liefert Wärme.");
     else if (aux.ready) heatBits.push("Der Speicher ist bereit.");
@@ -2318,9 +2360,9 @@ class EnergyHubPanel extends HTMLElement {
     if (!has) {
       $.pHeadline.textContent = "Noch keine Stromdaten.";
       $.pSub.textContent = "";
-      $.oHeadline.textContent = heat;
+      $.oHeadline.textContent = heat || "Noch keine Daten für die Übersicht.";
       $.oNow.textContent = "";
-      $.oSub.textContent = heatBits.slice(1).join(" ");
+      $.oSub.textContent = heatBits.slice(heat ? 1 : 0).join(" ");
       return;
     }
     const v = this._liveBalance();
@@ -2490,7 +2532,7 @@ class EnergyHubPanel extends HTMLElement {
       // ohne Daten von Wechselrichter und Optimierern gibt es keine PV-Auswertung
     }
     try {
-      findings.push(...heatFindings(await this._heatWeek()));
+      if (this._hasHeatPump()) findings.push(...heatFindings(await this._heatWeek()));
     } catch (_err) {
       // ohne Verlauf der Wärmepumpe gibt es keine Wärme-Auswertung
     }
@@ -2825,7 +2867,7 @@ class EnergyHubPanel extends HTMLElement {
     $.vSub = h("p", { class: "reason" });
     $.vFault = h("p", { class: "note error", hidden: true });
     $.vNote = h("p", { class: "note", hidden: true },
-      "Für den Bereich PV ist noch nichts hinterlegt. Gebraucht werden die Sensoren des Wechselrichters oder die Integration tigo_rs485 für die Optimierer. ",
+      "Für den Bereich PV ist noch nichts hinterlegt. Gebraucht wird mindestens die Leistung der PV-Anlage, besser die Sensoren des Wechselrichters, dazu nach Wunsch die Integration tigo_rs485 für die Optimierer. ",
       h("a", { href: settingsHref, onclick: nav }, "Wechselrichter hinterlegen"));
     $.vTiles = h("div", { class: "tiles" });
     $.vFacts = h("dl", { class: "facts" });
@@ -2880,7 +2922,7 @@ class EnergyHubPanel extends HTMLElement {
   }
 
   _pvConfigured() {
-    return this._pvHasInverter() || Boolean(this._pvLayout?.panels?.length);
+    return this._pvHasInverter() || Boolean(this._snap?.entities?.ent_pv_power) || Boolean(this._pvLayout?.panels?.length);
   }
 
   _pvStrings() {
@@ -3327,7 +3369,7 @@ class EnergyHubPanel extends HTMLElement {
     const tigo = cut(this._pvTigoSum(full, null));
     if (any(total) || any(tigo)) {
       plots.push({ title: "Leistung in Watt", height: 170, zero: true, series: [
-        any(total) && line(total, "s-pv", "Wechselrichter", fmtW, { kind: "area" }),
+        any(total) && line(total, "s-pv", this._pvHasInverter() ? "Wechselrichter" : "PV-Anlage", fmtW, { kind: "area" }),
         any(tigo) && line(tigo, "s-ink", "Optimierer", fmtW, { thin: true }),
       ].filter(Boolean) });
     }
@@ -3412,7 +3454,7 @@ class EnergyHubPanel extends HTMLElement {
     await this._pvEnsureLayout();
     const cfg = this._snap.entities;
     const panels = this._pvLayout?.panels || [];
-    if (!panels.length && !this._pvHasInverter()) {
+    if (!panels.length && !this._pvHasInverter() && !cfg.ent_pv_power) {
       this._pvFind = [];
       return this._pvFind;
     }

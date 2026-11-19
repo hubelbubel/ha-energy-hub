@@ -119,14 +119,17 @@ Die Aussagen in der Übersicht sind feste Regeln mit Zahlen, kein Sprachmodell. 
 | Arbeitszahl | Wärme durch Strom aus den Leistungs-Sensoren; gut ab 3,5, auffällig unter 2,5 |
 | Der Heizstab lief | jede Laufzeit über null |
 | Der Kamin-Speicher hat mitgeheizt | mindestens eine Entnahme |
-| PV-Überschuss floss in die Heizung | Zeit im Zustand „angehoben“ über null |
+| PV-Überschuss floss in die Heizung | Zeit im Zustand „angehoben“ über null, mit gewähltem Eingriff |
+| Im Probebetrieb hätte die Regelung angehoben | dasselbe im Probebetrieb; ohne Bewertung, gesendet wurde nichts |
 | Die Regelung läuft im Probebetrieb | solange kein Eingriff gewählt ist |
+
+Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepumpe hinterlegt ist.
 
 „Bis zu“ in einer Aussage heißt: zeitgleich gemessen, nicht einzeln zugeordnet. Läuft die Spülmaschine, während das Haus Strom aus dem Netz bezieht, zählt ihr Verbrauch bis zur Höhe des Bezugs als Netzstrom.
 
 ## Stand
 
-Version 0.5.0. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 9 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (14 Optimierer an einem MPPT), noch nicht an der echten Anlage. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.1. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 9 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -142,9 +145,24 @@ Version 0.5.0. Die Regellogik und die Abläufe im Regler sind durch 39 automatis
 ## Voraussetzungen
 
 - Home Assistant 2025.1 oder neuer.
-- Entitäten für die Wärmepumpe. Für Dimplex liegt ein fertiges Package bei: [`packages/dimplex_wpm.yaml`](packages/dimplex_wpm.yaml). Die Vorschläge bei der Einrichtung passen zu dessen Entitätsnamen.
+- Für die Bereiche, die du nutzen willst, die passenden Sensoren (siehe „Was gebraucht wird“). Keiner davon ist Pflicht.
+- Für die Regelung: Entitäten für die Wärmepumpe. Für Dimplex liegt ein fertiges Package bei: [`packages/dimplex_wpm.yaml`](packages/dimplex_wpm.yaml). Die Vorschläge bei der Einrichtung passen zu dessen Entitätsnamen.
 - Ein Sensor für den PV-Überschuss (W oder kW). Geeignet ist auch ein Netzleistungs-Sensor, bei dem Einspeisung negativ ist; das Vorzeichen stellst du ein.
 - Für das Absenken: ein Sensor „PV-Prognose Rest heute“ (kWh oder Wh), zum Beispiel aus Solcast oder Forecast.Solar.
+
+## Was gebraucht wird
+
+Energy Hub braucht nicht alle Teile. Was fehlt, lässt das Panel weg oder sagt, was zu hinterlegen wäre. Bei der Einrichtung werden nur Entitäten vorgeschlagen, die es in deinem Home Assistant gibt.
+
+| Bereich | Mindestens | Fehlt etwas |
+|---|---|---|
+| Übersicht | Netzanschluss oder Leistung der PV-Anlage (Schritt Strom) | Ohne Wärmepumpe wird die Heizung nicht erwähnt, die Aussagen zur Wärme entfallen |
+| Strom | Netzanschluss und Leistung der PV-Anlage | Batterie, Wallbox und Verbraucher erscheinen nur, wenn sie hinterlegt sind |
+| PV | Leistung der PV-Anlage, Sensoren des Wechselrichters oder die Integration tigo_rs485 | Ohne Wechselrichter kein Abgleich mit den Optimierern, ohne Optimierer keine Paneele |
+| Wärme | ein Sensor der Wärmepumpe | Ohne Wärmepumpe kein Anlagenschema. Mit Sensor für den PV-Überschuss läuft die Regelung trotzdem mit und schreibt ins Logbuch, wann sie angehoben oder abgesenkt hätte |
+| Regelung | Sensor für den PV-Überschuss, für das Absenken die Prognose | Ohne Überschuss bleibt die Heizung im Normalbetrieb |
+
+Ist die Wärmepumpe hinterlegt, meldet aber keiner ihrer Sensoren einen Wert (etwa weil die Modbus-Karte fehlt), zeigt der Bereich Wärme einen Hinweis statt leerer Werte. Ist ein Eingriff gewählt, stehen die fehlgeschlagenen Versuche als Fehler im Logbuch.
 
 ## Installation
 
@@ -240,7 +258,7 @@ Daraus lassen sich Arbeitszahl je Tag, je Betriebsart und je Lauf, Taktung, Abta
 - `tage_paneele`: Ertrag je Tag und Paneel, Anteil am Median im String, Spitze und höchste Temperatur
 - `tage_anlage`: Erzeugung laut Wechselrichter (Zähler, sonst aus der Leistung), Summe der Optimierer, Abweichung, Hausverbrauch, Netzbezug, Einspeisung und Minuten im Fehlerzustand
 
-Mit 14 Optimierern sind 7 Tage knapp 1 MB groß. Die 5-Minuten-Werte bewahrt Home Assistant standardmäßig zehn Tage auf, Stundenwerte dauerhaft.
+Mit 16 Optimierern sind 7 Tage gut 1 MB groß. Die 5-Minuten-Werte bewahrt Home Assistant standardmäßig zehn Tage auf, Stundenwerte dauerhaft.
 
 Zu beachten:
 

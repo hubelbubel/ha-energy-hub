@@ -166,14 +166,25 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
 }
 
 
+def _existing_only(suggestion: Any, existing: set[str] | None) -> Any:
+    """Vorschlag nur, wenn es die Entität gibt; bei Listen nur die vorhandenen."""
+    if existing is None or suggestion is None:
+        return suggestion
+    if isinstance(suggestion, list):
+        return [entity_id for entity_id in suggestion if entity_id in existing] or None
+    return suggestion if suggestion in existing else None
+
+
 def build_schema(
     step: str, values: dict[str, Any], *, initial: bool, existing: set[str] | None = None
 ) -> vol.Schema:
-    """Formular eines Schritts. Bei der Ersteinrichtung werden Vorschläge eingetragen.
+    """Formular eines Schritts mit Vorschlägen für die Entitäten.
 
-    existing: vorhandene Entitäten. Der Schritt „Wechselrichter“ kam erst mit 0.5 dazu;
-    wer schon eingerichtet ist, bekommt dort beim ersten Öffnen die Vorschläge, die es
-    in diesem Home Assistant gibt. Sobald ein Feld belegt ist, gilt nur noch das Gespeicherte.
+    existing: vorhandene Entitäten. Vorgeschlagen wird nur, was es in diesem Home Assistant
+    gibt; wer keine Dimplex-Wärmepumpe oder keinen Azzurro hat, bekommt leere Felder.
+    Bei der Ersteinrichtung gilt das für alle Schritte. Der Schritt „Wechselrichter“ kam
+    erst mit 0.5 dazu; wer schon eingerichtet ist, bekommt dort beim ersten Öffnen die
+    Vorschläge. Sobald ein Feld belegt ist, gilt nur noch das Gespeicherte.
     """
     schema: dict[Any, Any] = {}
     fresh = (
@@ -182,12 +193,12 @@ def build_schema(
         and not any(key in values for key, _sel, _req in FIELDS[step])
     )
     for key, sel, required in FIELDS[step]:
-        suggestion = c.SUGGESTED_ENTITIES.get(key)
+        suggestion = _existing_only(c.SUGGESTED_ENTITIES.get(key), existing)
         if key in values:
             current = values[key]
         elif initial:
             current = c.DEFAULTS.get(key, suggestion)
-        elif fresh and isinstance(suggestion, str) and suggestion in existing:
+        elif fresh and isinstance(suggestion, str):
             current = suggestion
         else:
             current = c.DEFAULTS.get(key) if required else None
@@ -242,7 +253,9 @@ class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
         values = {**self._values, **(user_input or {})}
         return self.async_show_form(
             step_id=step_id,
-            data_schema=build_schema(step, values, initial=user_input is None),
+            data_schema=build_schema(
+                step, values, initial=user_input is None, existing=set(self.hass.states.async_entity_ids())
+            ),
             errors=errors,
         )
 

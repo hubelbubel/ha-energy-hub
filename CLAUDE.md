@@ -52,4 +52,4 @@ Die Integration ist noch nie in einem laufenden Home Assistant oder an der echte
 
 ## Anlage des Nutzers (Bezug für Beispiele und Vorschläge)
 
-Dimplex-Wärmepumpe (WPM, Modbus RTU), wasserführender Kamin (Spartherm S-Thermatik NEO) mit Speicher (Bivalent-Regenerativ), PV mit ZCS-Azzurro-HYD-Wechselrichter und 14 Tigo-Optimierern an einem MPPT (tigo_rs485), Batterie und go-e-Wallbox.
+Dimplex-Wärmepumpe (WPM, Modbus RTU), wasserführender Kamin (Spartherm S-Thermatik NEO) mit Speicher (Bivalent-Regenerativ), PV mit ZCS-Azzurro-HYD-Wechselrichter und 16 Tigo-Optimierern an einem MPPT (tigo_rs485), Batterie und go-e-Wallbox.
