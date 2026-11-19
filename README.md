@@ -283,7 +283,6 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 - Eine Installation je Home Assistant.
 - Die Integration liest und schreibt über Entitäten. Sie spricht nicht selbst Modbus.
 - Die Prognose für morgen wird angezeigt, aber noch nicht für Regeln benutzt.
-- Im Repository liegt noch keine Lizenzdatei.
 
 ## Entwicklung
 
@@ -306,3 +305,6 @@ Aufbau:
 | `tigo.py` | Optimierer, Strings und ihre Entitäten aus dem Entitätsregister von tigo_rs485, ohne Home-Assistant-Importe |
 | `frontend/energy-hub-panel.js` | Panel mit den vier Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 
+## Lizenz
+
+MIT, siehe [`LICENSE`](LICENSE). Die Nutzung erfolgt ohne Gewähr; das gilt besonders für Eingriffe an der Wärmepumpe.
