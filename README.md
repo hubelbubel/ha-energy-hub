@@ -220,4 +220,3 @@ Aufbau:
 | `websocket_api.py` | Schnittstelle zwischen Panel und Regler |
 | `frontend/energy-hub-panel.js` | Panel mit den drei Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 
-Vor der Veröffentlichung in `manifest.json` den Platzhalter `OWNER` in den beiden Adressen durch den GitHub-Namen ersetzen.
