@@ -187,3 +187,71 @@ test("heatFindings: Taktung, Arbeitszahl, Heizstab, Probebetrieb", () => {
 
   assert.deepEqual(m.heatFindings({ days: 0, starts: 0, cycles: 0, meanRunMin: null, elKwh: 0, heatKwh: 0, heaterMin: null, draws: 0, drawMin: 0, boostMin: 0, dryRun: false }), []);
 });
+
+/* ---- Tage: Tagesleiste und Zeitfenster ---- */
+
+const at = (text) => new Date(text).getTime();
+
+test("shiftDay: ganze Kalendertage, auch über die Zeitumstellung", () => {
+  const day = at("2026-11-20T00:00:00+01:00");
+  assert.equal(m.midnightOf(at("2026-11-20T17:40:00+01:00")), day);
+  assert.equal(m.shiftDay(day, -1), at("2026-11-19T00:00:00+01:00"));
+  assert.equal(m.shiftDay(at("2026-11-20T09:15:00+01:00"), 3), at("2026-11-23T00:00:00+01:00"));
+  // 29. März 2026 hat 23 Stunden, 25. Oktober 2026 hat 25
+  const spring = at("2026-03-29T00:00:00+01:00");
+  assert.equal(m.shiftDay(spring, 1) - spring, 23 * HOUR);
+  const autumn = at("2026-10-25T00:00:00+02:00");
+  assert.equal(m.shiftDay(autumn, 1) - autumn, 25 * HOUR);
+  assert.equal(m.shiftDay(m.shiftDay(autumn, 1), -1), autumn);
+});
+
+test("dayWindow: heute rückwärts ab jetzt, frühere Tage als ganze Kalendertage", () => {
+  const now = at("2026-11-20T10:31:00+01:00");
+  const today = m.dayWindow(null, 48, 300e3, now);
+  assert.equal(today.t1, at("2026-11-20T10:35:00+01:00"));
+  assert.equal(today.t1 - today.t0, 48 * HOUR);
+  assert.equal(today.n, 576);
+  const day = at("2026-11-17T00:00:00+01:00");
+  assert.deepEqual(m.dayWindow(day, 24, 300e3, now), { t0: day, t1: at("2026-11-18T00:00:00+01:00"), n: 288 });
+  assert.deepEqual(m.dayWindow(day, 48, HOUR, now), { t0: at("2026-11-16T00:00:00+01:00"), t1: at("2026-11-18T00:00:00+01:00"), n: 48 });
+  assert.equal(m.dayWindow(day, 168, HOUR, now).t0, at("2026-11-11T00:00:00+01:00"));
+  // der Tag der Zeitumstellung im Herbst hat 25 Raster zu einer Stunde
+  assert.equal(m.dayWindow(at("2026-10-25T00:00:00+02:00"), 24, HOUR, now).n, 25);
+});
+
+test("dayWord: heute, gestern, sonst das Datum, im Vorjahr mit Jahreszahl", () => {
+  const now = at("2026-11-20T08:00:00+01:00");
+  assert.equal(m.dayWord(at("2026-11-20T00:00:00+01:00"), now), "heute");
+  assert.equal(m.dayWord(at("2026-11-19T00:00:00+01:00"), now), "gestern");
+  assert.equal(m.dayWord(at("2026-11-03T00:00:00+01:00"), now), "am 3. November");
+  assert.equal(m.dayWord(at("2026-11-03T00:00:00+01:00"), now, true), "am 3.11.");
+  assert.equal(m.dayWord(at("2025-12-31T00:00:00+01:00"), now), "am 31. Dezember 2025");
+  assert.equal(m.dayWord(at("2025-12-31T00:00:00+01:00"), now, true), "am 31.12.2025");
+});
+
+test("dayNav: zurück bis zum ersten Tag mit Daten, vor bis heute", () => {
+  const now = at("2026-11-20T08:00:00+01:00");
+  const first = at("2026-11-02T00:00:00+01:00");
+  assert.deepEqual(m.dayNav(null, null, now),
+    { label: "Freitag, 20. November", rel: "Heute", today: true, prev: true, next: false });
+  assert.deepEqual(m.dayNav(at("2026-11-19T00:00:00+01:00"), first, now),
+    { label: "Donnerstag, 19. November", rel: "Gestern", today: false, prev: true, next: true });
+  const atFirst = m.dayNav(first, first, now);
+  assert.deepEqual([atFirst.rel, atFirst.prev, atFirst.next], ["vor 18 Tagen", false, true]);
+  assert.equal(m.dayNav(at("2025-11-20T00:00:00+01:00"), null, now).label, "Donnerstag, 20. November 2025");
+  // ein Tag in der Zukunft wird zu heute
+  assert.equal(m.dayNav(at("2026-11-22T00:00:00+01:00"), first, now).today, true);
+});
+
+test("Stundenwerte füllen im 5-Minuten-Raster die ganze Stunde", () => {
+  const step = 300e3;
+  const grid = m.rowsToGrid([[T0, 600, HOUR], [T0 + HOUR, 900, step], [T0 + HOUR + step, 300, step]], T0, step, 14);
+  assert.deepEqual(grid, [...new Array(12).fill(600), 900, 300]);
+  // 1,2 kWh in einer Stunde sind 1.200 W in jedem der zwölf Raster; Wh werden umgerechnet
+  const w = m.counterPower([[T0, 1.2, HOUR]], T0, step, 12);
+  assert.equal(w.length, 12);
+  w.forEach((x) => near(x, 1200));
+  m.counterPower([[T0, 600, HOUR]], T0, step, 12, 0.001).forEach((w) => near(w, 600));
+  // ragt die Stunde über das Raster hinaus, zählt nur ihr Anteil darin
+  m.counterPower([[T0 - 0.5 * HOUR, 1.2, HOUR]], T0, step, 12).forEach((x, b) => (b < 6 ? near(x, 1200) : assert.equal(x, null)));
+});

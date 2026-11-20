@@ -28,6 +28,7 @@
              ?ohne=wp,speicher,regelung,strom,batterie,wallbox,wr,tigo  (diese Teile sind nicht hinterlegt)
              ?weg=wp  (Wärmepumpe hinterlegt, aber nicht erreichbar, etwa ohne Modbus-Karte)
              ?ohneverlauf=netz  (Sensor hat einen Wert, aber keinen Verlauf, etwa vom Recorder ausgeschlossen)
+             ?seit=40  (seit wie vielen Tagen es Statistik gibt; Verlauf und 5-Minuten-Werte reichen wie im Recorder 10 Tage zurück)
 -->
 <script type="module">
   import "../custom_components/energy_hub/frontend/energy-hub-panel.js";
@@ -109,6 +110,14 @@
   }
 
   const STEP = 300e3;
+  // Wie der Recorder: Verlauf und 5-Minuten-Statistik zehn Tage, Stundenwerte seit dem ersten Tag
+  const KEEP_FROM = Math.ceil((now - 10 * 86400e3) / STEP) * STEP;
+  const FIRST = (() => {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - Number(q.get("seit") || 40));
+    return d.getTime();
+  })();
   function simulate(t0, t1) {
     const out = {};
     const ids = [pw.ent_grid_power, pw.ent_pv_power, pw.ent_battery_power, pw.ent_battery_soc, pw.ent_wallbox_power,
@@ -248,7 +257,7 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.5.5",
+    version: "0.5.6",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
@@ -314,10 +323,11 @@
     .filter(Boolean));
 
   // Erfundener Tagesverlauf: Sonne mittags, Heizung taktet, Warmwasser wird mittags geladen
-  function history(id, t0, t1) {
+  // all: auch Werte vor den zehn Tagen des Verlaufs, als Grundlage der Stundenwerte
+  function history(id, t0, t1, all = false) {
     const rows = [];
     const stepMs = 5 * 60e3;
-    for (let t = t0; t <= t1; t += stepMs) {
+    for (let t = all ? t0 : Math.max(t0, KEEP_FROM); t <= t1; t += stepMs) {
       const d = new Date(t);
       const hour = d.getHours() + d.getMinutes() / 60;
       const sun = Math.max(0, Math.sin(((hour - 7.5) / 9.5) * Math.PI));
@@ -373,11 +383,38 @@
         return Object.fromEntries(msg.entity_ids.map((id) => [id, scene === "empty" || unreachable.has(id) || noRec.has(id) ? [] : history(id, t0, t1)]));
       }
       if (msg.type === "recorder/statistics_during_period") {
-        // Statistik nur für die Strom-Sensoren; alles andere holt das Panel aus dem Verlauf
-        const t0 = new Date(msg.start_time).getTime();
+        // Statistik für Strom und PV aus der Simulation, für die Zahlen der Wärmepumpe aus dem erfundenen Verlauf
+        const asked = new Date(msg.start_time).getTime();
         const t1 = Math.min(new Date(msg.end_time).getTime(), Date.now());
-        const sim = scene === "empty" ? {} : simulate(t0, t1);
         const res = {};
+        const ok = (id) => scene !== "empty" && !unreachable.has(id) && !noRec.has(id);
+        if (msg.period === "month" || (msg.period === "day" && !msg.types.includes("change"))) {
+          // nur die Zeiträume, in denen es Werte gibt (so fragt das Panel nach dem ersten Tag)
+          for (const id of msg.statistic_ids.filter(ok)) {
+            res[id] = [];
+            const d = new Date(Math.max(asked, FIRST));
+            d.setHours(0, 0, 0, 0);
+            if (msg.period === "month") d.setDate(1);
+            while (d.getTime() < t1) {
+              const start = d.getTime();
+              if (msg.period === "month") d.setMonth(d.getMonth() + 1);
+              else d.setDate(d.getDate() + 1);
+              if (start >= asked) res[id].push({ start, end: d.getTime(), mean: 0 });
+            }
+          }
+          return res;
+        }
+        // Stundenwerte beginnen zur vollen Stunde, 5-Minuten-Werte gibt es nur zehn Tage
+        let t0 = Math.max(asked, FIRST);
+        if (msg.period === "hour") t0 = Math.ceil(t0 / 3600e3) * 3600e3;
+        if (msg.period === "5minute") t0 = Math.max(t0, KEEP_FROM);
+        if (t0 >= t1) return res;
+        const sim = scene === "empty" ? {} : simulate(t0, t1);
+        for (const id of msg.statistic_ids) {
+          if (sim[id] || !ok(id)) continue;
+          const rows = history(id, t0, t1 - 1, true).map((r) => Number(r.s));
+          if (rows.length && rows.every(Number.isFinite)) sim[id] = rows;
+        }
         if (msg.period === "day") {
           for (const id of msg.statistic_ids) {
             const values = unreachable.has(id) || noRec.has(id) ? null : sim[id];

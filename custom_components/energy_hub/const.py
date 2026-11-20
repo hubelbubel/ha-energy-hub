@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "energy_hub"
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"

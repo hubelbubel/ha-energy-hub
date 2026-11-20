@@ -2,6 +2,12 @@
 
 Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releases; den zeigt Home Assistant beim Update an. Ältere Versionen stehen nur im Verlauf auf GitHub.
 
+## 0.5.6 – 2026-11-20
+
+- Tagesleiste unten in allen Bereichen: Sie zeigt, welcher Tag zu sehen ist. Mit den Pfeilen geht es einen Tag zurück oder vor, „Heute“ springt zurück auf heute. Gibt es keine älteren Daten mehr, ist der Pfeil zurück ausgegraut.
+- An einem früheren Tag zeigen Übersicht, Strom, PV und Wärme dessen Tageswerte, Verläufe und Ranglisten, etwa „Verbrauch gestern“ oder „Paneele am 17. November“. Was gerade passiert, bleibt live: Leistung jetzt, Kacheln „Paneele jetzt“, Lage der Heizung.
+- Tage, die länger zurückliegen, als Home Assistant die genauen Werte aufhebt (von sich aus zehn Tage), kommen aus den Stundenwerten der Statistik und sind entsprechend gröber.
+
 ## 0.5.5 – 2026-11-20
 
 - Zeitleiste im Bereich PV: Unter „Paneele jetzt“ steht die Leistung der Anlage über den Tag. Wer mit dem Finger darüber wischt oder mit der Maus darüberfährt, sieht auf den Kacheln die Leistung jedes Paneels zu dieser Uhrzeit, etwa um zu erkennen, wann ein Modul im Schatten liegt. Beim Loslassen zeigen die Kacheln wieder die aktuellen Werte.

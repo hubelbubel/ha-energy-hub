@@ -7,6 +7,7 @@
  *   Strom     – Bilanz jetzt, Kennwerte von heute, Verlauf von Netz, Batterie und Verbrauchern, Rangliste
  *   PV        – Wechselrichter und Tigo-Optimierer: Paneele jetzt (anordenbar wie auf dem Dach), Verlauf je Paneel, Abgleich, Auswertung, Export
  *   Wärme     – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch und Regeln, Export
+ * Unten in allen Bereichen die Tagesleiste: Tageswerte und Verläufe folgen dem gezeigten Tag, Live-Werte bleiben live.
  */
 
 const DOMAIN = "energy_hub";
@@ -70,6 +71,12 @@ const fmtKwh = (v) => (isNum(v) ? `${nf1.format(v)} kWh` : "–");
 const fmtC = (v) => (isNum(v) ? `${nf1.format(v)} °C` : "–");
 const fmtClock = (iso) => (iso ? `${tfTime.format(new Date(iso))} Uhr` : "");
 const hhmm = (text) => String(text || "").slice(0, 5);
+const cap = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+// aus „am 17. November“ wird „17. November“, aus „heute“ wird „Heute“
+const nameOf = (word) => (word.startsWith("am ") ? word.slice(3) : cap(word));
+// Sensoren, deren Langzeitstatistik den ersten Tag mit Daten liefert; gefragt werden die ersten vier hinterlegten
+const FIRST_DAY_KEYS = ["ent_grid_power", "ent_pv_power", "ent_outdoor", "ent_pv_surplus", "ent_house_power",
+  "ent_mppt1_power", "ent_flow", "ent_power_el"];
 const PV_METRICS = [
   { key: "power", label: "Leistung", unit: "Watt", fmt: (v) => fmtW(v) },
   { key: "voltage_in", label: "Spannung", unit: "Volt", fmt: (v) => (isNum(v) ? `${nf1.format(v)} V` : "–") },
@@ -104,6 +111,10 @@ function s(tag, attrs, ...children) {
   return el;
 }
 
+/** Erstes Raster der Ansicht „24 Stunden“: heute die letzten 24 Stunden, ein früherer Tag ab Mitternacht. */
+const dayFrom = (set) => Math.max(0, set.day === null
+  ? set.n - Math.round(86400e3 / set.step) : Math.round((set.day - set.t0) / set.step));
+
 /** Gruppe von Umschaltern; genau einer ist gedrückt. items: [[Wert, Text]] */
 function segmented(label, items, selected, onPick) {
   const group = h("div", { class: "seg", role: "group", "aria-label": label });
@@ -133,6 +144,70 @@ function niceTicks(min, max, count = 4) {
     ticks.push(Math.round(v * 1e6) / 1e6);
   }
   return ticks;
+}
+
+/* ------------------------------------------------------------------ Tage */
+
+/** Mitternacht (Ortszeit) des Tages, in den ms fällt. */
+export function midnightOf(ms) {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Mitternacht k Tage nach dem Tag von day (k < 0: davor). Tage mit Zeitumstellung haben 23 oder 25 Stunden. */
+export function shiftDay(day, k) {
+  const d = new Date(midnightOf(day));
+  d.setDate(d.getDate() + k);
+  return d.getTime();
+}
+
+/**
+ * Zeitfenster für Verläufe und Tageswerte. day: Mitternacht des gewählten Tages, null für heute.
+ * Heute endet das Fenster jetzt (auf das Raster aufgerundet) und reicht hours zurück.
+ * Ein früherer Tag endet um Mitternacht danach und umfasst hours / 24 ganze Kalendertage.
+ * Liefert { t0, t1, n } mit n Rastern der Breite step.
+ */
+export function dayWindow(day, hours, step, now) {
+  if (day === null) {
+    const t1 = Math.ceil(now / step) * step;
+    return { t0: t1 - hours * 3600e3, t1, n: Math.round((hours * 3600e3) / step) };
+  }
+  const t1 = shiftDay(day, 1);
+  const t0 = shiftDay(day, 1 - Math.max(1, Math.round(hours / 24)));
+  return { t0, t1, n: Math.round((t1 - t0) / step) };
+}
+
+/** „heute“, „gestern“ oder „am 17. November“ (kurz „am 17.11.“); in einem anderen Jahr mit Jahreszahl. */
+export function dayWord(day, now, short = false) {
+  const k = Math.round((midnightOf(now) - midnightOf(day)) / 86400e3);
+  if (k === 0) return "heute";
+  if (k === 1) return "gestern";
+  const d = new Date(day);
+  const opts = short ? { day: "numeric", month: "numeric" } : { day: "numeric", month: "long" };
+  if (d.getFullYear() !== new Date(now).getFullYear()) opts.year = "numeric";
+  return `am ${new Intl.DateTimeFormat("de-DE", opts).format(d)}`;
+}
+
+/**
+ * Zustand der Tagesleiste. day: Mitternacht des gewählten Tages, null für heute.
+ * first: Mitternacht des ersten Tages mit Daten, null solange unbekannt.
+ * Zurück geht es bis zum ersten Tag, vor bis heute.
+ */
+export function dayNav(day, first, now) {
+  const today = midnightOf(now);
+  const d = day === null ? today : Math.min(midnightOf(day), today);
+  const k = Math.round((today - d) / 86400e3);
+  const date = new Date(d);
+  const opts = { weekday: "long", day: "numeric", month: "long" };
+  if (date.getFullYear() !== new Date(now).getFullYear()) opts.year = "numeric";
+  return {
+    label: new Intl.DateTimeFormat("de-DE", opts).format(date),
+    rel: k === 0 ? "Heute" : k === 1 ? "Gestern" : `vor ${k} Tagen`,
+    today: k === 0,
+    prev: first === null || d > midnightOf(first),
+    next: k > 0,
+  };
 }
 
 /* ---------------------------------------------------------------- Export */
@@ -634,29 +709,42 @@ const clamp01 = (v) => Math.min(1, Math.max(0, v));
 const fmtPct = (v) => (isNum(v) ? `${nf0.format(v * 100)} %` : "–");
 const fmtDur = (min) => (min >= 60 ? `${Math.floor(min / 60)} h ${Math.round(min % 60)} min` : `${Math.round(min)} min`);
 
-/** Verteilt Statistik-Zeilen [[Startzeit, Mittelwert]] auf ein festes Raster. */
+/** Erstes und letztes Raster, das eine Zeile ab t mit der Dauer dur überdeckt. */
+function rowSpan(t, dur, t0, step) {
+  const a = Math.floor((t - t0) / step);
+  return [a, dur > step ? Math.ceil((t + dur - t0) / step) - 1 : a];
+}
+
+/**
+ * Verteilt Statistik-Zeilen [[Startzeit, Mittelwert, Dauer?]] auf ein festes Raster.
+ * Ist eine Zeile länger als das Raster (ein Stundenwert im 5-Minuten-Raster), gilt sie in jedem Raster, das sie überdeckt.
+ */
 export function rowsToGrid(rows, t0, step, n) {
   const sum = new Array(n).fill(0);
   const cnt = new Array(n).fill(0);
-  for (const [t, v] of rows) {
-    const b = Math.floor((t - t0) / step);
-    if (b < 0 || b >= n || !isNum(v)) continue;
-    sum[b] += v;
-    cnt[b] += 1;
+  for (const [t, v, dur = 0] of rows) {
+    if (!isNum(v)) continue;
+    const [a, z] = rowSpan(t, dur, t0, step);
+    for (let b = Math.max(0, a); b <= Math.min(n - 1, z); b++) {
+      sum[b] += v;
+      cnt[b] += 1;
+    }
   }
   return sum.map((total, b) => (cnt[b] ? total / cnt[b] : null));
 }
 
 /**
  * Zunahme eines Zählers je Raster als mittlere Leistung in Watt.
- * rows: [[Beginn ms, Zunahme]] aus der Statistik (Typ "change"); factor rechnet in kWh um.
+ * rows: [[Beginn ms, Zunahme, Dauer?]] aus der Statistik (Typ "change"); factor rechnet in kWh um.
+ * Die Zunahme einer längeren Zeile verteilt sich gleichmäßig auf die überdeckten Raster.
  */
 export function counterPower(rows, t0, step, n, factor = 1) {
   const out = new Array(n).fill(null);
-  for (const [t, change] of rows) {
-    const b = Math.floor((t - t0) / step);
-    if (b < 0 || b >= n || !isNum(change)) continue;
-    out[b] = (out[b] ?? 0) + Math.max(0, change) * factor;
+  for (const [t, change, dur = 0] of rows) {
+    if (!isNum(change)) continue;
+    const [a, z] = rowSpan(t, dur, t0, step);
+    const share = (Math.max(0, change) * factor) / (z - a + 1);
+    for (let b = Math.max(0, a); b <= Math.min(n - 1, z); b++) out[b] = (out[b] ?? 0) + share;
   }
   return out.map((kwh) => (kwh === null ? null : (kwh * 3.6e9) / step));
 }
@@ -1447,7 +1535,9 @@ const STYLE = `
   --c-store: #6250d6;
   --c-warn: #d03b3b;
   --p1: #2a78d6; --p2: #eb6834; --p3: #1baf7a; --p4: #eda100; --p5: #e87ba4; --p6: #008300; --p7: #6250d6;
-  display: block;
+  /* Spalte, damit die Tagesleiste auch auf kurzen Seiten unten steht */
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
   background: var(--plane);
   color: var(--ink);
@@ -1482,7 +1572,7 @@ button, select { font: inherit; color: inherit; }
 .bar a, .bar button { color: inherit; font-size: 14px; text-decoration: none; padding: 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .bar a:hover, .bar button:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 
-main { max-width: 1240px; margin: 0 auto; padding: 28px 24px 64px; }
+main { width: 100%; max-width: 1240px; flex: 1 0 auto; margin: 0 auto; padding: 28px 24px 64px; }
 section + section { margin-top: 36px; }
 h2 { margin: 0 0 14px; font-size: 16px; font-weight: 500; }
 
@@ -1622,6 +1712,39 @@ dialog input[type="radio"] { width: 18px; height: 18px; margin: 2px 0 0; accent-
 .bar .tabs button:hover { background: transparent; opacity: 1; }
 .bar .tabs button[aria-selected="true"] { border-bottom-color: currentColor; opacity: 1; }
 main[hidden] { display: none; }
+
+/* ---- Tagesleiste ---- */
+.daynav {
+  position: sticky; bottom: 0; z-index: 5;
+  padding: 6px 0 calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--app-header-background-color, var(--surface));
+  color: var(--app-header-text-color, var(--ink));
+  border-top: 1px solid var(--rule);
+}
+.daynav-in { display: flex; align-items: center; gap: 8px; max-width: 1240px; margin: 0 auto; padding: 0 24px; }
+.daynav-in::before { content: ""; flex: 1 1 0; }
+.daynav-end { flex: 1 1 0; display: flex; justify-content: flex-end; }
+.daynav-mid { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.daynav-day { display: grid; width: 16em; min-width: 0; text-align: center; line-height: 1.25; }
+.daynav-day b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.daynav-day small { font-size: 12px; opacity: 0.72; }
+.day-step { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.day-step svg { fill: currentColor; }
+.day-step:hover:not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); }
+.daynav .plain { color: inherit; border-color: color-mix(in srgb, currentColor 35%, transparent); }
+.daynav .plain:hover:not(:disabled) { background: color-mix(in srgb, currentColor 10%, transparent); }
+.day-step:disabled, .daynav .plain:disabled { opacity: 0.32; cursor: default; }
+/* während ein anderer Tag lädt, stehen die alten Tageswerte blass da */
+.by-day { transition: opacity 0.2s; }
+:host([day-busy]) .by-day { opacity: 0.45; }
+@media (max-width: 900px) { .daynav-in { padding: 0 8px 0 4px; } }
+@media (max-width: 520px) {
+  .daynav-in::before { display: none; }
+  .daynav-mid { flex: 1 1 auto; }
+  .daynav-day { flex: 1 1 auto; width: auto; }
+  .daynav-end { flex: none; }
+}
+@media (prefers-reduced-motion: reduce) { .by-day { transition: none; } }
 
 /* ---- Strom und Übersicht ---- */
 .s-ink { color: var(--ink); stroke: var(--ink); }
@@ -1799,6 +1922,8 @@ class EnergyHubPanel extends HTMLElement {
     this._logShown = 40;
     this._lastLogRev = -1;
     this._duration = 120;
+    this._day = null; // gezeigter Tag als Mitternacht, null für heute
+    this._firstDay = null; // erster Tag mit Daten, null solange unbekannt
   }
 
   set hass(hass) {
@@ -1818,10 +1943,13 @@ class EnergyHubPanel extends HTMLElement {
   connectedCallback() {
     this._clock = setInterval(() => this._queueRender(), 30000);
     this._refresh = setInterval(() => {
-      this._loadHistory();
-      this._loadDraws();
-      this._loadEnergy();
-      if (this._tab === "pv") this._loadPv();
+      // ein früherer Tag ändert sich nicht mehr; nachgeladen wird nur heute
+      if (this._day === null) {
+        this._loadHistory();
+        this._loadDraws();
+        this._loadEnergy();
+        if (this._tab === "pv") this._loadPv();
+      }
       if (this._tab === "overview" && Date.now() - (this._analysisAt || 0) > 30 * 60000) this._loadAnalysis();
     }, 5 * 60000);
     if (this._hass) this._subscribe();
@@ -1977,6 +2105,21 @@ class EnergyHubPanel extends HTMLElement {
       pv: this._buildPv(settingsHref, nav),
     };
 
+    // Tagesleiste unten: welcher Tag gezeigt wird, Tag davor, Tag danach, zurück zu heute
+    const chevron = (d) => s("svg", { viewBox: "0 0 24 24", width: 24, height: 24, "aria-hidden": "true" }, s("path", { d }));
+    $.dayPrev = h("button", { class: "day-step", "aria-label": "Tag davor", title: "Tag davor", onclick: () => this._stepDay(-1) },
+      chevron("M15.41 16.58 10.83 12l4.58-4.59L14 6l-6 6 6 6z"));
+    $.dayNext = h("button", { class: "day-step", "aria-label": "Tag danach", title: "Tag danach", onclick: () => this._stepDay(1) },
+      chevron("M8.59 16.58 13.17 12 8.59 7.41 10 6l6 6-6 6z"));
+    $.dayLabel = h("b", {});
+    $.dayRel = h("small", {});
+    $.dayToday = h("button", { class: "plain", onclick: () => this._setDay(null) }, "Heute");
+    $.dayBar = h("footer", { class: "daynav", role: "group", "aria-label": "Gezeigter Tag" },
+      h("div", { class: "daynav-in" },
+        h("div", { class: "daynav-mid" },
+          $.dayPrev, h("div", { class: "daynav-day", "aria-live": "polite" }, $.dayLabel, $.dayRel), $.dayNext),
+        h("div", { class: "daynav-end" }, $.dayToday)));
+
     root.append(
       h("style", {}, STYLE),
       h("header", { class: "bar" }, this._menu, h("h1", {}, "Energie"),
@@ -1994,12 +2137,13 @@ class EnergyHubPanel extends HTMLElement {
                   $.endOverride)))),
           $.schema),
         h("section", {}, $.facts),
-        h("section", { class: "sheet" },
+        h("section", { class: "sheet by-day" },
           h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.ranges, $.tableBtn),
           $.plots, $.table),
         h("section", { class: "lower" },
           h("div", {}, h("h2", {}, "Logbuch"), $.log, $.more),
-          h("div", {}, h("h2", {}, "So wird geregelt"), $.rules))))
+          h("div", {}, h("h2", {}, "So wird geregelt"), $.rules)))),
+      $.dayBar
     );
 
     root.append(this._buildExportDialog(settingsHref, nav));
@@ -2024,6 +2168,7 @@ class EnergyHubPanel extends HTMLElement {
     } catch (_err) {
       tab = "overview";
     }
+    this._renderDay();
     this._showTab($.panes[tab] ? tab : "overview");
   }
 
@@ -2190,6 +2335,7 @@ class EnergyHubPanel extends HTMLElement {
     this._renderRules();
     this._renderLog(false);
     this._renderLive();
+    this._renderDay();
     if (this._tab === "pv") this._renderPv();
   }
 
@@ -2250,7 +2396,7 @@ class EnergyHubPanel extends HTMLElement {
       const dur = d.todayMs >= 3600e3
         ? `${Math.floor(d.todayMs / 3600e3)} h ${Math.round((d.todayMs % 3600e3) / 60e3)} min`
         : `${Math.round(d.todayMs / 60e3)} min`;
-      items.push(["Wärme aus dem Speicher heute", `${d.today}-mal`, `${dur}, in 7 Tagen ${d.week}-mal`]);
+      items.push([`Wärme aus dem Speicher ${this._dayWord()}`, `${d.today}-mal`, d.week !== null ? `${dur}, in 7 Tagen ${d.week}-mal` : dur]);
     }
     this.$.facts.replaceChildren(
       ...items.map(([label, value, hint]) =>
@@ -2360,6 +2506,113 @@ class EnergyHubPanel extends HTMLElement {
     $.more.hidden = log.length <= this._logShown;
   }
 
+  /* -------------------------------------------------------------- Tage */
+
+  /** „heute“, „gestern“ oder „am 17. November“ für den gezeigten Tag. */
+  _dayWord(short = false) {
+    const now = Date.now();
+    return dayWord(this._day ?? now, now, short);
+  }
+
+  /** Tagesleiste und die Überschriften, die den gezeigten Tag nennen. */
+  _renderDay() {
+    const $ = this.$;
+    if (!$?.dayBar) return;
+    const now = Date.now();
+    const key = `${this._day}|${midnightOf(now)}|${this._firstDay}`;
+    if (key === this._dayKey) return;
+    this._dayKey = key;
+    const nav = dayNav(this._day, this._firstDay, now);
+    $.dayLabel.textContent = nav.label;
+    $.dayRel.textContent = nav.rel;
+    $.dayPrev.disabled = !nav.prev;
+    $.dayNext.disabled = !nav.next;
+    $.dayToday.disabled = nav.today;
+    const w = this._dayWord();
+    $.oBalHead.textContent = `Strom ${w}: woher er kam, wohin er ging`;
+    $.oHoursHead.textContent = `${cap(w)}, Stunde für Stunde`;
+    $.pRankHead.textContent = `Verbraucher ${w}`;
+    $.vRankHead.textContent = `Paneele ${w}`;
+  }
+
+  /** Zeigt einen anderen Tag, null ist heute. Live-Werte bleiben live; Tageswerte und Verläufe folgen dem Tag. */
+  _setDay(day) {
+    const next = day === null || day >= midnightOf(Date.now()) ? null : midnightOf(day);
+    if (next === this._day) return;
+    this._day = next;
+    this._enWeek = null;
+    this._pvWeek = null;
+    this._pvScrubEnd();
+    this._renderDay();
+    // kurz warten, damit schnelles Weiterklicken nicht jeden Tag einzeln lädt
+    this.toggleAttribute("day-busy", true);
+    clearTimeout(this._dayTimer);
+    this._dayTimer = setTimeout(() => {
+      this._dayTimer = null;
+      this._loadDay();
+    }, 250);
+    if (next !== null) this._loadFirstDay();
+  }
+
+  _stepDay(k) {
+    this._setDay(shiftDay(this._day ?? Date.now(), k));
+  }
+
+  /** Lädt, was vom gezeigten Tag abhängt. PV nur im Bereich PV; sonst beim Öffnen des Bereichs. */
+  _loadDay() {
+    const jobs = [this._loadEnergy(), this._loadHistory(), this._loadDraws()];
+    if (this._pRange === 168) jobs.push(this._loadEnergyWeek());
+    if (this._tab === "pv") jobs.push(this._loadPv());
+    return this._track(Promise.allSettled(jobs));
+  }
+
+  /** Hält die Tageswerte blass, bis alle Ladevorgänge für den Tag fertig sind. */
+  async _track(promise) {
+    this._busy = (this._busy || 0) + 1;
+    this.toggleAttribute("day-busy", true);
+    try {
+      await promise;
+    } finally {
+      this._busy -= 1;
+      if (!this._busy && !this._dayTimer) this.removeAttribute("day-busy");
+    }
+  }
+
+  /**
+   * Erster Tag mit Daten, damit „Tag davor“ dort endet. Gefragt wird die Langzeitstatistik einiger Sensoren,
+   * erst je Monat, dann je Tag im ersten Monat; einmal, beim ersten Schritt zurück.
+   * Ohne Statistik gelten die zehn Tage, die der Recorder von sich aus aufhebt.
+   */
+  async _loadFirstDay() {
+    if (this._firstAsked || !this._snap || !this._hass?.callWS) return;
+    this._firstAsked = true;
+    const cfg = this._snap.entities;
+    const ids = [...new Set(FIRST_DAY_KEYS.map((key) => cfg[key]).filter(Boolean))].slice(0, 4);
+    const earliest = async (t0, t1, period) => {
+      try {
+        const stats = await this._hass.callWS({
+          type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
+          end_time: new Date(t1).toISOString(), statistic_ids: ids, period, types: ["mean"],
+        }) || {};
+        return Math.min(...ids.map((id) => (stats[id]?.length ? new Date(stats[id][0].start).getTime() : Infinity)));
+      } catch (_err) {
+        return Infinity;
+      }
+    };
+    const now = Date.now();
+    let first = Infinity;
+    if (ids.length) {
+      const month = await earliest(new Date(2000, 0, 1).getTime(), now, "month");
+      if (month < Infinity) {
+        // die Monatszeile beginnt am Ersten, auch wenn die Daten erst später im Monat einsetzen
+        const day = await earliest(month - 2 * 86400e3, Math.min(now, month + 35 * 86400e3), "day");
+        first = day < Infinity ? day : month;
+      }
+    }
+    this._firstDay = first < Infinity ? midnightOf(first) : shiftDay(now, -10);
+    this._renderDay();
+  }
+
   /* ---------------------------------------------------------- Bereiche */
 
   _showTab(name) {
@@ -2383,7 +2636,10 @@ class EnergyHubPanel extends HTMLElement {
       this._drawPv();
       this._drawPvDay();
       this._renderPvFindings();
-      if (this._snap && (!this._pv48 || Date.now() - this._pv48.t1 > 5 * 60000)) this._loadPv();
+      // neu laden, wenn ein anderer Tag gezeigt wird oder heute älter als fünf Minuten ist
+      const set = this._pv48;
+      const stale = !set || set.day !== this._day || (this._day === null && Date.now() - set.at > 5 * 60000);
+      if (this._snap && stale) this._track(this._loadPv());
     }
     if (name === "overview") {
       this._drawHours();
@@ -2403,13 +2659,15 @@ class EnergyHubPanel extends HTMLElement {
     $.oFacts = h("dl", { class: "facts" });
     $.oHours = h("div", { class: "plots" });
     $.oFind = h("div", {});
+    $.oBalHead = h("h2", {}, "Strom heute: woher er kam, wohin er ging");
+    $.oHoursHead = h("h2", {}, "Heute, Stunde für Stunde");
     return h("main", { hidden: true },
       h("section", { class: "lage" },
         h("div", {}, $.oHeadline, $.oNow, $.oSub, $.oNote),
-        ($.oBalWrap = h("div", {}, h("h2", {}, "Strom heute: woher er kam, wohin er ging"), $.oBalance))),
-      ($.oFactsSec = h("section", {}, $.oFacts)),
-      ($.oHoursSec = h("section", { class: "sheet" },
-        h("div", { class: "sheet-head" }, h("h2", {}, "Heute, Stunde für Stunde")), $.oHours)),
+        ($.oBalWrap = h("div", { class: "by-day" }, $.oBalHead, $.oBalance))),
+      ($.oFactsSec = h("section", { class: "by-day" }, $.oFacts)),
+      ($.oHoursSec = h("section", { class: "sheet by-day" },
+        h("div", { class: "sheet-head" }, $.oHoursHead), $.oHours)),
       h("section", {}, h("h2", {}, "Die letzten 7 Tage"), $.oFind));
   }
 
@@ -2437,14 +2695,15 @@ class EnergyHubPanel extends HTMLElement {
       }, label)));
     $.pPlots = h("div", { class: "plots" });
     $.pRank = h("div", { class: "rank" });
+    $.pRankHead = h("h2", {}, "Verbraucher heute");
     return h("main", { hidden: true },
       h("section", { class: "lage" },
         h("div", {}, $.pHeadline, $.pSub, $.pNote, $.pMissing),
         ($.pBalWrap = h("div", {}, h("h2", {}, "Strom jetzt: woher er kommt, wohin er geht"), $.pBalance))),
-      ($.pFactsSec = h("section", {}, $.pFacts)),
-      ($.pSheet = h("section", { class: "sheet" },
+      ($.pFactsSec = h("section", { class: "by-day" }, $.pFacts)),
+      ($.pSheet = h("section", { class: "sheet by-day" },
         h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.pRanges), $.pPlots)),
-      ($.pRankSec = h("section", {}, h("h2", {}, "Verbraucher heute"), $.pRank)));
+      ($.pRankSec = h("section", { class: "by-day" }, $.pRankHead, $.pRank)));
   }
 
   /* ------------------------------------------------------------- Strom */
@@ -2475,19 +2734,42 @@ class EnergyHubPanel extends HTMLElement {
   async _counterGrids(counters, t0, t1, step, n, period) {
     const ids = [...new Set(Object.values(counters))];
     if (!ids.length) return {};
-    let stats = {};
-    try {
-      stats = await this._hass.callWS({
-        type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
-        end_time: new Date(t1).toISOString(), statistic_ids: ids, period, types: ["change"],
-      }) || {};
-    } catch (_err) {
-      return {};
-    }
+    const stats = await this._statRows(ids, t0, t1, period, "change");
     const out = {};
     for (const [key, id] of Object.entries(counters)) {
-      const rows = (stats[id] || []).filter((r) => isNum(r.change)).map((r) => [new Date(r.start).getTime(), r.change]);
-      out[key] = rows.length ? counterPower(rows, t0, step, n, this._energyFactor(id)) : null;
+      out[key] = stats[id].length ? counterPower(stats[id], t0, step, n, this._energyFactor(id)) : null;
+    }
+    return out;
+  }
+
+  /**
+   * Statistik als Zeilen [[Beginn, Wert, Dauer]] je Sensor; type ist "mean" oder "change".
+   * Home Assistant löscht die 5-Minuten-Werte zusammen mit dem Verlauf (von sich aus nach zehn Tagen),
+   * die Stundenwerte bleiben. Fehlen 5-Minuten-Werte am Anfang des Fensters, springen davor ganze Stunden ein.
+   */
+  async _statRows(ids, t0, t1, period, type) {
+    const fetch = async (list, p) => {
+      try {
+        return await this._hass.callWS({
+          type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
+          end_time: new Date(t1).toISOString(), statistic_ids: list, period: p, types: [type],
+        }) || {};
+      } catch (_err) {
+        return {};
+      }
+    };
+    const rows = (list, dur) => (list || []).filter((r) => isNum(r[type])).map((r) => [new Date(r.start).getTime(), r[type], dur]);
+    const fine = await fetch(ids, period);
+    const out = {};
+    for (const id of ids) out[id] = rows(fine[id], period === "5minute" ? 300e3 : 3600e3);
+    if (period !== "5minute") return out;
+    const firstAt = (id) => out[id][0]?.[0] ?? Infinity;
+    const late = ids.filter((id) => firstAt(id) > t0 + 3600e3);
+    if (!late.length) return out;
+    const coarse = await fetch(late, "hour");
+    for (const id of late) {
+      const until = Math.min(firstAt(id), t1);
+      out[id] = [...rows(coarse[id], 3600e3).filter(([t]) => t + 3600e3 <= until), ...out[id]];
     }
     return out;
   }
@@ -2626,15 +2908,18 @@ class EnergyHubPanel extends HTMLElement {
     $.pSub.textContent = bits.join(" ");
     if (this._tab === "power") this._renderBalance($.pBalance, v, fmtKw);
 
+    // Kennwerte des gezeigten Tages; der Satz darunter bleibt live
     const today = this._today;
+    const past = Boolean(this._en) && this._en.day !== null;
+    const w = cap(dayWord(this._en?.day ?? Date.now(), Date.now()));
     $.oHeadline.textContent = today && today.autarky !== null
-      ? `Heute hat sich das Haus zu ${fmtPct(today.autarky)} selbst mit Strom versorgt.`
-      : "Die Stromdaten von heute werden geladen.";
+      ? `${w} hat sich das Haus zu ${fmtPct(today.autarky)} selbst mit Strom versorgt.`
+      : today && past ? `${w} gibt es keine Stromdaten.` : "Die Stromdaten werden geladen.";
     $.oNow.textContent = [$.pHeadline.textContent, ...bits].join(" ");
     $.oSub.textContent = heatBits.join(" ");
   }
 
-  /** Kennwerte des heutigen Tages, gemeinsam für Übersicht und Strom. */
+  /** Kennwerte des gezeigten Tages, gemeinsam für Übersicht und Strom. */
   _renderToday() {
     const $ = this.$;
     const t = this._today;
@@ -2642,12 +2927,14 @@ class EnergyHubPanel extends HTMLElement {
     const kwh = (v) => (isNum(v) ? `${nf1.format(v)} kWh` : "–");
     const cfg = this._snap.entities;
     const live = this._liveBalance();
+    const past = this._en.day !== null;
+    const w = dayWord(this._en.day ?? Date.now(), Date.now());
     const counters = this._en?.counters || {};
     const missing = new Set(this._en?.missing || []);
     // Unter dem Wert: woher er kommt, oder warum er fehlt
     const source = (key, id) => (counters[key] ? "laut Zähler"
       : id && missing.has(id) ? "keine Aufzeichnung im Verlauf" : "");
-    const items = [["Verbrauch heute", kwh(t.cons)]];
+    const items = [[`Verbrauch ${w}`, kwh(t.cons)]];
     if (cfg.ent_pv_power || counters.pv) {
       items.push(["Vom Dach", kwh(t.pv), t.selfUse !== null ? `${fmtPct(t.selfUse)} selbst genutzt` : source("pv", cfg.ent_pv_power)]);
     }
@@ -2656,7 +2943,10 @@ class EnergyHubPanel extends HTMLElement {
       items.push(["Netzbezug", kwh(t.imp), source("imp", cfg.ent_grid_power)]);
       items.push(["Einspeisung", kwh(t.exp), source("exp", cfg.ent_grid_power)]);
     }
-    if (cfg.ent_battery_power || cfg.ent_battery_soc) {
+    if (past && (cfg.ent_battery_power || cfg.ent_battery_soc)) {
+      items.push(["Batterie entladen", kwh(t.dis), t.chg !== null ? `${kwh(t.chg)} geladen` : ""]);
+    } else if (cfg.ent_battery_power || cfg.ent_battery_soc) {
+      // heute: Ladestand jetzt, darunter die Energie des Tages
       const hint = t.chg !== null ? `heute ${kwh(t.chg)} geladen, ${kwh(t.dis)} entladen` : "";
       items.push(["Batterie", isNum(live.soc) ? `${nf0.format(live.soc)} %` : kwh(t.dis), hint]);
     }
@@ -2683,7 +2973,7 @@ class EnergyHubPanel extends HTMLElement {
       h("div", { class: "rank-bar" }, h("i", { class: cls, style: `width:${Math.max(0.5, (value / max) * 100).toFixed(1)}%` })),
       h("b", {}, kwh(value)),
       h("small", {}, t.cons > 0 ? fmtPct(value / t.cons) : "")))
-      : [h("p", { class: "empty" }, "Noch keine Verbraucher hinterlegt oder heute noch keine Werte.")]));
+      : [h("p", { class: "empty" }, `Noch keine Verbraucher hinterlegt oder ${past ? `${w} keine` : "heute noch keine"} Werte.`)]));
     this._renderLive();
   }
 
@@ -2693,31 +2983,21 @@ class EnergyHubPanel extends HTMLElement {
   async _grids(ids, t0, t1, step, n, period) {
     const out = {};
     if (!ids.length) return out;
-    let stats = {};
-    try {
-      stats = await this._hass.callWS({
-        type: "recorder/statistics_during_period", start_time: new Date(t0).toISOString(),
-        end_time: new Date(t1).toISOString(), statistic_ids: ids, period, types: ["mean"],
-      }) || {};
-    } catch (_err) {
-      stats = {};
-    }
+    const stats = await this._statRows(ids, t0, t1, period, "mean");
     for (const id of ids) {
-      const rows = (stats[id] || []).filter((r) => isNum(r.mean)).map((r) => [new Date(r.start).getTime(), r.mean]);
-      out[id] = rows.length
-        ? rowsToGrid(rows, t0, step, n)
+      out[id] = stats[id].length
+        ? rowsToGrid(stats[id], t0, step, n)
         : stepSeries(await this._history(id, t0, t1), t0, step, n, Math.min(t1, Date.now()));
     }
     return out;
   }
 
-  async _energySet(hours, step, period) {
+  /** Strom für ein Fenster, das mit dem gezeigten Tag endet (day: null für heute, also bis jetzt). */
+  async _energySet(hours, step, period, day = this._day) {
     const snap = this._snap;
     const cfg = snap.entities;
     const consumers = snap.consumers || [];
-    const t1 = Math.ceil(Date.now() / step) * step;
-    const t0 = t1 - hours * 3600e3;
-    const n = Math.round((t1 - t0) / step);
+    const { t0, t1, n } = dayWindow(day, hours, step, Date.now());
     const src = {
       grid: cfg.ent_grid_power, pv: cfg.ent_pv_power, battery: cfg.ent_battery_power, soc: cfg.ent_battery_soc,
       house: cfg.ent_house_power, wp: cfg.ent_power_el, wallbox: cfg.ent_wallbox_power,
@@ -2741,41 +3021,49 @@ class EnergyHubPanel extends HTMLElement {
     const balE = Object.keys(used).length
       ? energyBalance({ ...raw, impE: cg.imp, expE: cg.exp, pvE: cg.pv, chgE: cg.chg, disE: cg.dis }, signs)
       : bal;
-    // Leistungs-Sensoren mit aktuellem Wert, aber ohne Aufzeichnung (etwa vom Recorder ausgeschlossen)
-    const missing = [...new Set(Object.values(src).filter(Boolean))]
+    // Leistungs-Sensoren mit aktuellem Wert, aber ohne Aufzeichnung (etwa vom Recorder ausgeschlossen);
+    // an früheren Tagen gab es manche Sensoren noch nicht, dort sagt eine Lücke nichts
+    const missing = day !== null ? [] : [...new Set(Object.values(src).filter(Boolean))]
       .filter((id) => grids[id] && !grids[id].some((v) => v !== null) && this._num(id) !== null);
-    return { t0, t1, n, step, bal, balE, counters: used, missing, soc: pick(src.soc, false), names: consumers.map((id) => this._name(id)) };
+    return { t0, t1, n, step, day, bal, balE, counters: used, missing, soc: pick(src.soc, false), names: consumers.map((id) => this._name(id)) };
   }
 
+  /** 48 Stunden bis zum Ende des gezeigten Tages; daraus die Kennwerte des Tages und seine Stunden. */
   async _loadEnergy() {
     if (!this._snap || !this._hass?.callWS || !this._hasPower()) {
       if (this._snap) this._renderLive();
       return;
     }
+    const day = this._day;
     try {
-      const en = await this._energySet(48, 300e3, "5minute");
-      const midnight = new Date();
-      midnight.setHours(0, 0, 0, 0);
-      const i0 = Math.max(0, Math.round((midnight.getTime() - en.t0) / en.step));
+      const en = await this._energySet(48, 300e3, "5minute", day);
+      if (day !== this._day) return; // inzwischen ein anderer Tag gewählt
+      const start = day ?? midnightOf(Date.now());
+      const i0 = Math.max(0, Math.round((start - en.t0) / en.step));
       this._en = en;
-      this._today = energyTotals(en.balE, en.step, i0, en.n);
-      this._hours = hourlyMix(en.balE, en.t0, en.step, midnight.getTime());
+      this._today = energyTotals(en.balE, en.step, i0, en.n); // Kennwerte des gezeigten Tages
+      this._hours = hourlyMix(en.balE, en.t0, en.step, start);
       this._renderToday();
       this._drawHours();
       this._drawPower();
+      if (this._tab === "pv") this._renderPv();
     } catch (err) {
       this.$.pSub.textContent = `Die Stromdaten konnten nicht geladen werden: ${err?.message || err}`;
     }
   }
 
   async _loadEnergyWeek() {
+    const day = this._day;
     this.$.pPlots.classList.add("loading");
+    let week = null;
     try {
-      this._enWeek = await this._energySet(168, 3600e3, "hour");
+      week = await this._energySet(168, 3600e3, "hour", day);
     } catch (_err) {
-      this._enWeek = null;
+      week = null;
     }
     this.$.pPlots.classList.remove("loading");
+    if (day !== this._day) return;
+    this._enWeek = week;
     this._drawPower();
   }
 
@@ -2787,7 +3075,7 @@ class EnergyHubPanel extends HTMLElement {
     const findings = [];
     try {
       if (this._hasPower()) {
-        const week = await this._energySet(168, 300e3, "5minute");
+        const week = await this._energySet(168, 300e3, "5minute", null); // immer die letzten 7 Tage
         findings.push(...powerFindings(week.bal, week.soc, { consumers: week.names, wallbox: "Wallbox" }, week.step, week.t0));
       }
     } catch (_err) {
@@ -2886,7 +3174,8 @@ class EnergyHubPanel extends HTMLElement {
     const W = Math.floor(host.clientWidth);
     if (W < 120) return;
     if (!hours.some((x) => x.known)) {
-      host.replaceChildren(h("p", { class: "empty" }, "Für heute liegen noch keine Stromdaten vor."));
+      host.replaceChildren(h("p", { class: "empty" }, this._en?.day !== null
+        ? "Für diesen Tag liegen keine Stromdaten vor." : "Für heute liegen noch keine Stromdaten vor."));
       return;
     }
     const narrow = W < 520;
@@ -2960,8 +3249,8 @@ class EnergyHubPanel extends HTMLElement {
     const host = this.$?.pPlots;
     const full = this._pRange === 168 ? this._enWeek : this._en;
     if (!host || !full) return;
-    const keep = this._pRange === 24 ? Math.round(86400e3 / full.step) : full.n;
-    const from = full.n - keep;
+    const from = this._pRange === 24 ? dayFrom(full) : 0;
+    const keep = full.n - from;
     const cut = (arr) => (arr ? arr.slice(from) : null);
     const bal = full.bal;
     const g = { t0: full.t0 + from * full.step, t1: full.t1, n: keep, step: full.step };
@@ -3154,7 +3443,7 @@ class EnergyHubPanel extends HTMLElement {
     $.vDayHint = h("small", {}, "darüberfahren zeigt frühere Werte");
     $.vDayPlot = h("div", { class: "day-plot" });
     $.vDay = h("div", {
-      class: "daybar", role: "slider", tabindex: "0", hidden: true, "aria-label": "Leistung der Anlage über den Tag",
+      class: "daybar by-day", role: "slider", tabindex: "0", hidden: true, "aria-label": "Leistung der Anlage über den Tag",
       onpointerdown: (e) => this._pvDayPointer(e), onpointermove: (e) => this._pvDayPointer(e),
       onpointerup: (e) => this._pvDayRelease(e), onpointercancel: (e) => this._pvDayRelease(e),
       onpointerleave: (e) => this._pvDayRelease(e), onkeydown: (e) => this._pvDayKey(e),
@@ -3182,17 +3471,18 @@ class EnergyHubPanel extends HTMLElement {
     $.vCompare = h("div", { class: "cmp" });
     $.vRank = h("div", { class: "rank" });
     $.vFind = h("div", {});
+    $.vRankHead = h("h2", {}, "Paneele heute");
     return h("main", { hidden: true },
       h("section", { class: "lage" },
         h("div", {}, $.vHeadline, $.vSub, $.vFault, $.vNote),
         ($.vTilesWrap = h("div", { hidden: true },
           h("div", { class: "sheet-head" }, $.vTilesHead, $.vResetBtn, $.vArrangeBtn),
           $.vArrangeNote, $.vTiles, $.vDay))),
-      ($.vFactsSec = h("section", {}, $.vFacts)),
-      ($.vSheet = h("section", { class: "sheet" },
+      ($.vFactsSec = h("section", { class: "by-day" }, $.vFacts)),
+      ($.vSheet = h("section", { class: "sheet by-day" },
         h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.vViews, $.vRanges), $.vPick, $.vPlots)),
-      ($.vCmpSec = h("section", { hidden: true }, h("h2", {}, "Wechselrichter und Optimierer"), $.vCompare)),
-      ($.vRankSec = h("section", { hidden: true }, h("h2", {}, "Paneele heute"), $.vRank)),
+      ($.vCmpSec = h("section", { class: "by-day", hidden: true }, h("h2", {}, "Wechselrichter und Optimierer"), $.vCompare)),
+      ($.vRankSec = h("section", { class: "by-day", hidden: true }, $.vRankHead, $.vRank)),
       ($.vFindSec = h("section", {}, h("h2", {}, "Die letzten 7 Tage"), $.vFind)));
   }
 
@@ -3503,7 +3793,10 @@ class EnergyHubPanel extends HTMLElement {
     const v = this._pvLive();
     $.vHeadline.textContent = isNum(v.total) && v.total > 30 ? `Das Dach liefert gerade ${fmtKw(v.total)}.` : "Das Dach liefert gerade nichts.";
     const bits = [];
-    const today = v.pvToday ?? this._pvToday?.inv ?? v.tigoToday;
+    // Kopf: jetzt und heute. this._pvToday gehört zum gezeigten Tag, für heute taugt er nur, solange der heute ist.
+    const pvDay = this._pvToday;
+    const past = Boolean(this._pv48) && this._pv48.day !== null;
+    const today = v.pvToday ?? (past ? null : pvDay?.inv) ?? v.tigoToday;
     if (isNum(today)) bits.push(`Heute ${fmtKwh(today)} erzeugt.`);
     if (hasTigo) {
       const awake = v.panels.filter((p) => p.power > 0).length;
@@ -3539,18 +3832,28 @@ class EnergyHubPanel extends HTMLElement {
       this._pvDayIdle();
     }
 
-    // Kennwerte
+    // Kennwerte: Erzeugung bis Hausverbrauch für den gezeigten Tag, MPPT, Wechselrichter und Optimierer jetzt
+    const w = dayWord(this._pv48?.day ?? Date.now(), Date.now());
     const items = [];
-    if (isNum(today)) {
-      const hint = this._pvHasInverter() && hasTigo && isNum(v.tigoToday) ? `Optimierer: ${fmtKwh(v.tigoToday)}` : "";
-      items.push(["Erzeugung heute", fmtKwh(today), hint]);
+    const made = past ? pvDay?.inv ?? pvDay?.tigo : today;
+    const madeTigo = past ? pvDay?.tigo : v.tigoToday;
+    if (isNum(made)) {
+      const hint = this._pvHasInverter() && hasTigo && isNum(madeTigo) ? `Optimierer: ${fmtKwh(madeTigo)}` : "";
+      items.push([`Erzeugung ${w}`, fmtKwh(made), hint]);
     }
-    const peak = this._pvToday?.peak;
-    if (peak) items.push(["Spitze heute", fmtKw(peak.w), `um ${tfTime.format(new Date(peak.t))} Uhr`]);
-    if (isNum(v.pvToday) && isNum(v.expToday) && v.pvToday > 0) {
-      items.push(["Eigenverbrauch", fmtPct(clamp01((v.pvToday - v.expToday) / v.pvToday)), `${fmtKwh(v.expToday)} eingespeist`]);
+    const peak = pvDay?.peak;
+    if (peak) items.push([`Spitze ${w}`, fmtKw(peak.w), `um ${tfTime.format(new Date(peak.t))} Uhr`]);
+    if (past) {
+      // die Tageszähler des Wechselrichters zeigen nur heute; für frühere Tage gilt die Strombilanz desselben Tages
+      const t = this._en?.day === this._pv48.day ? this._today : null;
+      if (t && t.selfUse !== null) items.push(["Eigenverbrauch", fmtPct(t.selfUse), `${fmtKwh(t.exp)} eingespeist`]);
+      if (isNum(t?.cons)) items.push([`Hausverbrauch ${w}`, fmtKwh(t.cons), isNum(t.imp) ? `${fmtKwh(t.imp)} aus dem Netz` : ""]);
+    } else {
+      if (isNum(v.pvToday) && isNum(v.expToday) && v.pvToday > 0) {
+        items.push(["Eigenverbrauch", fmtPct(clamp01((v.pvToday - v.expToday) / v.pvToday)), `${fmtKwh(v.expToday)} eingespeist`]);
+      }
+      if (isNum(v.loadToday)) items.push(["Hausverbrauch heute", fmtKwh(v.loadToday), isNum(v.impToday) ? `${fmtKwh(v.impToday)} aus dem Netz` : ""]);
     }
-    if (isNum(v.loadToday)) items.push(["Hausverbrauch heute", fmtKwh(v.loadToday), isNum(v.impToday) ? `${fmtKwh(v.impToday)} aus dem Netz` : ""]);
     for (const m of v.mppt.filter((x) => x.configured)) {
       const value = [isNum(m.v) && `${nf0.format(m.v)} V`, isNum(m.i) && `${nf1.format(m.i)} A`].filter(Boolean).join(" · ") || fmtW(m.p);
       items.push([`MPPT ${m.k}`, value, isNum(m.p) && value !== fmtW(m.p) ? fmtW(m.p) : ""]);
@@ -3599,7 +3902,10 @@ class EnergyHubPanel extends HTMLElement {
     if (!$?.vDay || this._tab !== "pv") return;
     const set = this._pv48;
     const total = set ? set.inv.total || this._pvTigoSum(set, null) : null;
-    const win = total ? pvDayWindow(total, set.t0, set.step, Date.now()) : null;
+    // ein früherer Tag zeigt nur sich selbst; das Ausweichen auf den Tag davor gilt nur heute vor dem ersten Licht
+    const past = Boolean(set) && set.day !== null;
+    let win = total ? pvDayWindow(total, set.t0, set.step, past ? set.t1 - 1 : Date.now()) : null;
+    if (win && past && win.day !== "today") win = null;
     this._pvDay = win ? { ...win, set, total } : null;
     $.vDay.hidden = !win || this._pvArrange;
     if (!win) {
@@ -3646,7 +3952,7 @@ class EnergyHubPanel extends HTMLElement {
     svg.append(s("path", { d: area, class: "area" }), s("path", { d: line, class: "line" }),
       s("line", { x1: 0, x2: W, y1: H, y2: H, class: "axis" }));
     // heute, solange der Tag läuft: Punkt am letzten Wert
-    if (win.day === "today" && Date.now() < win.to) {
+    if (!past && win.day === "today" && Date.now() < win.to) {
       svg.append(s("circle", { cx: x(win.last).toFixed(1), cy: y(total[win.last]).toFixed(1), r: 3, class: "now" }));
     }
     svg.append(cursor);
@@ -3663,14 +3969,20 @@ class EnergyHubPanel extends HTMLElement {
     const $ = this.$;
     const day = this._pvDay;
     if (!day || this._pvScrubAt !== null) return;
-    const today = day.day === "today";
-    const kwh = today && isNum(this._pvTodayKwh) ? this._pvTodayKwh : pvEnergy(day.total, day.i0, day.last, day.set.step);
-    $.vDayWhen.textContent = today ? "Heute" : "Gestern";
+    const w = this._pvDayWord(day);
+    const kwh = w === "heute" && isNum(this._pvTodayKwh) ? this._pvTodayKwh : pvEnergy(day.total, day.i0, day.last, day.set.step);
+    $.vDayWhen.textContent = nameOf(w);
     $.vDayValue.textContent = fmtKwh(kwh);
     $.vDayHint.hidden = false;
     this._pvDayDraw?.cursor.setAttribute("visibility", "hidden");
     $.vDay.setAttribute("aria-valuenow", String(day.last - day.i0));
-    $.vDay.setAttribute("aria-valuetext", `Paneele jetzt; ${today ? "heute" : "gestern"} ${fmtKwh(kwh)}`);
+    $.vDay.setAttribute("aria-valuetext", `Paneele jetzt; ${w} ${fmtKwh(kwh)}`);
+  }
+
+  /** „heute“, „gestern“ oder „am 17. November“ für den Tag auf der Zeitleiste. */
+  _pvDayWord(day) {
+    const now = Date.now();
+    return day.set.day !== null ? dayWord(day.set.day, now) : day.day === "today" ? "heute" : "gestern";
   }
 
   /** Zeigt auf den Kacheln die Werte zum Raster i der Zeitleiste. */
@@ -3682,15 +3994,16 @@ class EnergyHubPanel extends HTMLElement {
     const b = Math.min(day.last, Math.max(day.i0, i));
     this._pvScrubAt = set.t0 + b * set.step;
     const clock = `${tfTime.format(new Date(this._pvScrubAt))} Uhr`;
-    const yday = day.day === "yesterday";
+    const w = this._pvDayWord(day);
+    const at = w === "heute" ? "" : `${w} `;
     const powers = set.panels.power;
     this._pvPaintTiles(this._pvStrings().map((s) => {
       const members = s.panels.map((label) => ({ label, power: powers?.get(label)?.[b] ?? null }));
       return { members, median: median(members.map((p) => p.power)) };
     }), clock);
     $.vTiles.classList.add("past");
-    $.vTilesHead.textContent = `Paneele ${yday ? "gestern " : ""}um ${clock}`;
-    $.vDayWhen.textContent = `${yday ? "Gestern" : "Heute"}, ${clock}`;
+    $.vTilesHead.textContent = `Paneele ${at}um ${clock}`;
+    $.vDayWhen.textContent = `${nameOf(w)}, ${clock}`;
     $.vDayValue.textContent = fmtKw(total[b]);
     $.vDayHint.hidden = true;
     const draw = this._pvDayDraw;
@@ -3700,7 +4013,7 @@ class EnergyHubPanel extends HTMLElement {
       draw.dot.setAttribute("cy", draw.y(isNum(total[b]) ? total[b] : 0).toFixed(1));
     }
     $.vDay.setAttribute("aria-valuenow", String(b - day.i0));
-    $.vDay.setAttribute("aria-valuetext", `${yday ? "gestern " : ""}${clock}, Anlage ${fmtKw(total[b])}`);
+    $.vDay.setAttribute("aria-valuetext", `${at}${clock}, Anlage ${fmtKw(total[b])}`);
   }
 
   /** Zurück auf jetzt. */
@@ -3756,9 +4069,10 @@ class EnergyHubPanel extends HTMLElement {
     this._pvScrubTo(to);
   }
 
-  /** Je String: Optimierer und MPPT nebeneinander, jetzt und heute. */
+  /** Je String: Optimierer und MPPT nebeneinander, jetzt und am gezeigten Tag. */
   _renderPvCompare(v) {
     const t = this._pvToday;
+    const day = nameOf(dayWord(this._pv48?.day ?? Date.now(), Date.now(), true));
     const rows = v.strings.map((s) => {
       const m = s.mppt ? v.mppt[s.mppt - 1] : null;
       const inv = m ? m.p : v.strings.length === 1 ? v.total : null;
@@ -3776,19 +4090,20 @@ class EnergyHubPanel extends HTMLElement {
     this.$.vCompare.replaceChildren(
       h("table", {},
         h("thead", {}, h("tr", {}, ["String", "Eingang", "Optimierer", "Wechselrichter", "Unterschied",
-          "Spannung Optimierer", "Spannung MPPT", "Heute Optimierer", "Heute Wechselrichter"].map((x) => h("th", {}, x)))),
+          "Spannung Optimierer", "Spannung MPPT", `${day} Optimierer`, `${day} Wechselrichter`].map((x) => h("th", {}, x)))),
         h("tbody", {}, rows)),
       h("p", { class: "foot" },
-        "Die Optimierer messen die Leistung am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit. Die Spannung der Optimierer ist die Summe ihrer Ausgangsspannungen und sollte nahe an der des MPPT liegen. „Heute“ ist aus der Leistung aufsummiert."));
+        "Die Optimierer messen die Leistung am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit. Die Spannung der Optimierer ist die Summe ihrer Ausgangsspannungen und sollte nahe an der des MPPT liegen. Die Tageswerte sind aus der Leistung aufsummiert."));
   }
 
-  /** Ertrag je Paneel heute, mit Anteil am Median im String. */
+  /** Ertrag je Paneel am gezeigten Tag, mit Anteil am Median im String. */
   _renderPvRank(v) {
     const nodes = [];
     const fromGrid = this._pvToday?.panels || {};
+    const past = Boolean(this._pv48) && this._pv48.day !== null; // die Tageszähler der Optimierer zeigen nur heute
     const kwh2 = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     for (const s of v.strings) {
-      const values = s.members.map((p) => ({ label: p.label, kwh: p.today ?? fromGrid[p.label] ?? null }));
+      const values = s.members.map((p) => ({ label: p.label, kwh: (past ? null : p.today) ?? fromGrid[p.label] ?? null }));
       const med = median(values.map((x) => x.kwh));
       const max = Math.max(0.001, ...values.map((x) => x.kwh ?? 0));
       if (v.strings.length > 1) nodes.push(h("p", { class: "rank-head" }, s.name ? `String ${s.name}` : "Ohne String"));
@@ -3808,6 +4123,7 @@ class EnergyHubPanel extends HTMLElement {
 
   /* ------------------------------------------------------- Daten für PV */
 
+  /** 48 Stunden bis zum Ende des gezeigten Tages, bei „7 Tage“ dazu die Woche. */
   async _loadPv(force = false) {
     if (!this._snap || !this._hass?.callWS) return;
     await this._pvEnsureLayout(force);
@@ -3815,11 +4131,15 @@ class EnergyHubPanel extends HTMLElement {
       this._renderPv();
       return;
     }
+    const day = this._day;
+    const metrics = this._pvView === "panels" ? [this._pvMetric] : [];
     try {
-      this._pv48 = await this._pvSet(48, 300e3, "5minute", this._pvView === "panels" ? [this._pvMetric] : []);
-      this._pvToday = this._pvTodayFrom(this._pv48);
-      this._pvWeek = this._pvRange === 168
-        ? await this._pvSet(168, 3600e3, "hour", this._pvView === "panels" ? [this._pvMetric] : []) : null;
+      const set = await this._pvSet(48, 300e3, "5minute", metrics, day);
+      const week = this._pvRange === 168 ? await this._pvSet(168, 3600e3, "hour", metrics, day) : null;
+      if (day !== this._day) return; // inzwischen ein anderer Tag gewählt
+      this._pv48 = set;
+      this._pvToday = this._pvDayFrom(set);
+      this._pvWeek = week;
     } catch (err) {
       this.$.vSub.textContent = `Die PV-Daten konnten nicht geladen werden: ${err?.message || err}`;
     }
@@ -3830,13 +4150,17 @@ class EnergyHubPanel extends HTMLElement {
   }
 
   async _pvLoadWeek() {
+    const day = this._day;
     this.$.vPlots.classList.add("loading");
+    let week = null;
     try {
-      this._pvWeek = await this._pvSet(168, 3600e3, "hour", this._pvView === "panels" ? [this._pvMetric] : []);
+      week = await this._pvSet(168, 3600e3, "hour", this._pvView === "panels" ? [this._pvMetric] : [], day);
     } catch (_err) {
-      this._pvWeek = null;
+      week = null;
     }
     this.$.vPlots.classList.remove("loading");
+    if (day !== this._day) return;
+    this._pvWeek = week;
     this._drawPv();
   }
 
@@ -3858,12 +4182,13 @@ class EnergyHubPanel extends HTMLElement {
     }
   }
 
-  /** Raster für Wechselrichter und Optimierer. metrics: weitere Messgrößen der Paneele außer der Leistung. */
-  async _pvSet(hours, step, period, metrics = []) {
+  /**
+   * Raster für Wechselrichter und Optimierer bis zum Ende des Tages day (null: heute, bis jetzt).
+   * metrics: weitere Messgrößen der Paneele außer der Leistung.
+   */
+  async _pvSet(hours, step, period, metrics = [], day = this._day) {
     const cfg = this._snap.entities;
-    const t1 = Math.ceil(Date.now() / step) * step;
-    const t0 = t1 - hours * 3600e3;
-    const n = Math.round((t1 - t0) / step);
+    const { t0, t1, n } = dayWindow(day, hours, step, Date.now());
     const inv = { total: cfg.ent_pv_power };
     for (const k of [1, 2]) {
       inv[`p${k}`] = cfg[`ent_mppt${k}_power`];
@@ -3877,7 +4202,7 @@ class EnergyHubPanel extends HTMLElement {
     const grids = await this._grids(ids, t0, t1, step, n, period);
     const pick = (id, kind) => (id && grids[id]
       ? grids[id].map((v) => (v === null ? null : kind === "power" ? v * this._powerFactor(id) : v)) : null);
-    const set = { t0, t1, n, step, period, inv: {}, panels: {} };
+    const set = { t0, t1, n, step, period, day, at: Date.now(), inv: {}, panels: {} };
     for (const [key, id] of Object.entries(inv)) set.inv[key] = pick(id, key === "total" || key.startsWith("p") ? "power" : null);
     for (const k of [1, 2]) {
       const v = set.inv[`v${k}`];
@@ -3896,11 +4221,9 @@ class EnergyHubPanel extends HTMLElement {
     return set;
   }
 
-  /** Heute seit Mitternacht: Spitze, Energie je Paneel und je String aus dem 5-Minuten-Raster. */
-  _pvTodayFrom(set) {
-    const midnight = new Date();
-    midnight.setHours(0, 0, 0, 0);
-    const i0 = Math.max(0, Math.round((midnight.getTime() - set.t0) / set.step));
+  /** Der Tag des Rasters ab Mitternacht: Spitze, Energie je Paneel, je String und gesamt aus dem 5-Minuten-Raster. */
+  _pvDayFrom(set) {
+    const i0 = Math.max(0, Math.round(((set.day ?? midnightOf(Date.now())) - set.t0) / set.step));
     const factor = set.step / 3.6e9;
     const sum = (arr) => {
       if (!arr) return null;
@@ -3923,7 +4246,8 @@ class EnergyHubPanel extends HTMLElement {
       const tigo = s.panels.map((label) => panels[label]).filter(isNum);
       strings[s.name ?? ""] = { tigo: tigo.length ? tigo.reduce((x, y) => x + y, 0) : null, inv: sum(inv) };
     }
-    return { peak, panels, strings, inv: sum(set.inv.total) };
+    const all = Object.values(panels).filter(isNum);
+    return { peak, panels, strings, inv: sum(set.inv.total), tigo: all.length ? all.reduce((x, y) => x + y, 0) : null };
   }
 
   /** Summe der Optimierer je Raster, für einen String (Labels) oder alle (null). */
@@ -3942,8 +4266,8 @@ class EnergyHubPanel extends HTMLElement {
     const host = this.$?.vPlots;
     const full = this._pvRange === 168 ? this._pvWeek : this._pv48;
     if (!host || !full || this._tab !== "pv") return;
-    const keep = this._pvRange === 24 ? Math.round(86400e3 / full.step) : full.n;
-    const from = full.n - keep;
+    const from = this._pvRange === 24 ? dayFrom(full) : 0;
+    const keep = full.n - from;
     const cut = (arr) => (arr ? arr.slice(from) : null);
     const g = { t0: full.t0 + from * full.step, t1: full.t1, n: keep, step: full.step };
     const any = (arr) => Boolean(arr && arr.some((v) => v !== null));
@@ -4600,36 +4924,43 @@ class EnergyHubPanel extends HTMLElement {
 
   /* ------------------------------------------------------------ Verlauf */
 
-  /** Wie oft und wie lange heute und in den letzten 7 Tagen Wärme aus dem Speicher kam. */
+  /**
+   * Wie oft und wie lange am gezeigten Tag Wärme aus dem Speicher kam; heute dazu die letzten 7 Tage.
+   * Ohne Verlauf (früherer Tag, schon gelöscht) bleibt die Zeile weg.
+   */
   async _loadDraws() {
     const snap = this._snap;
     const id = snap?.entities?.ent_lock;
     if (!id || !this._hass?.callWS) return;
+    const shown = this._day;
     const now = Date.now();
-    const t0 = now - 7 * 86400e3;
+    const start = shown ?? midnightOf(now);
+    const end = shown === null ? now : shiftDay(shown, 1);
+    const t0 = shown === null ? now - 7 * 86400e3 : start;
+    let draws = null;
     try {
-      const rows = await this._history(id, t0, now);
+      const rows = await this._history(id, t0, end);
       const active = matcher(snap.settings.lock_regen_value);
-      const midnight = new Date(now);
-      midnight.setHours(0, 0, 0, 0);
-      const day = episodes(rows, active, midnight.getTime(), now);
-      this._draws = {
-        week: episodes(rows, active, t0, now).length,
+      const day = episodes(rows, active, start, end);
+      draws = !rows.length ? null : {
+        week: shown === null ? episodes(rows, active, t0, end).length : null,
         today: day.length,
         todayMs: day.reduce((sum, e) => sum + (e.end - e.start), 0),
       };
-      this._queueRender();
     } catch (_err) {
-      this._draws = null;
+      draws = null;
     }
+    if (shown !== this._day) return;
+    this._draws = draws;
+    this._queueRender();
   }
 
   async _loadHistory() {
     const snap = this._snap;
     if (!snap || !this._hass?.callWS) return;
     const range = this._range;
-    const t1 = Date.now();
-    const t0 = t1 - range.hours * 3600e3;
+    const shown = this._day;
+    const { t0, t1 } = dayWindow(shown, range.hours, 1, Date.now());
     const cfg = snap.entities;
     const numeric = [
       { key: "surplus", id: cfg.ent_pv_surplus }, ...SERIES.map((x) => ({ key: x.key, id: cfg[x.ent] })),
@@ -4646,15 +4977,12 @@ class EnergyHubPanel extends HTMLElement {
 
     try {
       let pending = numeric.map((x) => x.id);
-      if (range.hours > 48 && pending.length) {
-        // Lange Zeiträume aus der Langzeitstatistik, das spart viel Datenverkehr
-        const stats = await this._hass.callWS({
-          type: "recorder/statistics_during_period", start_time: start, end_time: end,
-          statistic_ids: pending, period: "hour", types: ["mean"],
-        });
+      if ((range.hours > 48 || shown !== null) && pending.length) {
+        // Lange Zeiträume und frühere Tage aus der Statistik: spart Datenverkehr, und die Stundenwerte
+        // bleiben, wenn der Verlauf schon gelöscht ist. Jeder Wert gilt in der Mitte seines Zeitraums.
+        const stats = await this._statRows(pending, t0, t1, range.hours > 48 ? "hour" : "5minute", "mean");
         for (const id of pending) {
-          const rows = (stats?.[id] || []).filter((r) => isNum(r.mean));
-          if (rows.length) raw[id] = rows.map((r) => [new Date(r.start).getTime() + 1800e3, r.mean]);
+          if (stats[id].length) raw[id] = stats[id].map(([t, v, dur]) => [t + dur / 2, v]);
         }
         pending = pending.filter((id) => !raw[id]);
       }
@@ -4701,7 +5029,7 @@ class EnergyHubPanel extends HTMLElement {
         chart.modes[b] = ["normal", "boost", "setback"].includes(current) ? current : null;
       }
     }
-    if (lockId) {
+    if (lockId && raw[lockId]?.length) { // ohne Verlauf (früherer Tag, schon gelöscht) keine Zeile „liefert“
       const active = matcher(snap.settings.lock_regen_value);
       chart.draw = stepText(raw[lockId] || [], t0, step, n, t1).map((v) => (v === null ? null : active(v)));
       chart.drawCount = episodes(raw[lockId] || [], active, t0, t1).length;

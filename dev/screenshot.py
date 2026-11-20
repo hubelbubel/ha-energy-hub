@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rendert dev/preview.html in mehreren Varianten und meldet Konsolenfehler.
 
-Prüft dazu die Exporte, das Anordnen der Optimierer und die Zeitleiste unter den Kacheln.
+Prüft dazu die Exporte, das Anordnen der Optimierer, die Zeitleiste unter den Kacheln und die Tagesleiste.
 
 Aufruf (im Hauptordner):  python3 dev/screenshot.py /tmp/shots
 Braucht Playwright und einen installierten Chrome.
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import re
 import sys
 import threading
 from pathlib import Path
@@ -203,6 +204,96 @@ with sync_playwright() as p:
             if keyed != "Paneele um 15:55 Uhr" or page.evaluate(head) != "Paneele jetzt":
                 problems.append(f"{name}: Tastatur ergab „{keyed}“, danach „{page.evaluate(head)}“")
         ctx.close()
+    # Tagesleiste: zurück, vor, heute; ältere Tage aus Stundenwerten; Schluss beim ersten Tag mit Daten
+    get = lambda page, sel: page.evaluate(f"() => {ROOT_JS}.querySelector(\"{sel}\")?.textContent ?? ''")
+    flag = lambda page, sel: page.evaluate(f"() => {ROOT_JS}.querySelector(\"{sel}\").disabled")
+
+    def settle(page):
+        page.wait_for_timeout(350)
+        page.wait_for_function("() => !document.querySelector('energy-hub-panel').hasAttribute('day-busy')", timeout=30000)
+        page.wait_for_timeout(150)
+
+    def back(page, times=1):
+        for _ in range(times):
+            page.get_by_role("button", name="Tag davor").click()
+        settle(page)
+
+    def expect(name, what, got, want):
+        ok = got.startswith(want[:-1]) if want.endswith("…") else got == want
+        if not ok:
+            problems.append(f"{name}: {what} ist „{got}“, erwartet „{want}“")
+
+    TAGE = [
+        ("tage-strom-desktop", 1360, 900, "?tab=power&mode=boost", 17),
+        ("tage-uebersicht-desktop", 1360, 900, "?tab=overview&mode=boost&seit=14", 17),
+        ("tage-pv-desktop", 1360, 900, "?tab=pv&mode=boost", 13),
+        ("tage-waerme-desktop", 1360, 900, "?tab=heat&mode=boost", 17),
+        ("tage-uebersicht-mobile", 390, 844, "?tab=overview&mode=boost", 17),
+        ("tage-pv-mobile", 390, 844, "?tab=pv&mode=boost&raster=dach", 13),
+    ]
+    for name, w, h, query, hour in TAGE:
+        page = browser.new_page(viewport={"width": w, "height": h})
+        page.clock.set_fixed_time(FIXED.replace(hour=hour, minute=20))
+        page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))
+        page.on("console", lambda m, n=name: m.type == "error" and "404" not in m.text and problems.append(f"{n}: {m.text}"))
+        page.goto(base + query)
+        page.wait_for_timeout(900)
+        expect(name, "Tag", get(page, ".daynav-day small"), "Heute")
+        if not (flag(page, ".day-step[aria-label='Tag danach']") and flag(page, ".daynav .plain")):
+            problems.append(f"{name}: heute sind „Tag danach“ und „Heute“ nicht ausgegraut")
+        if name == "tage-strom-desktop":
+            back(page)
+            expect(name, "Tag", get(page, ".daynav-day small"), "Gestern")
+            expect(name, "Rangliste", get(page, "main:not([hidden]) > section:last-of-type h2"), "Verbraucher gestern")
+            expect(name, "Kennwert", get(page, "main:not([hidden]) .facts dt"), "Verbrauch gestern")
+            if flag(page, ".day-step[aria-label='Tag danach']") or flag(page, ".daynav .plain"):
+                problems.append(f"{name}: gestern sind „Tag danach“ oder „Heute“ ausgegraut")
+            page.get_by_role("button", name="7 Tage").click()
+            page.wait_for_timeout(600)
+            page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+            page.get_by_role("button", name="Heute").click()
+            settle(page)
+            expect(name, "nach „Heute“", get(page, "main:not([hidden]) .facts dt"), "Verbrauch heute")
+        elif name == "tage-uebersicht-desktop":
+            # vor zwölf Tagen: 5-Minuten-Werte und Verlauf sind gelöscht, die Stundenwerte tragen
+            back(page, 12)
+            expect(name, "Tag", get(page, ".daynav-day small"), "vor 12 Tagen")
+            expect(name, "Überschrift", get(page, "main:not([hidden]) .headline"), "Am …")
+            if "selbst mit Strom versorgt" not in get(page, "main:not([hidden]) .headline"):
+                problems.append(f"{name}: vor 12 Tagen keine Autarkie aus den Stundenwerten")
+            if page.evaluate(f"() => {ROOT_JS}.querySelectorAll('main:not([hidden]) .sheet .col-pv').length") < 6:
+                problems.append(f"{name}: vor 12 Tagen keine Balken für Stunde für Stunde")
+            page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+            back(page, 2)
+            expect(name, "erster Tag", get(page, ".daynav-day small"), "vor 14 Tagen")
+            if not flag(page, ".day-step[aria-label='Tag davor']"):
+                problems.append(f"{name}: am ersten Tag mit Daten ist „Tag davor“ nicht ausgegraut")
+        elif name.startswith("tage-pv"):
+            back(page, 2)
+            plot = page.evaluate(f"() => {{ const r = {ROOT_JS}.querySelector('main:not([hidden]) .day-plot').getBoundingClientRect();"
+                                 " return [r.left, r.top, r.width]; }")
+            if not re.fullmatch(r"\d+\. \w+", get(page, "main:not([hidden]) .day-read span")):
+                problems.append(f"{name}: Zeitleiste vor zwei Tagen heißt „{get(page, 'main:not([hidden]) .day-read span')}“")
+            if not w < 500:
+                page.mouse.move(plot[0] + plot[2] * 0.6, plot[1] + 30)
+                page.wait_for_timeout(100)
+                expect(name, "Kacheln beim Darüberfahren", get(page, "main:not([hidden]) .lage h2"), "Paneele am …")
+            heads = page.evaluate(f"() => [...{ROOT_JS}.querySelectorAll('main:not([hidden]) h2')].map((x) => x.textContent)")
+            if not any(x.startswith("Paneele am ") and " um " not in x for x in heads):
+                problems.append(f"{name}: keine Überschrift „Paneele am …“ für die Rangliste, nur {heads}")
+            page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+        elif name == "tage-waerme-desktop":
+            back(page, 12)
+            if page.evaluate(f"() => {ROOT_JS}.querySelectorAll('main:not([hidden]) .plots path.line').length") < 3:
+                problems.append(f"{name}: vor 12 Tagen kein Verlauf aus den Stundenwerten")
+            page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+        else:
+            back(page)
+            overflow = page.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+            if overflow > 0:
+                problems.append(f"{name}: Seite ist {overflow}px breiter als das Fenster")
+            page.screenshot(path=str(OUT / f"{name}.png"), full_page=False)
+        page.close()
     browser.close()
 server.shutdown()
 

@@ -61,6 +61,19 @@ Unter dem Wert steht „laut Zähler“. Hat ein Leistungs-Sensor einen aktuelle
 
 **Wärme** – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch, Regeln, Handbetrieb und Export. Alles Weitere dazu steht unten.
 
+**Tagesleiste** – unten in allen Bereichen, am unteren Rand angeheftet. Sie zeigt den Tag, um den es geht, etwa „Dienstag, 17. November, vor 3 Tagen“. Die Pfeile gehen einen Tag zurück oder vor, „Heute“ springt zurück. Wo in dieser Anleitung „heute“ steht, gilt an einem früheren Tag dieser Tag: Die Überschriften heißen dann etwa „Verbrauch gestern“ oder „Paneele am 17. November“.
+
+| Fall | Verhalten |
+|---|---|
+| Was dem Tag folgt | Übersicht: Satz zur Autarkie, Strombilanz, Kennwerte, Stunde für Stunde. Strom: Kennwerte, Verlauf, Verbraucher. PV: Zeitleiste, Erzeugung, Spitze, Eigenverbrauch, Hausverbrauch, Tageswerte im Vergleich, Paneele. Wärme: Verlauf und „Wärme aus dem Speicher“ |
+| Was live bleibt | alles, was „jetzt“ oder „gerade“ zeigt: Leistung im Haus und auf dem Dach, „Strom jetzt“, Kacheln „Paneele jetzt“, MPPT, Status des Wechselrichters, Lage und Kennwerte der Heizung, Bedienung, Logbuch |
+| Was gleich bleibt | die Auswertung der letzten 7 Tage, immer bis jetzt |
+| Verlauf an einem früheren Tag | „24 Stunden“ ist der Tag selbst, „48 Stunden“ der Tag mit dem Tag davor, „7 Tage“ die sieben Tage bis zu ihm. Heute reicht der Verlauf wie bisher bis jetzt |
+| „Tag danach“ und „Heute“ | heute ausgegraut |
+| „Tag davor“ | ausgegraut am ersten Tag, für den die Langzeitstatistik von Home Assistant Werte hat. Gefragt werden die ersten vier hinterlegten von Netz, PV-Anlage, Außentemperatur und PV-Überschuss (sonst Haus, MPPT 1, Vorlauf, Strom der Wärmepumpe), einmal beim ersten Schritt zurück. Ohne Statistik gehen zehn Tage zurück |
+| Ältere Tage | Home Assistant hebt Verlauf und 5-Minuten-Werte von sich aus zehn Tage auf (`purge_keep_days`), die Stundenwerte dauerhaft. Davor kommen Tageswerte und Verläufe aus den Stundenwerten und sind gröber; Zähler in kWh gelten weiter. Was nur im Verlauf steht, fehlt dann: Eingriffe, „Speicher liefert“, „Wärme aus dem Speicher“ |
+| Laden | die Werte des vorigen Tages bleiben blass stehen, bis die neuen da sind. Ein früherer Tag wird nicht alle fünf Minuten neu geladen |
+
 ## Strom: was hinterlegt wird und wie gerechnet wird
 
 Im Schritt „Strom“ wählst du Leistungs-Sensoren (W oder kW). Energie in kWh braucht die Integration nicht; sie summiert die Leistung aus der Statistik von Home Assistant in 5-Minuten-Schritten auf.
@@ -121,6 +134,7 @@ Eine Kachel ist ein Modul im Hochformat, gedreht wird nicht. Ein Klick auf eine 
 | Zeitraum | von der ersten bis zur letzten Stunde mit Licht, zu vollen Stunden gerundet; heute mindestens so weit wie gestern, damit die Achse über den Tag stehen bleibt |
 | Licht | sobald die Anlage mehr als 20 W liefert (am Wechselrichter, sonst die Summe der Optimierer) |
 | Vor dem ersten Licht des Tages | die Zeitleiste von gestern, beschriftet mit „Gestern“ |
+| Früherer Tag (Tagesleiste) | der helle Teil dieses Tages, die Überschrift heißt dann etwa „Paneele am 17. November um 14:55 Uhr“; ohne Licht an dem Tag keine Zeitleiste |
 | Werte | 5-Minuten-Mittel aus der Statistik von Home Assistant, dieselben wie im Verlauf; die Uhrzeit ist der Beginn der fünf Minuten |
 | Finger | waagrecht wischen wählt die Uhrzeit, Loslassen zeigt wieder jetzt; senkrecht wischen scrollt die Seite |
 | Maus | Darüberfahren wählt die Uhrzeit, Verlassen der Zeitleiste zeigt wieder jetzt |
@@ -180,7 +194,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.5. Die Regellogik und die Abläufe im Regler sind durch 40 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 17 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger. In der Home-Assistant-App sind Anordnen und Zeitleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.6. Die Regellogik und die Abläufe im Regler sind durch 40 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Auswertung und Tage durch 16 und die für PV durch 17 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -267,7 +281,7 @@ Für Anlagen mit wasserführendem Kamin und einem Speicher, aus dem sich die Hei
 Im Panel erscheint dann:
 
 - im Anlagenschema eine zweite Reihe mit Kamin und Speicher; die Leitungen färben sich, wenn der Kamin brennt und wenn der Speicher liefert
-- bei den Kennwerten Speicher- und Kamintemperatur sowie „Wärme aus dem Speicher heute“ mit Anzahl, Dauer und der Anzahl der letzten sieben Tage
+- bei den Kennwerten Speicher- und Kamintemperatur sowie „Wärme aus dem Speicher heute“ mit Anzahl, Dauer und der Anzahl der letzten sieben Tage; an einem früheren Tag nur Anzahl und Dauer dieses Tages
 - im Verlauf die Speichertemperatur mit der mitlaufenden Bereit-Schwelle (gestrichelt) und drei Balkenzeilen: Kamin brennt, Speicher bereit, Speicher liefert
 
 „Bereit“ wird so berechnet wie im Regler der Wärmepumpe: Der Speicher muss um die eingestellte Differenz wärmer sein als die aktuelle Rücklauf-Solltemperatur. Bei mildem Wetter reicht also ein kühlerer Speicher als bei Frost. Trage als Differenz denselben Wert ein, der am Wärmepumpenmanager als Übertemperatur für den regenerativen Speicher eingestellt ist (bei Dimplex 2 bis 20 K). Der Regler vergleicht außerdem mit der jeweils anstehenden Anforderung, bei Warmwasser also mit dessen Sollwert; die Integration rechnet nur mit dem Rücklaufsoll der Heizung.
@@ -338,7 +352,7 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 pytest tests                       # Regellogik, Abläufe im Regler, Erkennung der Optimierer, ohne Home Assistant
 node --test tests/test_export.mjs tests/test_energy.mjs tests/test_pv.mjs   # Rechenfunktionen für Exporte, Strom, PV und Auswertung
 python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
-python3 dev/screenshot.py /tmp/shots   # Panel rendern, beide Exporte erzeugen, Anordnen und Zeitleiste prüfen (braucht Playwright und Chrome)
+python3 dev/screenshot.py /tmp/shots   # Panel rendern, beide Exporte erzeugen, Anordnen, Zeitleiste und Tagesleiste prüfen (braucht Playwright und Chrome)
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
 ```
 
