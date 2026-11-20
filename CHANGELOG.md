@@ -2,6 +2,12 @@
 
 Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releases; den zeigt Home Assistant beim Update an. Ältere Versionen stehen nur im Verlauf auf GitHub.
 
+## 0.5.4 – 2026-11-20
+
+- Optimierer anordnen: Im Bereich PV lassen sich die Kacheln unter „Paneele jetzt“ mit „Anordnen“ in ein Raster ziehen, so wie die Module auf dem Dach liegen. Sie rasten in den Feldern ein, auf einem belegten Feld tauschen zwei Kacheln die Plätze. Mit der Tastatur geht es über die Pfeiltasten.
+- Die Anordnung wird in Home Assistant gespeichert und gilt für alle Benutzer und Geräte. Anordnen dürfen Administratoren. „Zurücksetzen“ stellt die Sortierung nach String wieder her.
+- Neue Optimierer erscheinen unter der Anordnung. Bei mehreren Strings zeigt ein farbiger Streifen, zu welchem String eine Kachel gehört.
+
 ## 0.5.3 – 2026-11-19
 
 - Tageswerte im Bereich Strom und in der Übersicht kommen aus Zählern in kWh, sobald welche da sind: Netzbezug, Einspeisung, Erzeugung, Batterie, „woher und wohin“ und Stunde für Stunde. Das ist genauer als die aufsummierte Leistung, weil sich schnelle Wechsel zwischen Bezug und Einspeisung nicht gegenseitig aufheben.

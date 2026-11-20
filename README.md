@@ -49,7 +49,7 @@ Unter dem Wert steht „laut Zähler“. Hat ein Leistungs-Sensor einen aktuelle
 **PV** – Wechselrichter und Tigo-Optimierer zusammen, nur Anzeige.
 
 - was das Dach gerade liefert, wie viel heute erzeugt wurde, ob sich alle Optimierer melden und welches Paneel gerade zurückfällt
-- „Paneele jetzt“: eine Kachel je Optimierer mit aktueller Leistung; ein Klick hebt das Paneel im Verlauf hervor
+- „Paneele jetzt“: eine Kachel je Optimierer mit aktueller Leistung; ein Klick hebt das Paneel im Verlauf hervor. Mit „Anordnen“ liegen die Kacheln so wie die Module auf dem Dach
 - Kennwerte: Erzeugung heute (Wechselrichter, darunter die Optimierer), Spitze, Eigenverbrauch, Hausverbrauch, Spannung und Strom je MPPT, Status des Wechselrichters, Optimierer
 - Verlauf über 24 Stunden, 48 Stunden oder 7 Tage, umschaltbar:
   - Anlage: Leistung am Wechselrichter gegen die Summe der Optimierer, Spannung am MPPT gegen die Summe der Ausgangsspannungen, Strom je MPPT
@@ -99,6 +99,19 @@ Die Vorschläge passen zu einer Modbus-Konfiguration für ZCS Azzurro HYD mit En
 Die **Gesamtleistung** kommt aus „Leistung der PV-Anlage“ im Schritt Strom, sonst aus der Summe der MPPTs.
 
 Die **Optimierer** findet das Panel selbst, wenn die Integration [tigo_rs485](https://github.com/Zwer2k/ha-tigo-rs485) eingerichtet ist. Gelesen wird das Entitätsregister, nicht die Namen der Entitäten: Umbenennen stört also nicht. Es zählen nur Optimierer mit Label; der String kommt aus deren Einstellungen (sonst aus dem Label, A1 gehört zu A). Die Werte stammen aus der Statistik von Home Assistant, für 24 und 48 Stunden in 5-Minuten-Schritten, für 7 Tage als Stundenwerte.
+
+**Anordnen:** Solange nichts angeordnet ist, stehen die Kacheln nach String sortiert. Mit „Anordnen“ erscheint ein Raster mit einem freien Rand rundherum; zu Beginn stehen darin acht Kacheln je Zeile, jeder String in eigenen Zeilen. Jede Kachel lässt sich mit Maus oder Finger in ein Feld ziehen und rastet dort ein. Auf einem belegten Feld tauschen zwei Kacheln die Plätze. Mit der Tastatur geht es auch: Kachel wählen, dann Pfeiltasten. Lücken innerhalb der Anordnung bleiben stehen, etwa für ein Dachfenster.
+
+| Fall | Verhalten |
+|---|---|
+| Speichern | sofort nach jedem Zug, in Home Assistant; gilt für alle Benutzer und Geräte |
+| Wer anordnen darf | nur Administratoren, die anderen sehen die Anordnung |
+| Neuer Optimierer | kommt unter die Anordnung, jeder String in eine neue Zeile |
+| Optimierer entfernt | erscheint nicht mehr |
+| Mehrere Strings | farbiger Streifen oben an der Kachel, darunter die Legende |
+| „Zurücksetzen“ | Anordnung löschen, wieder nach String sortiert |
+
+Eine Kachel ist ein Modul im Hochformat, gedreht wird nicht. Ein Klick auf eine Kachel hebt sie außerhalb des Anordnens wie gewohnt im Verlauf hervor.
 
 Was verglichen wird:
 
@@ -152,7 +165,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.3. Die Regellogik und die Abläufe im Regler sind durch 39 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 8 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.4. Die Regellogik und die Abläufe im Regler sind durch 40 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 12 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte und dem Anordnen der Optimierer mit Maus, Tastatur und simuliertem Finger. In der Home-Assistant-App ist das Anordnen nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -310,7 +323,7 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 pytest tests                       # Regellogik, Abläufe im Regler, Erkennung der Optimierer, ohne Home Assistant
 node --test tests/test_export.mjs tests/test_energy.mjs tests/test_pv.mjs   # Rechenfunktionen für Exporte, Strom, PV und Auswertung
 python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
-python3 dev/screenshot.py /tmp/shots   # Panel rendern und beide Exporte erzeugen (braucht Playwright und Chrome)
+python3 dev/screenshot.py /tmp/shots   # Panel rendern, beide Exporte erzeugen, Anordnen der Optimierer prüfen (braucht Playwright und Chrome)
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
 ```
 
@@ -323,7 +336,7 @@ Aufbau:
 | `logic.py` | Entscheidung aus Messwerten und Einstellungen, ohne Home-Assistant-Importe |
 | `controller.py` | Messwerte lesen, entscheiden lassen, stellen, nachführen, Logbuch führen |
 | `config_flow.py` | Einrichtung und Einstellungen |
-| `websocket_api.py` | Schnittstelle zwischen Panel und Regler, dazu die Liste der Tigo-Optimierer |
+| `websocket_api.py` | Schnittstelle zwischen Panel und Regler, dazu die Liste der Tigo-Optimierer und ihre Plätze im Raster |
 | `tigo.py` | Optimierer, Strings und ihre Entitäten aus dem Entitätsregister von tigo_rs485, ohne Home-Assistant-Importe |
 | `frontend/energy-hub-panel.js` | Panel mit den vier Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 | `brand/` | Zeichen für die Integrationsseite (ab Home Assistant 2026.3), erzeugt mit `dev/brand.py` aus den Farben des Panels |

@@ -53,6 +53,45 @@ test("pvStrings: Zuordnung aus den Einstellungen, sonst zwei Strings auf zwei MP
   assert.deepEqual(m.pvStrings(clean, {}, ent).map((s) => s.mppt), [1, 2]);
 });
 
+test("pvGridPlace: ohne Anordnung je String eigene Zeilen, umgebrochen nach cols", () => {
+  const pos = m.pvGridPlace([["A1", "A2", "A3"], ["B1"]], {}, 2);
+  assert.deepEqual(pos, { A1: [0, 0], A2: [0, 1], A3: [1, 0], B1: [2, 0] });
+  // 16 Optimierer an einem String: zwei Zeilen zu acht
+  const labels = Array.from({ length: 16 }, (_x, i) => `A${i + 1}`);
+  const sixteen = m.pvGridPlace([labels]);
+  assert.deepEqual([sixteen.A8, sixteen.A9, sixteen.A16], [[0, 7], [1, 0], [1, 7]]);
+});
+
+test("pvGridPlace: gespeicherte Plätze bleiben, Neue und Doppelte kommen darunter", () => {
+  const saved = { A1: [1, 3], A2: [1, 3], A3: [0, 0], weg: [5, 5], B1: "kaputt", B2: [-1, 0], B3: [0, 1.5] };
+  const pos = m.pvGridPlace([["A1", "A2", "A3"], ["B1", "B2", "B3"]], saved, 2);
+  assert.deepEqual(pos, { A1: [1, 3], A3: [0, 0], A2: [2, 0], B1: [3, 0], B2: [3, 1], B3: [4, 0] });
+  assert.equal(Object.hasOwn(pos, "weg"), false);
+  // Labels wie Eigenschaften von Objekten stören nicht
+  assert.deepEqual(m.pvGridPlace([["constructor"]], {}), { constructor: [0, 0] });
+});
+
+test("pvGridMove: verschieben, tauschen, Rand und Ursprung", () => {
+  const pos = { A1: [0, 0], A2: [0, 1], A3: [1, 0] };
+  assert.deepEqual(m.pvGridMove(pos, "A3", 1, 1), { A1: [0, 0], A2: [0, 1], A3: [1, 1] });
+  assert.deepEqual(m.pvGridMove(pos, "A1", 0, 1), { A1: [0, 1], A2: [0, 0], A3: [1, 0] });
+  // links vor das Raster (Spalte -1): alles rückt nach rechts
+  assert.deepEqual(m.pvGridMove(pos, "A2", 0, -1), { A1: [0, 1], A2: [0, 0], A3: [1, 1] });
+  // obere Zeile wird leer: alles rückt nach oben
+  assert.deepEqual(m.pvGridMove({ A1: [0, 0], A2: [1, 0] }, "A1", 1, 1), { A1: [0, 1], A2: [0, 0] });
+  assert.deepEqual(m.pvGridMove(pos, "X9", 3, 3), pos);
+  assert.deepEqual(pos, { A1: [0, 0], A2: [0, 1], A3: [1, 0] }, "Eingabe bleibt unverändert");
+});
+
+test("gridTrackAt: Spur unter dem Zeiger, Lücke halb und halb", () => {
+  const sizes = [50, 50, 50];
+  assert.equal(m.gridTrackAt(sizes, 10, -30), 0);
+  assert.equal(m.gridTrackAt(sizes, 10, 54), 0);
+  assert.equal(m.gridTrackAt(sizes, 10, 56), 1);
+  assert.equal(m.gridTrackAt(sizes, 10, 125), 2);
+  assert.equal(m.gridTrackAt(sizes, 10, 999), 2);
+});
+
 /** Drei Tage mit Stundenwerten. Sonne von 8 bis 16 Uhr, 300 W je Paneel zur Mittagszeit. */
 function scenario() {
   const n = 72;

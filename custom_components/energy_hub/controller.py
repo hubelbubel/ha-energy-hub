@@ -217,6 +217,7 @@ class Controller:
             "mode_since": dt_util.now().isoformat(),
             "shift_base": None,
             "log": [],
+            "pv_grid": {},
             **stored,
         }
         if self._data["mode"] not in c.MODES:
@@ -383,6 +384,17 @@ class Controller:
         self.log_rev += 1
         self._save()
         self._notify()
+
+    @property
+    def pv_grid(self) -> dict[str, list[int]]:
+        """Plätze der Optimierer im Panel: {Label: [Zeile, Spalte]}; leer, solange nichts angeordnet ist."""
+        grid = self._data.get("pv_grid")
+        return {label: list(cell) for label, cell in grid.items()} if isinstance(grid, dict) else {}
+
+    async def async_set_pv_grid(self, grid: dict[str, list[int]]) -> None:
+        """Nur Anzeige: kein Logbuch, keine neue Auswertung."""
+        self._data["pv_grid"] = {str(label): [int(cell[0]), int(cell[1])] for label, cell in grid.items()}
+        self._save()
 
     # -------------------------------------------------------------- Bedienung
     async def async_set_automation(self, enabled: bool) -> None:

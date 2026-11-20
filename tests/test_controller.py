@@ -257,6 +257,30 @@ def test_state_survives_restart_and_snapshot_is_json():
     asyncio.run(run())
 
 
+def test_pv_grid_is_stored_and_old_data_stays_valid():
+    async def run():
+        hass, ctrl = make(c.ACT_DRY_RUN)
+        # Gespeichert von einer Version ohne Raster
+        fake_ha.Store.saved = {"automation": True, "mode": "normal", "log": []}
+        await ctrl.async_start()
+        assert ctrl.pv_grid == {}
+
+        await ctrl.async_set_pv_grid({"A1": [0, 1], "A2": [1, 0]})
+        assert ctrl.snapshot()["log"] == [], "Anordnen schreibt nichts ins Logbuch"
+        ctrl.pv_grid["A1"][0] = 9  # eine Kopie, der Speicher bleibt unverändert
+        await ctrl.async_stop()
+
+        again = controller_mod.Controller(hass, ctrl.entry)
+        await again.async_start()
+        assert again.pv_grid == {"A1": [0, 1], "A2": [1, 0]}
+        json.dumps(fake_ha.Store.saved)
+
+        await again.async_set_pv_grid({})
+        assert again.pv_grid == {}
+
+    asyncio.run(run())
+
+
 def test_cleared_optional_guards_stay_off():
     hass, ctrl = make(c.ACT_DRY_RUN)
     opts = dict(ctrl.entry.options)

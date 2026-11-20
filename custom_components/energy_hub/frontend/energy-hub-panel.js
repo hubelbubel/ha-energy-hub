@@ -5,7 +5,7 @@
  * Bereiche:
  *   Übersicht – der Tag in einem Satz, Strombilanz, Verbrauch je Stunde nach Herkunft, Auswertung der Woche
  *   Strom     – Bilanz jetzt, Kennwerte von heute, Verlauf von Netz, Batterie und Verbrauchern, Rangliste
- *   PV        – Wechselrichter und Tigo-Optimierer: Paneele jetzt, Verlauf je Paneel, Abgleich, Auswertung, Export
+ *   PV        – Wechselrichter und Tigo-Optimierer: Paneele jetzt (anordenbar wie auf dem Dach), Verlauf je Paneel, Abgleich, Auswertung, Export
  *   Wärme     – Lage der Heizung mit Anlagenschema, Verlauf, Logbuch und Regeln, Export
  */
 
@@ -962,6 +962,65 @@ export function pvStrings(layout, settings = {}, entities = {}) {
   return out.filter((s) => s.panels.length);
 }
 
+/** So viele Kacheln stehen in einer Zeile, solange noch nichts angeordnet ist. */
+export const PV_GRID_COLS = 8;
+
+/**
+ * Platz jedes Optimierers im Raster „Paneele jetzt“ als [Zeile, Spalte], beides ab 0.
+ * groups: Labels je String. saved: gespeicherte Plätze {Label: [Zeile, Spalte]}.
+ * Gespeicherte Plätze bleiben, Labels, die es nicht mehr gibt, fallen weg. Neue Optimierer und
+ * solche auf einer schon belegten Zelle kommen unter die Anordnung, jeder String in eine neue Zeile.
+ */
+export function pvGridPlace(groups, saved = {}, cols = PV_GRID_COLS) {
+  const pos = {};
+  const taken = new Set();
+  const valid = (p) => Array.isArray(p) && p.length === 2 && p.every((x) => Number.isInteger(x) && x >= 0);
+  for (const label of groups.flat()) {
+    const p = saved && Object.hasOwn(saved, label) ? saved[label] : null;
+    if (!valid(p) || taken.has(`${p[0]},${p[1]}`)) continue;
+    pos[label] = [p[0], p[1]];
+    taken.add(`${p[0]},${p[1]}`);
+  }
+  let row = Object.values(pos).reduce((max, p) => Math.max(max, p[0] + 1), 0);
+  for (const labels of groups) {
+    const rest = labels.filter((label) => !Object.hasOwn(pos, label));
+    rest.forEach((label, i) => { pos[label] = [row + Math.floor(i / cols), i % cols]; });
+    row += Math.ceil(rest.length / cols);
+  }
+  return pos;
+}
+
+/**
+ * Setzt ein Paneel auf [Zeile, Spalte]; ist die Zelle belegt, tauschen die beiden die Plätze.
+ * -1 ist erlaubt (der freie Rand beim Anordnen). Danach beginnt das Raster wieder bei 0, 0.
+ */
+export function pvGridMove(pos, label, row, col) {
+  const out = Object.fromEntries(Object.entries(pos).map(([l, p]) => [l, [...p]]));
+  if (!Object.hasOwn(out, label)) return out;
+  const other = Object.keys(out).find((l) => l !== label && out[l][0] === row && out[l][1] === col);
+  if (other) out[other] = [...out[label]];
+  out[label] = [row, col];
+  const cells = Object.values(out);
+  const r0 = Math.min(...cells.map((p) => p[0]));
+  const c0 = Math.min(...cells.map((p) => p[1]));
+  for (const p of cells) {
+    p[0] -= r0;
+    p[1] -= c0;
+  }
+  return out;
+}
+
+/** Zeile oder Spalte eines CSS-Grids an der Stelle offset (px ab Rasteranfang); sizes: Spuren in px. */
+export function gridTrackAt(sizes, gap, offset) {
+  let edge = 0;
+  for (let i = 0; i < sizes.length; i++) {
+    edge += sizes[i];
+    if (offset < edge + gap / 2) return i;
+    edge += gap;
+  }
+  return sizes.length - 1;
+}
+
 /** Schwellen der PV-Auswertung. Setzungen dieses Projekts, siehe README. */
 export const PV_LIMITS = {
   dayMinKwh: 0.15, // Tage, an denen das mittlere Paneel weniger liefert, zählen nicht
@@ -1570,6 +1629,33 @@ main[hidden] { display: none; }
 .tile.off { border: 1px dashed var(--c-warn); }
 .tile[aria-pressed="true"] { border-color: var(--sel); box-shadow: inset 0 0 0 2px var(--sel); }
 .tile:hover { border-color: var(--ink-2); }
+.tile-grid {
+  display: grid; gap: 6px; justify-content: start;
+  grid-template-columns: repeat(var(--cols), minmax(0, 76px)); grid-template-rows: repeat(var(--rows), auto);
+}
+.tile-grid .tile { container-type: inline-size; padding: 5px 6px; }
+.tile-grid .cell { aspect-ratio: 4 / 5; border-radius: 6px; visibility: hidden; pointer-events: none; }
+.tile-grid.arranging .cell { visibility: visible; border: 1px dashed var(--rule); }
+.tile-grid.arranging .tile { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.tile-grid .tile.dragging { z-index: 3; cursor: grabbing; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); }
+.tile-grid .drop { z-index: 2; border: 2px solid var(--accent); border-radius: 6px; pointer-events: none; }
+.tile.striped::before, .tile-key i { background: hsl(calc(200 + var(--si, 0) * 100) 55% 50%); }
+.tile.striped::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; }
+.tile-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 10px 0 0; color: var(--ink-2); font-size: 13px; }
+.tile-key span { display: inline-flex; align-items: center; gap: 6px; }
+.tile-key i { width: 14px; height: 3px; }
+.arrange-note { margin: 0 0 10px; color: var(--ink-2); font-size: 13px; max-width: 40em; }
+.tile .u { font-size: inherit; }
+@container (max-width: 46px) {
+  .tile span, .tile b { font-size: 10px; }
+}
+@container (max-width: 30px) {
+  .tile .u { display: none; }
+}
+@media (max-width: 520px) {
+  .tile-grid { gap: 4px; }
+  .tile-grid .tile { padding: 3px 4px; }
+}
 .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 6px 0 4px; }
 .pick small { color: var(--ink-2); font-size: 13px; }
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -2960,6 +3046,8 @@ class EnergyHubPanel extends HTMLElement {
     this._pvView = "system";
     this._pvMetric = "power";
     this._pvSel = new Map(); // Label -> Farbplatz 1 bis PANEL_SLOTS; die Farbe bleibt beim Paneel
+    this._pvGrid = {}; // gespeicherte Plätze im Raster {Label: [Zeile, Spalte]}; leer: nach String gruppiert
+    this._pvArrange = false;
     $.vHeadline = h("p", { class: "headline", role: "status" }, "Die PV-Daten werden geladen.");
     $.vSub = h("p", { class: "reason" });
     $.vFault = h("p", { class: "note error", hidden: true });
@@ -2967,6 +3055,12 @@ class EnergyHubPanel extends HTMLElement {
       "Für den Bereich PV ist noch nichts hinterlegt. Gebraucht wird mindestens die Leistung der PV-Anlage, besser die Sensoren des Wechselrichters, dazu nach Wunsch die Integration tigo_rs485 für die Optimierer. ",
       h("a", { href: settingsHref, onclick: nav }, "Wechselrichter hinterlegen"));
     $.vTiles = h("div", { class: "tiles" });
+    $.vArrangeBtn = h("button", { class: "plain", hidden: true, "aria-pressed": "false",
+      onclick: () => this._pvSetArrange(!this._pvArrange) }, "Anordnen");
+    $.vResetBtn = h("button", { class: "plain", hidden: true, onclick: () => this._pvResetGrid() }, "Zurücksetzen");
+    $.vArrangeNote = h("p", { class: "arrange-note", hidden: true },
+      "Ziehe jede Kachel an ihren Platz auf dem Dach. Auf einem belegten Feld tauschen zwei Kacheln. "
+      + "Mit der Tastatur: Kachel wählen, dann Pfeiltasten. Gespeichert wird sofort.");
     $.vFacts = h("dl", { class: "facts" });
     $.vViews = segmented("Ansicht", [["system", "Anlage"], ["panels", "Paneele"]], this._pvView, (view) => {
       this._pvView = view;
@@ -2992,7 +3086,9 @@ class EnergyHubPanel extends HTMLElement {
     return h("main", { hidden: true },
       h("section", { class: "lage" },
         h("div", {}, $.vHeadline, $.vSub, $.vFault, $.vNote),
-        ($.vTilesWrap = h("div", { hidden: true }, h("h2", {}, "Paneele jetzt"), $.vTiles))),
+        ($.vTilesWrap = h("div", { hidden: true },
+          h("div", { class: "sheet-head" }, h("h2", {}, "Paneele jetzt"), $.vResetBtn, $.vArrangeBtn),
+          $.vArrangeNote, $.vTiles))),
       ($.vFactsSec = h("section", {}, $.vFacts)),
       ($.vSheet = h("section", { class: "sheet" },
         h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.vViews, $.vRanges), $.vPick, $.vPlots)),
@@ -3033,6 +3129,7 @@ class EnergyHubPanel extends HTMLElement {
     } catch (_err) {
       this._pvLayout = { found: false, panels: [], strings: [], installation: {} };
     }
+    this._pvGrid = this._pvLayout.grid || {};
     const known = new Set(this._pvLayout.panels.map((p) => p.label));
     for (const label of [...this._pvSel.keys()]) if (!known.has(label)) this._pvSel.delete(label);
     this._buildTiles();
@@ -3090,19 +3187,137 @@ class EnergyHubPanel extends HTMLElement {
 
   /** Kacheln „Paneele jetzt“, einmal je Layout gebaut und danach nur aktualisiert. */
   _buildTiles() {
-    const $ = this.$;
     this._tiles = new Map();
-    const groups = this._pvStrings();
-    $.vTiles.replaceChildren(...groups.map((s) => h("div", { class: "tile-group" },
-      groups.length > 1 || s.name ? h("h3", {}, s.name ? `String ${s.name}` : "Ohne String") : null,
-      h("div", { class: "tile-row" }, s.panels.map((label) => {
+    for (const s of this._pvStrings()) {
+      for (const label of s.panels) {
         const fill = h("i", { class: "fill" });
         const value = h("b", {}, "–");
-        const btn = h("button", { class: "tile", "aria-pressed": "false", onclick: () => this._togglePanel(label, true) },
-          fill, h("span", {}, label), value);
+        const btn = h("button", {
+          class: "tile", "aria-pressed": "false",
+          onclick: () => { if (!this._pvArrange) this._togglePanel(label, true); },
+          onpointerdown: (e) => this._pvDragStart(e, label),
+          onkeydown: (e) => this._pvKey(e, label),
+        }, fill, h("span", {}, label), value);
         this._tiles.set(label, { btn, fill, value });
-        return btn;
-      })))));
+      }
+    }
+    this._layoutTiles();
+  }
+
+  /** Ohne Anordnung nach String gruppiert, sonst im Raster wie auf dem Dach. Beim Anordnen mit freiem Rand. */
+  _layoutTiles() {
+    const $ = this.$;
+    if (!this._tiles) return;
+    const groups = this._pvStrings();
+    const arrange = this._pvArrange;
+    const saved = Object.keys(this._pvGrid).length > 0;
+    $.vArrangeBtn.hidden = !this._hass?.user?.is_admin;
+    $.vArrangeBtn.textContent = arrange ? "Fertig" : "Anordnen";
+    $.vArrangeBtn.setAttribute("aria-pressed", String(arrange));
+    $.vResetBtn.hidden = !(arrange && saved);
+    $.vArrangeNote.hidden = !arrange;
+    const focused = this.shadowRoot.activeElement;
+    const name = (s) => (s.name ? `String ${s.name}` : "Ohne String");
+    for (const { btn } of this._tiles.values()) {
+      btn.style.gridArea = "";
+      btn.classList.toggle("striped", (arrange || saved) && groups.length > 1);
+    }
+    if (!arrange && !saved) {
+      $.vTiles.replaceChildren(...groups.map((s) => h("div", { class: "tile-group" },
+        groups.length > 1 || s.name ? h("h3", {}, name(s)) : null,
+        h("div", { class: "tile-row" }, s.panels.map((label) => this._tiles.get(label).btn)))));
+    } else {
+      const pos = (this._pvPos = pvGridPlace(groups.map((s) => s.panels), this._pvGrid));
+      const m = arrange ? 1 : 0;
+      const cells = Object.values(pos);
+      const rows = Math.max(0, ...cells.map((p) => p[0] + 1)) + 2 * m;
+      const cols = Math.max(0, ...cells.map((p) => p[1] + 1)) + 2 * m;
+      const used = new Set(cells.map((p) => `${p[0] + m},${p[1] + m}`));
+      const grid = h("div", { class: arrange ? "tile-grid arranging" : "tile-grid", style: `--rows: ${rows}; --cols: ${cols}` });
+      // leere Zellen halten Lücken auf dem Dach offen und zeigen beim Anordnen, wohin eine Kachel kann
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (!used.has(`${r},${c}`)) grid.append(h("i", { class: "cell", style: `grid-area: ${r + 1} / ${c + 1}` }));
+        }
+      }
+      groups.forEach((s, i) => {
+        for (const label of s.panels) {
+          const { btn } = this._tiles.get(label);
+          btn.style.gridArea = `${pos[label][0] + m + 1} / ${pos[label][1] + m + 1}`;
+          btn.style.setProperty("--si", i);
+          grid.append(btn);
+        }
+      });
+      const key = groups.length > 1
+        ? h("p", { class: "tile-key" }, groups.map((s, i) => h("span", {}, h("i", { style: `--si: ${i}` }), name(s))))
+        : null;
+      $.vTiles.replaceChildren(...[grid, key].filter(Boolean));
+    }
+    if (focused && this.shadowRoot.activeElement !== focused && $.vTiles.contains(focused)) focused.focus();
+  }
+
+  _pvSetArrange(on) {
+    this._pvArrange = on;
+    this._layoutTiles();
+  }
+
+  _pvResetGrid() {
+    this._pvGrid = {};
+    this._call("set_pv_grid", { grid: {} });
+    this._pvSetArrange(false);
+  }
+
+  /** Setzt ein Paneel auf eine Zelle (ab 0, -1 ist der freie Rand) und speichert die Anordnung. */
+  _pvMoveTo(label, row, col) {
+    const [r, c] = this._pvPos[label];
+    if ((r === row && c === col) || row > 99 || col > 99) return;
+    this._pvGrid = pvGridMove(this._pvPos, label, row, col);
+    this._layoutTiles();
+    this._call("set_pv_grid", { grid: this._pvGrid });
+  }
+
+  _pvKey(e, label) {
+    const step = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+    if (!this._pvArrange || !step) return;
+    e.preventDefault();
+    const [r, c] = this._pvPos[label];
+    this._pvMoveTo(label, r + step[0], c + step[1]);
+  }
+
+  /** Ziehen mit Maus, Finger oder Stift; die Kachel rastet beim Loslassen in der Zelle unter dem Zeiger ein. */
+  _pvDragStart(e, label) {
+    if (!this._pvArrange || e.button > 0) return;
+    const { btn } = this._tiles.get(label);
+    const grid = btn.parentElement;
+    const css = getComputedStyle(grid);
+    const rows = css.gridTemplateRows.split(" ").map(parseFloat);
+    const cols = css.gridTemplateColumns.split(" ").map(parseFloat);
+    const gapY = parseFloat(css.rowGap) || 0;
+    const gapX = parseFloat(css.columnGap) || 0;
+    const box = grid.getBoundingClientRect();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let cell = this._pvPos[label];
+    const drop = h("i", { class: "drop" });
+    const show = () => { drop.style.gridArea = `${cell[0] + 2} / ${cell[1] + 2}`; };
+    show();
+    grid.append(drop);
+    btn.classList.add("dragging");
+    btn.setPointerCapture?.(e.pointerId);
+    const move = (ev) => {
+      btn.style.transform = `translate(${ev.clientX - x0}px, ${ev.clientY - y0}px)`;
+      cell = [gridTrackAt(rows, gapY, ev.clientY - box.top) - 1, gridTrackAt(cols, gapX, ev.clientX - box.left) - 1];
+      show();
+    };
+    const end = (ev) => {
+      for (const [type, fn] of listeners) btn.removeEventListener(type, fn);
+      btn.classList.remove("dragging");
+      btn.style.transform = "";
+      drop.remove();
+      if (ev.type === "pointerup") this._pvMoveTo(label, cell[0], cell[1]);
+    };
+    const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end]];
+    for (const [type, fn] of listeners) btn.addEventListener(type, fn);
   }
 
   _buildChips() {
@@ -3219,7 +3434,8 @@ class EnergyHubPanel extends HTMLElement {
       for (const p of s.members) {
         const ref = this._tiles?.get(p.label);
         if (!ref) continue;
-        ref.value.textContent = isNum(p.power) ? fmtW(p.power) : "–";
+        // Einheit extra, damit sie auf sehr schmalen Kacheln wegfallen kann
+        ref.value.replaceChildren(...(isNum(p.power) ? [nf0.format(p.power), h("small", { class: "u" }, " W")] : ["–"]));
         ref.fill.style.height = `${((isNum(p.power) ? p.power : 0) / max) * 100}%`;
         const lit = s.median >= 50;
         ref.btn.classList.toggle("off", lit && !(p.power > PV_LIMITS.dropoutW));
@@ -3227,7 +3443,7 @@ class EnergyHubPanel extends HTMLElement {
         const details = [isNum(p.vin) && `${nf1.format(p.vin)} V`, isNum(p.current) && `${nf1.format(p.current)} A`,
           isNum(p.temp) && fmtC(p.temp), isNum(p.today) && `heute ${fmtKwh(p.today)}`].filter(Boolean).join(", ");
         ref.btn.title = `${p.label}${details ? `: ${details}` : ""}`;
-        ref.btn.setAttribute("aria-label", `Paneel ${p.label}, ${ref.value.textContent}${details ? `, ${details}` : ""}`);
+        ref.btn.setAttribute("aria-label", `Paneel ${p.label}, ${fmtW(p.power)}${details ? `, ${details}` : ""}`);
       }
     }
 

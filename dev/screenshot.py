@@ -33,6 +33,8 @@ SHOTS = [
     ("pv-mobile-light", 390, 844, "?tab=pv&mode=boost", 13),
     ("pv-desktop-night", 1360, 900, "?tab=pv&mode=normal", None),
     ("pv-desktop-empty", 1360, 900, "?tab=pv&mode=empty", 13),
+    ("pv-desktop-raster", 1360, 900, "?tab=pv&mode=boost&raster=dach", 13),
+    ("pv-mobile-raster", 390, 844, "?tab=pv&mode=boost&raster=dach", 13),
     ("overview-desktop-empty", 1360, 900, "?tab=overview&mode=empty"),
     ("desktop-light-boost", 1360, 900, "?tab=heat&mode=boost"),
     ("desktop-dark-setback", 1360, 900, "?tab=heat&mode=setback&theme=dark"),
@@ -121,6 +123,34 @@ with sync_playwright() as p:
     info.value.save_as(str(OUT / "pv.csv"))
     print(f"pv: {info.value.suggested_filename} | {status}")
     page.close()
+    # Optimierer anordnen: A1 auf A2 ziehen (tauschen), dann A3 mit der Tastatur nach unten
+    for name, w, h in (("pv-anordnen-desktop", 1360, 900), ("pv-anordnen-mobile", 390, 844)):
+        page = browser.new_page(viewport={"width": w, "height": h})
+        page.clock.set_fixed_time(FIXED.replace(hour=13, minute=20))
+        page.on("pageerror", lambda e, n=name: problems.append(f"{n}: {e}"))
+        sent = []
+        page.on("console", lambda m: "set_pv_grid" in m.text and sent.append(m.text))
+        page.goto(base + "?tab=pv&mode=boost")
+        page.wait_for_timeout(700)
+        page.get_by_role("button", name="Anordnen").click()
+        page.screenshot(path=str(OUT / f"{name}.png"), full_page=True)
+        tile = lambda label: page.locator(f"energy-hub-panel .tile-grid .tile:has(span:text-is('{label}'))")
+        a, b = tile("A1").bounding_box(), tile("A2").bounding_box()
+        page.mouse.move(a["x"] + a["width"] / 2, a["y"] + a["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(b["x"] + b["width"] / 2, b["y"] + b["height"] / 2, steps=6)
+        page.mouse.up()
+        tile("A3").focus()
+        page.keyboard.press("ArrowDown")
+        area = lambda label: page.evaluate(
+            f"() => [...document.querySelector('energy-hub-panel').shadowRoot.querySelectorAll('.tile')]"
+            f".find((t) => t.querySelector('span').textContent === '{label}').style.gridArea")
+        got = [area(label) for label in ("A1", "A2", "A3")]
+        if got != ["2 / 3", "2 / 2", "3 / 4"] or len(sent) != 2:
+            problems.append(f"{name}: Anordnen ergab {got}, {len(sent)}× gespeichert")
+        page.get_by_role("button", name="Fertig").click()
+        page.screenshot(path=str(OUT / f"{name}-fertig.png"), full_page=True)
+        page.close()
     browser.close()
 server.shutdown()
 

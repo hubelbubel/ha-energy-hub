@@ -109,7 +109,7 @@ async def ws_clear_log(
 def ws_pv_layout(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> None:
-    """Tigo-Optimierer mit String und Entitäten, gelesen aus dem Entitätsregister."""
+    """Tigo-Optimierer mit String und Entitäten aus dem Entitätsregister, dazu ihre Plätze im Raster."""
     entries = [(entry.entry_id, dict(entry.options)) for entry in hass.config_entries.async_entries(c.TIGO_DOMAIN)]
     registry = er.async_get(hass)
     entities = [
@@ -122,7 +122,40 @@ def ws_pv_layout(
         for ent in registry.entities.values()
         if ent.platform == c.TIGO_DOMAIN and ent.entity_id.startswith("sensor.")
     ]
-    connection.send_result(msg["id"], {"found": bool(entries), **build_layout(entries, entities)})
+    from . import get_controller  # noqa: PLC0415 - vermeidet Importzyklus
+
+    controller = get_controller(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "found": bool(entries),
+            **build_layout(entries, entities),
+            "grid": controller.pv_grid if controller else {},
+        },
+    )
+
+
+# Zeile oder Spalte im Raster der Optimierer
+_CELL = vol.All(int, vol.Range(min=0, max=99))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{c.DOMAIN}/set_pv_grid",
+        vol.Required("grid"): vol.All({str: vol.ExactSequence([_CELL, _CELL])}, vol.Length(max=500)),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_set_pv_grid(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """Plätze der Optimierer im Raster „Paneele jetzt“: {Label: [Zeile, Spalte]}, leer = keine Anordnung."""
+    controller = _controller(hass, connection, msg)
+    if controller is None:
+        return
+    await controller.async_set_pv_grid(msg["grid"])
+    connection.send_result(msg["id"])
 
 
 @callback
@@ -134,5 +167,6 @@ def async_register_websocket(hass: HomeAssistant) -> None:
         ws_clear_override,
         ws_clear_log,
         ws_pv_layout,
+        ws_set_pv_grid,
     ):
         websocket_api.async_register_command(hass, command)

@@ -89,6 +89,10 @@
       entities: Object.fromEntries(METRICS.map((key) => [key, pid(label, key)])) })),
     strings: [{ name: "A", entities: { power: "sensor.tigo_string_a_power", energy_today: "sensor.tigo_string_a_energy_today" } }],
     installation: { energy_today: "sensor.tigo_installation_energy_today" },
+    // ?raster=dach: angeordnet wie auf einem Dach, oben 7 und unten 9 Module
+    grid: q.get("raster") === "dach"
+      ? Object.fromEntries(LABELS.map((label, i) => [label, i < 7 ? [0, i + 1] : [1, i - 7]]))
+      : {},
   };
   // Tagessummen (kWh seit Mitternacht) für die Zähler des Wechselrichters
   const COUNTERS = {
@@ -244,7 +248,7 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.5.3",
+    version: "0.5.4",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
@@ -357,6 +361,7 @@
 
   const hass = {
     themes: { darkMode: dark },
+    user: { is_admin: q.get("admin") !== "nein" },
     states,
     connection: {
       subscribeMessage(cb) { setTimeout(() => cb(structuredClone(snapshot)), 30); return Promise.resolve(() => {}); },
@@ -409,7 +414,12 @@
         }
         return res;
       }
-      if (msg.type === "energy_hub/pv_layout") return scene === "empty" ? { found: false, panels: [], strings: [], installation: {} } : layout;
+      if (msg.type === "energy_hub/pv_layout") return scene === "empty" ? { found: false, panels: [], strings: [], installation: {} } : structuredClone(layout);
+      if (msg.type === "energy_hub/set_pv_grid") {
+        layout.grid = msg.grid;
+        console.log("WS", msg);
+        return null;
+      }
       console.log("WS", msg);
       return null;
     },
