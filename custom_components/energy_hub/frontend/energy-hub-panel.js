@@ -1626,6 +1626,15 @@ select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; ba
 .plain { padding: 7px 12px; border: 1px solid var(--rule); border-radius: 8px; background: transparent; cursor: pointer; font-size: 14px; }
 .plain:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .plain[hidden] { display: none; }
+.head-info { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.head-info h2 { margin: 0; }
+button.info { flex: none; width: 26px; height: 26px; padding: 0; border: 1px solid var(--rule); border-radius: 50%;
+  background: transparent; color: var(--ink-2); font: italic 600 14px/1 Georgia, "Times New Roman", serif; cursor: pointer;
+  position: relative; }
+button.info::after { content: ""; position: absolute; inset: -9px; } /* größere Fläche für den Finger */
+button.info:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+button.info[aria-expanded="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.foot.info-text { margin: 0 0 14px; }
 
 /* ---- Anlagenschema ---- */
 .schema { width: 100%; max-width: 620px; height: auto; display: block; overflow: visible; }
@@ -3514,6 +3523,17 @@ class EnergyHubPanel extends HTMLElement {
     $.vPick = h("div", { class: "pick", hidden: true }, $.vMetrics, $.vChips, $.vPickNote);
     $.vPlots = h("div", { class: "plots" });
     $.vCompare = h("div", { class: "cmp" });
+    $.vCmpNote = h("p", { class: "foot info-text", id: "pv-cmp-info", hidden: true },
+      "Die Optimierer messen die Leistung am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit. Die Spannung der Optimierer ist die Summe ihrer Ausgangsspannungen und sollte nahe an der des MPPT liegen. Die Tageswerte sind aus der Leistung aufsummiert.");
+    $.vCmpInfo = h("button", {
+      class: "info", "aria-label": "Erklärung zu Wechselrichter und Optimierern", title: "Erklärung",
+      "aria-expanded": "false", "aria-controls": "pv-cmp-info",
+      onclick: () => {
+        const open = $.vCmpNote.hidden;
+        $.vCmpNote.hidden = !open;
+        $.vCmpInfo.setAttribute("aria-expanded", String(open));
+      },
+    }, "i");
     $.vRank = h("div", { class: "rank" });
     $.vFind = h("div", {});
     $.vRankHead = h("h2", {}, "Paneele heute");
@@ -3526,7 +3546,9 @@ class EnergyHubPanel extends HTMLElement {
       ($.vFactsSec = h("section", { class: "by-day" }, $.vFacts)),
       ($.vSheet = h("section", { class: "sheet by-day" },
         h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.vViews, $.vRanges), $.vPick, $.vPlots)),
-      ($.vCmpSec = h("section", { class: "by-day", hidden: true }, h("h2", {}, "Wechselrichter und Optimierer"), $.vCompare)),
+      ($.vCmpSec = h("section", { class: "by-day", hidden: true },
+        h("div", { class: "head-info" }, h("h2", {}, "Wechselrichter und Optimierer"), $.vCmpInfo),
+        $.vCmpNote, $.vCompare)),
       ($.vRankSec = h("section", { class: "by-day", hidden: true }, $.vRankHead, $.vRank)),
       ($.vFindSec = h("section", {}, h("h2", {}, "Die letzten 7 Tage"), $.vFind)));
   }
@@ -4136,9 +4158,7 @@ class EnergyHubPanel extends HTMLElement {
       h("table", {},
         h("thead", {}, h("tr", {}, ["String", "Eingang", "Optimierer", "Wechselrichter", "Unterschied",
           "Spannung Optimierer", "Spannung MPPT", `${day} Optimierer`, `${day} Wechselrichter`].map((x) => h("th", {}, x)))),
-        h("tbody", {}, rows)),
-      h("p", { class: "foot" },
-        "Die Optimierer messen die Leistung am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit. Die Spannung der Optimierer ist die Summe ihrer Ausgangsspannungen und sollte nahe an der des MPPT liegen. Die Tageswerte sind aus der Leistung aufsummiert."));
+        h("tbody", {}, rows)));
   }
 
   /** Ertrag je Paneel am gezeigten Tag, mit Anteil am Median im String. */

@@ -11,6 +11,7 @@ Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releas
 - Absenken über Nacht: Geht das Absenkfenster über Mitternacht (etwa 21:00 bis 10:00 Uhr), zählt vor Mitternacht die Prognose für morgen.
 - Bereich Wärme: Kennwert „Überschuss ohne Akku“, im Verlauf als gestrichelte Linie, im Logbuch bei jedem Eintrag.
 - Bereich Wärme: Der PV-Überschuss wird nie unter 0 W angezeigt, auch nicht im Verlauf und im Logbuch. Netzbezug zählt dort als 0 W. Im Export stehen weiter die echten Werte.
+- Bereich PV: Die Erklärung unter „Wechselrichter und Optimierer“ steht jetzt hinter einem i-Knopf neben der Überschrift und nimmt so keinen Platz mehr weg.
 
 ## 0.5.6 – 2026-11-20
 

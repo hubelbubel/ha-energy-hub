@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Rendert dev/preview.html in mehreren Varianten und meldet Konsolenfehler.
 
-Prüft dazu die Exporte, das Anordnen der Optimierer, die Zeitleiste unter den Kacheln und die Tagesleiste.
+Prüft dazu die Exporte, das Anordnen der Optimierer, die Zeitleiste unter den Kacheln, die Tagesleiste
+und den i-Knopf unter „Wechselrichter und Optimierer“.
 
 Aufruf (im Hauptordner):  python3 dev/screenshot.py /tmp/shots
 Braucht Playwright und einen installierten Chrome.
@@ -296,6 +297,27 @@ with sync_playwright() as p:
                 problems.append(f"{name}: Seite ist {overflow}px breiter als das Fenster")
             page.screenshot(path=str(OUT / f"{name}.png"), full_page=False)
         page.close()
+
+    # Erklärung unter „Wechselrichter und Optimierer“: zu, öffnet sich mit dem i-Knopf
+    page = browser.new_page(viewport={"width": 390, "height": 844})
+    page.clock.set_fixed_time(FIXED.replace(hour=13, minute=20))
+    page.on("pageerror", lambda e: problems.append(f"pv-info: {e}"))
+    page.goto(base + "?tab=pv&mode=boost")
+    page.wait_for_timeout(900)
+    state = f"() => [{ROOT_JS}.querySelector('.info-text').hidden, {ROOT_JS}.querySelector('button.info').getAttribute('aria-expanded')]"
+    if page.evaluate(state) != [True, "false"]:
+        problems.append(f"pv-info: Erklärung ist am Anfang nicht zu: {page.evaluate(state)}")
+    page.get_by_role("button", name="Erklärung zu Wechselrichter und Optimierern").click()
+    page.wait_for_timeout(100)
+    if page.evaluate(state) != [False, "true"]:
+        problems.append(f"pv-info: i-Knopf öffnet die Erklärung nicht: {page.evaluate(state)}")
+    page.evaluate(f"() => {ROOT_JS}.querySelector('.head-info').scrollIntoView()")
+    page.screenshot(path=str(OUT / "pv-info-mobile.png"))
+    page.keyboard.press("Enter")  # der Knopf hat noch den Fokus: schließt wieder
+    page.wait_for_timeout(100)
+    if page.evaluate(state) != [True, "false"]:
+        problems.append(f"pv-info: mit der Tastatur schließt die Erklärung nicht: {page.evaluate(state)}")
+    page.close()
     browser.close()
 server.shutdown()
 
