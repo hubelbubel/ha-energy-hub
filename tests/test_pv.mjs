@@ -203,3 +203,75 @@ test("buildPvExport: vier Tabellen, Nachtzeilen entfallen, erster Teiltag ohne Z
   assert.equal(section("tage_paneele").length - 1, 3 * 5);
   assert.ok(lines.some((l) => l === "# einstellung.zuordnung: A=MPPT 1"));
 });
+
+// Zeitleiste unter „Paneele jetzt“: 48 Stunden im 5-Minuten-Raster bis jetzt, wie im Panel
+const STEP = 300e3;
+const at = (text) => new Date(`${text}+01:00`).getTime();
+const clock = (ms) => new Date(ms).toTimeString().slice(0, 5);
+/** Leistung der Anlage: hell zwischen from und to (Uhrzeit in Stunden), je Tag; sonst 4 W Standby. */
+function day48(now, light) {
+  const t1 = Math.ceil(now / STEP) * STEP;
+  const t0 = t1 - 48 * HOUR;
+  const vals = [];
+  for (let t = t0; t < t1; t += STEP) {
+    const d = new Date(t);
+    const hour = d.getHours() + d.getMinutes() / 60;
+    const [from, to] = light(d) || [99, 0];
+    vals.push(hour >= from && hour < to ? 1500 : 4);
+  }
+  return { t0, vals };
+}
+
+test("pvDayWindow: heute mit Licht, Fenster zu vollen Stunden und so lang wie gestern", () => {
+  const now = at("2026-11-20T13:20:00");
+  const { t0, vals } = day48(now, (d) => (d.getDate() === 19 ? [7 + 50 / 60, 16 + 35 / 60] : [8 + 10 / 60, 24]));
+  const win = m.pvDayWindow(vals, t0, STEP, now);
+  assert.equal(win.day, "today");
+  assert.equal(win.from, at("2026-11-20T07:00:00"));
+  assert.equal(win.to, at("2026-11-20T17:00:00"));
+  assert.equal(t0 + win.i0 * STEP, win.from);
+  assert.equal(win.last, vals.length - 1);
+  assert.equal(clock(t0 + win.last * STEP), "13:15");
+});
+
+test("pvDayWindow: vor dem ersten Licht der Tag davor; Standby zählt nicht", () => {
+  const now = at("2026-11-20T06:25:00");
+  const { t0, vals } = day48(now, (d) => (d.getDate() === 19 ? [7 + 50 / 60, 16 + 35 / 60] : null));
+  const win = m.pvDayWindow(vals, t0, STEP, now);
+  assert.equal(win.day, "yesterday");
+  assert.equal(win.from, at("2026-11-19T07:00:00"));
+  assert.equal(win.to, at("2026-11-19T17:00:00"));
+  assert.equal(clock(t0 + win.last * STEP), "16:55");
+  assert.equal(m.pvDayWindow(vals.map(() => 4), t0, STEP, now), null);
+  assert.equal(m.pvDayWindow(vals.map(() => null), t0, STEP, now), null);
+  assert.equal(m.pvDayWindow(null, t0, STEP, now), null);
+});
+
+test("pvDayWindow: am Tag der Zeitumstellung zählt die Uhrzeit", () => {
+  const now = new Date("2026-10-25T12:00:00+01:00").getTime(); // in der Nacht von 3 auf 2 Uhr zurückgestellt
+  const { t0, vals } = day48(now, (d) => (d.getDate() === 24 ? [8, 18] : [8 + 10 / 60, 24]));
+  const win = m.pvDayWindow(vals, t0, STEP, now);
+  assert.equal(clock(win.from), "08:00");
+  assert.equal(clock(win.to), "18:00");
+  assert.equal(win.to - win.from, 10 * HOUR);
+});
+
+test("pvDayIndex: Stelle auf der Zeitleiste zum Raster, begrenzt auf die Werte", () => {
+  const now = at("2026-11-20T13:20:00");
+  const { t0, vals } = day48(now, (d) => (d.getDate() === 19 ? [7 + 50 / 60, 16 + 35 / 60] : [8 + 10 / 60, 24]));
+  const win = m.pvDayWindow(vals, t0, STEP, now);
+  assert.equal(m.pvDayIndex(win, t0, STEP, 0), win.i0);
+  assert.equal(m.pvDayIndex(win, t0, STEP, -0.2), win.i0);
+  assert.equal(clock(t0 + m.pvDayIndex(win, t0, STEP, 0.5) * STEP), "12:00");
+  assert.equal(clock(t0 + m.pvDayIndex(win, t0, STEP, 0.52) * STEP), "12:10");
+  // nach jetzt gibt es noch nichts: der letzte Wert
+  assert.equal(m.pvDayIndex(win, t0, STEP, 0.9), win.last);
+  assert.equal(m.pvDayIndex(win, t0, STEP, 1.5), win.last);
+});
+
+test("pvEnergy: Leistung im 5-Minuten-Raster zu kWh, Lücken zählen nicht", () => {
+  near(m.pvEnergy(new Array(12).fill(1200), 0, 11, STEP), 1.2);
+  near(m.pvEnergy([1200, null, 1200, 1200], 0, 3, STEP), 0.3);
+  near(m.pvEnergy([1200, 1200, 1200], 1, 1, STEP), 0.1);
+  near(m.pvEnergy([1200, 1200], 0, 9, STEP), 0.2);
+});

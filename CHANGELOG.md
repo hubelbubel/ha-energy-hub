@@ -2,6 +2,11 @@
 
 Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releases; den zeigt Home Assistant beim Update an. Ältere Versionen stehen nur im Verlauf auf GitHub.
 
+## 0.5.5 – 2026-11-20
+
+- Zeitleiste im Bereich PV: Unter „Paneele jetzt“ steht die Leistung der Anlage über den Tag. Wer mit dem Finger darüber wischt oder mit der Maus darüberfährt, sieht auf den Kacheln die Leistung jedes Paneels zu dieser Uhrzeit, etwa um zu erkennen, wann ein Modul im Schatten liegt. Beim Loslassen zeigen die Kacheln wieder die aktuellen Werte.
+- Vor dem ersten Licht des Tages zeigt die Zeitleiste den Tag davor. Mit der Tastatur geht es über die Pfeiltasten.
+
 ## 0.5.4 – 2026-11-20
 
 - Optimierer anordnen: Im Bereich PV lassen sich die Kacheln unter „Paneele jetzt“ mit „Anordnen“ in ein Raster ziehen, so wie die Module auf dem Dach liegen. Sie rasten in den Feldern ein, auf einem belegten Feld tauschen zwei Kacheln die Plätze. Mit der Tastatur geht es über die Pfeiltasten.

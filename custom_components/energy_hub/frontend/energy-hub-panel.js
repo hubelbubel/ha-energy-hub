@@ -1035,7 +1035,72 @@ export const PV_LIMITS = {
   hotC: 75,
   matchDev: 0.06, // Optimierer und Wechselrichter stimmen überein bis 6 %
   lossDev: 0.12, // auffällig, wenn am Wechselrichter über 12 % weniger ankommt
+  dayLitW: 20, // Zeitleiste: Licht, sobald die Anlage mehr als 20 W liefert
 };
+
+/**
+ * Fenster der Zeitleiste unter „Paneele jetzt“: der helle Teil von heute, vor dem ersten Licht der von gestern.
+ * total: Leistung der Anlage in W je Raster ab t0. Das Fenster beginnt und endet zu vollen Stunden.
+ * Heute reicht es mindestens so weit wie gestern das Licht, damit die Achse über den Tag stehen bleibt.
+ * Liefert { day: "today" | "yesterday", from, to, i0, last } oder null, wenn an beiden Tagen kein Licht war.
+ * i0 ist das erste Raster im Fenster, last das letzte mit einem Wert.
+ */
+export function pvDayWindow(total, t0, step, now, minW = PV_LIMITS.dayLitW) {
+  const n = total?.length ?? 0;
+  const midnight = (ms) => {
+    const d = new Date(ms);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const clock = (ms) => {
+    const d = new Date(ms);
+    return d.getHours() * 60 + d.getMinutes();
+  };
+  // erste und letzte Minute mit Licht zwischen from und to, als Uhrzeit (Minuten ab Mitternacht)
+  const lit = (from, to) => {
+    let a = -1;
+    let b = -1;
+    for (let i = Math.max(0, Math.ceil((from - t0) / step)); i < n && t0 + i * step < to; i++) {
+      if (total[i] > minW) {
+        if (a < 0) a = i;
+        b = i;
+      }
+    }
+    if (a < 0) return null;
+    const end = clock(t0 + (b + 1) * step);
+    return [clock(t0 + a * step), end === 0 ? 1440 : end]; // Licht bis Mitternacht endet um 24 Uhr
+  };
+  const today = midnight(now);
+  const yesterday = midnight(today - 1);
+  const lt = lit(today, now);
+  const ly = lit(yesterday, today);
+  if (!lt && !ly) return null;
+  const base = lt ? today : yesterday;
+  const [a, b] = lt && ly ? [Math.min(lt[0], ly[0]), Math.max(lt[1], ly[1])] : lt || ly;
+  const from = new Date(base);
+  from.setHours(Math.floor(a / 60), 0, 0, 0);
+  const to = new Date(base);
+  to.setHours(Math.ceil(b / 60), 0, 0, 0);
+  const i0 = Math.max(0, Math.round((from.getTime() - t0) / step));
+  const end = Math.min(n, Math.round((to.getTime() - t0) / step));
+  let last = -1;
+  for (let i = i0; i < end; i++) if (isNum(total[i])) last = i;
+  if (last < 0) return null;
+  return { day: lt ? "today" : "yesterday", from: from.getTime(), to: to.getTime(), i0, last };
+}
+
+/** Raster unter dem Finger; f ist die Stelle auf der Zeitleiste von 0 bis 1. Nie vor i0 und nie nach dem letzten Wert. */
+export function pvDayIndex(win, t0, step, f) {
+  const t = win.from + Math.min(1, Math.max(0, f)) * (win.to - win.from);
+  return Math.min(win.last, Math.max(win.i0, Math.floor((t - t0) / step)));
+}
+
+/** Energie in kWh aus der Leistung in W, Raster i0 bis einschließlich i1. */
+export function pvEnergy(vals, i0, i1, step) {
+  let kwh = 0;
+  for (let i = Math.max(0, i0); i <= i1 && i < vals.length; i++) if (isNum(vals[i])) kwh += (vals[i] * step) / 3.6e9;
+  return kwh;
+}
 
 /**
  * Auswertung der Optimierer über einen Zeitraum, gedacht für Stundenwerte über 7 Tage.
@@ -1645,6 +1710,21 @@ main[hidden] { display: none; }
 .tile-key span { display: inline-flex; align-items: center; gap: 6px; }
 .tile-key i { width: 14px; height: 3px; }
 .arrange-note { margin: 0 0 10px; color: var(--ink-2); font-size: 13px; max-width: 40em; }
+.tiles.past .tile .fill { transition: none; }
+.daybar { margin-top: 14px; border-radius: 6px; cursor: ew-resize; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.day-read { display: flex; align-items: baseline; gap: 8px; min-height: 20px; color: var(--ink-2); font-size: 13px; }
+.day-read b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+.day-read small { margin-left: auto; font-size: 12px; text-align: right; }
+.day-plot { height: 70px; }
+.day-plot svg { display: block; overflow: visible; }
+.day-plot .area { fill: var(--c-pv); opacity: 0.24; }
+.day-plot .line { fill: none; stroke: var(--c-pv); stroke-width: 1.5; stroke-linejoin: round; }
+.day-plot .grid { stroke: var(--rule); stroke-width: 1; }
+.day-plot .axis { stroke: color-mix(in srgb, var(--ink) 35%, transparent); stroke-width: 1; }
+.day-plot .tick { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.day-plot .now { fill: var(--c-pv); }
+.day-plot .cursor line { stroke: var(--ink); stroke-width: 1.5; }
+.day-plot .cursor circle { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
 .tile .u { font-size: inherit; }
 @container (max-width: 46px) {
   .tile span, .tile b { font-size: 10px; }
@@ -1932,8 +2012,12 @@ class EnergyHubPanel extends HTMLElement {
     });
     this._resize2.observe($.pPlots);
     this._resize2.observe($.oHours);
-    this._resize3 = new ResizeObserver(() => this._drawPv());
+    this._resize3 = new ResizeObserver(() => {
+      this._drawPv();
+      this._drawPvDay();
+    });
     this._resize3.observe($.vPlots);
+    this._resize3.observe($.vDay);
     let tab = "overview";
     try {
       tab = localStorage.getItem("energy-hub-tab") || tab;
@@ -2297,6 +2381,7 @@ class EnergyHubPanel extends HTMLElement {
     if (name === "pv") {
       this._renderPv();
       this._drawPv();
+      this._drawPvDay();
       this._renderPvFindings();
       if (this._snap && (!this._pv48 || Date.now() - this._pv48.t1 > 5 * 60000)) this._loadPv();
     }
@@ -3061,6 +3146,20 @@ class EnergyHubPanel extends HTMLElement {
     $.vArrangeNote = h("p", { class: "arrange-note", hidden: true },
       "Ziehe jede Kachel an ihren Platz auf dem Dach. Auf einem belegten Feld tauschen zwei Kacheln. "
       + "Mit der Tastatur: Kachel wählen, dann Pfeiltasten. Gespeichert wird sofort.");
+    // Zeitleiste unter den Kacheln: Wischen zeigt die Paneele zu jeder Uhrzeit, Loslassen wieder jetzt
+    this._pvScrubAt = null; // Beginn des gezeigten 5-Minuten-Rasters, null: jetzt
+    $.vTilesHead = h("h2", {}, "Paneele jetzt");
+    $.vDayWhen = h("span", {});
+    $.vDayValue = h("b", {});
+    $.vDayHint = h("small", {}, "darüberfahren zeigt frühere Werte");
+    $.vDayPlot = h("div", { class: "day-plot" });
+    $.vDay = h("div", {
+      class: "daybar", role: "slider", tabindex: "0", hidden: true, "aria-label": "Leistung der Anlage über den Tag",
+      onpointerdown: (e) => this._pvDayPointer(e), onpointermove: (e) => this._pvDayPointer(e),
+      onpointerup: (e) => this._pvDayRelease(e), onpointercancel: (e) => this._pvDayRelease(e),
+      onpointerleave: (e) => this._pvDayRelease(e), onkeydown: (e) => this._pvDayKey(e),
+      onblur: () => this._pvScrubEnd(),
+    }, h("div", { class: "day-read" }, $.vDayWhen, $.vDayValue, $.vDayHint), $.vDayPlot);
     $.vFacts = h("dl", { class: "facts" });
     $.vViews = segmented("Ansicht", [["system", "Anlage"], ["panels", "Paneele"]], this._pvView, (view) => {
       this._pvView = view;
@@ -3087,8 +3186,8 @@ class EnergyHubPanel extends HTMLElement {
       h("section", { class: "lage" },
         h("div", {}, $.vHeadline, $.vSub, $.vFault, $.vNote),
         ($.vTilesWrap = h("div", { hidden: true },
-          h("div", { class: "sheet-head" }, h("h2", {}, "Paneele jetzt"), $.vResetBtn, $.vArrangeBtn),
-          $.vArrangeNote, $.vTiles))),
+          h("div", { class: "sheet-head" }, $.vTilesHead, $.vResetBtn, $.vArrangeBtn),
+          $.vArrangeNote, $.vTiles, $.vDay))),
       ($.vFactsSec = h("section", {}, $.vFacts)),
       ($.vSheet = h("section", { class: "sheet" },
         h("div", { class: "sheet-head" }, h("h2", {}, "Verlauf"), $.vViews, $.vRanges), $.vPick, $.vPlots)),
@@ -3216,6 +3315,9 @@ class EnergyHubPanel extends HTMLElement {
     $.vArrangeBtn.setAttribute("aria-pressed", String(arrange));
     $.vResetBtn.hidden = !(arrange && saved);
     $.vArrangeNote.hidden = !arrange;
+    if (arrange) this._pvScrubEnd();
+    $.vDay.hidden = arrange || !this._pvDay;
+    $.vDay.style.maxWidth = "";
     const focused = this.shadowRoot.activeElement;
     const name = (s) => (s.name ? `String ${s.name}` : "Ohne String");
     for (const { btn } of this._tiles.values()) {
@@ -3252,6 +3354,8 @@ class EnergyHubPanel extends HTMLElement {
         ? h("p", { class: "tile-key" }, groups.map((s, i) => h("span", {}, h("i", { style: `--si: ${i}` }), name(s))))
         : null;
       $.vTiles.replaceChildren(...[grid, key].filter(Boolean));
+      // die Zeitleiste so breit wie das Raster (Spalten höchstens 76 px, Abstand 6 px)
+      if (!arrange) $.vDay.style.maxWidth = `${cols * 76 + (cols - 1) * 6}px`;
     }
     if (focused && this.shadowRoot.activeElement !== focused && $.vTiles.contains(focused)) focused.focus();
   }
@@ -3428,23 +3532,11 @@ class EnergyHubPanel extends HTMLElement {
       $.vFault.textContent = `Der Wechselrichter meldet einen Fehler: ${v.status.text}${v.status.code !== null ? ` (Code ${v.status.code})` : ""}.`;
     }
 
-    // Kacheln
-    const max = Math.max(1, ...v.panels.map((p) => (isNum(p.power) ? p.power : 0)));
-    for (const s of v.strings) {
-      for (const p of s.members) {
-        const ref = this._tiles?.get(p.label);
-        if (!ref) continue;
-        // Einheit extra, damit sie auf sehr schmalen Kacheln wegfallen kann
-        ref.value.replaceChildren(...(isNum(p.power) ? [nf0.format(p.power), h("small", { class: "u" }, " W")] : ["–"]));
-        ref.fill.style.height = `${((isNum(p.power) ? p.power : 0) / max) * 100}%`;
-        const lit = s.median >= 50;
-        ref.btn.classList.toggle("off", lit && !(p.power > PV_LIMITS.dropoutW));
-        ref.btn.classList.toggle("low", lit && p.power > PV_LIMITS.dropoutW && p.power < 0.8 * s.median);
-        const details = [isNum(p.vin) && `${nf1.format(p.vin)} V`, isNum(p.current) && `${nf1.format(p.current)} A`,
-          isNum(p.temp) && fmtC(p.temp), isNum(p.today) && `heute ${fmtKwh(p.today)}`].filter(Boolean).join(", ");
-        ref.btn.title = `${p.label}${details ? `: ${details}` : ""}`;
-        ref.btn.setAttribute("aria-label", `Paneel ${p.label}, ${fmtW(p.power)}${details ? `, ${details}` : ""}`);
-      }
+    // Kacheln; solange auf der Zeitleiste eine Uhrzeit gewählt ist, bleiben sie bei deren Werten
+    this._pvTodayKwh = today;
+    if (this._pvScrubAt === null) {
+      this._pvPaintTiles(v.strings);
+      this._pvDayIdle();
     }
 
     // Kennwerte
@@ -3475,6 +3567,193 @@ class EnergyHubPanel extends HTMLElement {
 
     if (hasTigo && this._pvHasInverter()) this._renderPvCompare(v);
     if (hasTigo) this._renderPvRank(v);
+  }
+
+  /**
+   * Kacheln aus Werten je String: [{ members: [{ label, power, vin?, current?, temp?, today? }], median }].
+   * at: Uhrzeit als Text, wenn die Werte von der Zeitleiste stammen; null für jetzt.
+   */
+  _pvPaintTiles(strings, at = null) {
+    const max = Math.max(1, ...strings.flatMap((s) => s.members.map((p) => (isNum(p.power) ? p.power : 0))));
+    for (const s of strings) {
+      for (const p of s.members) {
+        const ref = this._tiles?.get(p.label);
+        if (!ref) continue;
+        // Einheit extra, damit sie auf sehr schmalen Kacheln wegfallen kann
+        ref.value.replaceChildren(...(isNum(p.power) ? [nf0.format(p.power), h("small", { class: "u" }, " W")] : ["–"]));
+        ref.fill.style.height = `${((isNum(p.power) ? p.power : 0) / max) * 100}%`;
+        const lit = s.median >= 50;
+        ref.btn.classList.toggle("off", lit && !(p.power > PV_LIMITS.dropoutW));
+        ref.btn.classList.toggle("low", lit && p.power > PV_LIMITS.dropoutW && p.power < 0.8 * s.median);
+        const details = at ? `um ${at}` : [isNum(p.vin) && `${nf1.format(p.vin)} V`, isNum(p.current) && `${nf1.format(p.current)} A`,
+          isNum(p.temp) && fmtC(p.temp), isNum(p.today) && `heute ${fmtKwh(p.today)}`].filter(Boolean).join(", ");
+        ref.btn.title = at ? `${p.label} ${details}: ${fmtW(p.power)}` : `${p.label}${details ? `: ${details}` : ""}`;
+        ref.btn.setAttribute("aria-label", `Paneel ${p.label}, ${fmtW(p.power)}${details ? `, ${details}` : ""}`);
+      }
+    }
+  }
+
+  /** Zeitleiste unter den Kacheln: Leistung der Anlage über den hellen Teil des Tages. */
+  _drawPvDay() {
+    const $ = this.$;
+    if (!$?.vDay || this._tab !== "pv") return;
+    const set = this._pv48;
+    const total = set ? set.inv.total || this._pvTigoSum(set, null) : null;
+    const win = total ? pvDayWindow(total, set.t0, set.step, Date.now()) : null;
+    this._pvDay = win ? { ...win, set, total } : null;
+    $.vDay.hidden = !win || this._pvArrange;
+    if (!win) {
+      this._pvScrubEnd();
+      return;
+    }
+    const W = Math.floor($.vDayPlot.clientWidth);
+    if (W < 120) return;
+    const H = 52; // Unterkante der Fläche
+    const top = 6;
+    const height = H + 18;
+    const span = win.to - win.from;
+    const xt = (t) => ((t - win.from) / span) * W;
+    const x = (i) => xt(set.t0 + (i + 0.5) * set.step);
+    const hi = Math.max(1, ...total.slice(win.i0, win.last + 1).filter(isNum)) * 1.06;
+    const y = (v) => top + (H - top) * (1 - Math.max(0, v) / hi);
+    const svg = s("svg", { width: W, height, viewBox: `0 0 ${W} ${height}`, "aria-hidden": "true" });
+    // volle Stunden, beschriftet so dicht, wie die Breite erlaubt
+    const every = [1, 2, 3, 4, 6].find((k) => (W / (span / 3600e3)) * k >= 44) ?? 6;
+    for (let t = win.from; t <= win.to; t += 3600e3) {
+      const d = new Date(t);
+      if (d.getHours() % every) continue;
+      svg.append(s("line", { x1: xt(t), x2: xt(t), y1: top, y2: H, class: "grid" }),
+        s("text", { x: Math.min(W - 15, Math.max(15, xt(t))), y: height - 4, class: "tick", "text-anchor": "middle" }, tfTime.format(d)));
+    }
+    let line = "";
+    let area = "";
+    let run = null; // erstes Raster des laufenden Stücks; Lücken trennen die Fläche
+    const close = (i) => { area += `L${x(i).toFixed(1)} ${H}L${x(run).toFixed(1)} ${H}Z`; };
+    for (let i = win.i0; i <= win.last; i++) {
+      if (!isNum(total[i])) {
+        if (run !== null) close(i - 1);
+        run = null;
+        continue;
+      }
+      const p = `${run === null ? "M" : "L"}${x(i).toFixed(1)} ${y(total[i]).toFixed(1)}`;
+      line += p;
+      area += p;
+      if (run === null) run = i;
+    }
+    if (run !== null) close(win.last);
+    const dot = s("circle", { r: 4 });
+    const cursor = s("g", { class: "cursor", visibility: "hidden" }, s("line", { x1: 0, x2: 0, y1: 0, y2: H }), dot);
+    svg.append(s("path", { d: area, class: "area" }), s("path", { d: line, class: "line" }),
+      s("line", { x1: 0, x2: W, y1: H, y2: H, class: "axis" }));
+    // heute, solange der Tag läuft: Punkt am letzten Wert
+    if (win.day === "today" && Date.now() < win.to) {
+      svg.append(s("circle", { cx: x(win.last).toFixed(1), cy: y(total[win.last]).toFixed(1), r: 3, class: "now" }));
+    }
+    svg.append(cursor);
+    $.vDayPlot.replaceChildren(svg);
+    this._pvDayDraw = { x, y, cursor, dot };
+    $.vDay.setAttribute("aria-valuemin", "0");
+    $.vDay.setAttribute("aria-valuemax", String(win.last - win.i0));
+    if (this._pvScrubAt !== null) this._pvScrubTo(Math.round((this._pvScrubAt - set.t0) / set.step));
+    else this._pvDayIdle();
+  }
+
+  /** Beschriftung der Zeitleiste, solange die Kacheln jetzt zeigen. */
+  _pvDayIdle() {
+    const $ = this.$;
+    const day = this._pvDay;
+    if (!day || this._pvScrubAt !== null) return;
+    const today = day.day === "today";
+    const kwh = today && isNum(this._pvTodayKwh) ? this._pvTodayKwh : pvEnergy(day.total, day.i0, day.last, day.set.step);
+    $.vDayWhen.textContent = today ? "Heute" : "Gestern";
+    $.vDayValue.textContent = fmtKwh(kwh);
+    $.vDayHint.hidden = false;
+    this._pvDayDraw?.cursor.setAttribute("visibility", "hidden");
+    $.vDay.setAttribute("aria-valuenow", String(day.last - day.i0));
+    $.vDay.setAttribute("aria-valuetext", `Paneele jetzt; ${today ? "heute" : "gestern"} ${fmtKwh(kwh)}`);
+  }
+
+  /** Zeigt auf den Kacheln die Werte zum Raster i der Zeitleiste. */
+  _pvScrubTo(i) {
+    const $ = this.$;
+    const day = this._pvDay;
+    if (!day) return;
+    const { set, total } = day;
+    const b = Math.min(day.last, Math.max(day.i0, i));
+    this._pvScrubAt = set.t0 + b * set.step;
+    const clock = `${tfTime.format(new Date(this._pvScrubAt))} Uhr`;
+    const yday = day.day === "yesterday";
+    const powers = set.panels.power;
+    this._pvPaintTiles(this._pvStrings().map((s) => {
+      const members = s.panels.map((label) => ({ label, power: powers?.get(label)?.[b] ?? null }));
+      return { members, median: median(members.map((p) => p.power)) };
+    }), clock);
+    $.vTiles.classList.add("past");
+    $.vTilesHead.textContent = `Paneele ${yday ? "gestern " : ""}um ${clock}`;
+    $.vDayWhen.textContent = `${yday ? "Gestern" : "Heute"}, ${clock}`;
+    $.vDayValue.textContent = fmtKw(total[b]);
+    $.vDayHint.hidden = true;
+    const draw = this._pvDayDraw;
+    if (draw) {
+      draw.cursor.setAttribute("visibility", "visible");
+      draw.cursor.setAttribute("transform", `translate(${draw.x(b).toFixed(1)} 0)`);
+      draw.dot.setAttribute("cy", draw.y(isNum(total[b]) ? total[b] : 0).toFixed(1));
+    }
+    $.vDay.setAttribute("aria-valuenow", String(b - day.i0));
+    $.vDay.setAttribute("aria-valuetext", `${yday ? "gestern " : ""}${clock}, Anlage ${fmtKw(total[b])}`);
+  }
+
+  /** Zurück auf jetzt. */
+  _pvScrubEnd() {
+    const $ = this.$;
+    if (this._pvScrubAt === null || !$) return;
+    this._pvScrubAt = null;
+    $.vTiles.classList.remove("past");
+    $.vTilesHead.textContent = "Paneele jetzt";
+    this._renderPv();
+    this._pvDayIdle();
+  }
+
+  /** Maus: Darüberfahren zeigt frühere Werte. Finger und Stift: nach dem Aufsetzen, bis zum Loslassen. */
+  _pvDayPointer(e) {
+    const day = this._pvDay;
+    if (!day) return;
+    if (e.type === "pointerdown") {
+      if (e.button > 0) return;
+      this._pvDayDrag = e.pointerId;
+      this.$.vDay.setPointerCapture?.(e.pointerId);
+    } else if (e.pointerType !== "mouse" && this._pvDayDrag !== e.pointerId) {
+      return;
+    }
+    const box = this.$.vDayPlot.getBoundingClientRect();
+    if (!box.width) return;
+    this._pvScrubTo(pvDayIndex(day, day.set.t0, day.set.step, (e.clientX - box.left) / box.width));
+  }
+
+  _pvDayRelease(e) {
+    const dragging = this._pvDayDrag === e.pointerId;
+    if (e.type === "pointerleave" && dragging) return; // noch gefangen, das Ende kommt mit pointerup
+    if (dragging) this._pvDayDrag = null;
+    // mit der Maus zurück auf jetzt erst beim Verlassen der Zeitleiste
+    if (e.pointerType === "mouse" && e.type === "pointerup") return;
+    this._pvScrubEnd();
+  }
+
+  /** Tastatur: Pfeile je 5 Minuten, Bild auf/ab je Stunde, Pos1/Ende, Escape zurück auf jetzt. */
+  _pvDayKey(e) {
+    const day = this._pvDay;
+    if (!day) return;
+    if (e.key === "Escape") {
+      this._pvScrubEnd();
+      return;
+    }
+    const i = this._pvScrubAt === null ? day.last : Math.round((this._pvScrubAt - day.set.t0) / day.set.step);
+    const hour = Math.round(3600e3 / day.set.step);
+    const to = { ArrowLeft: i - 1, ArrowDown: i - 1, ArrowRight: i + 1, ArrowUp: i + 1,
+      PageDown: i - hour, PageUp: i + hour, Home: day.i0, End: day.last }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    this._pvScrubTo(to);
   }
 
   /** Je String: Optimierer und MPPT nebeneinander, jetzt und heute. */
@@ -3546,6 +3825,7 @@ class EnergyHubPanel extends HTMLElement {
     }
     this._renderPv();
     this._drawPv();
+    this._drawPvDay();
     if (Date.now() - (this._pvFindAt || 0) > 30 * 60000) this._pvAnalysisLoad().then(() => this._renderPvFindings());
   }
 

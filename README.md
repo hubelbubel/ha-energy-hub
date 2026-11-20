@@ -50,6 +50,7 @@ Unter dem Wert steht „laut Zähler“. Hat ein Leistungs-Sensor einen aktuelle
 
 - was das Dach gerade liefert, wie viel heute erzeugt wurde, ob sich alle Optimierer melden und welches Paneel gerade zurückfällt
 - „Paneele jetzt“: eine Kachel je Optimierer mit aktueller Leistung; ein Klick hebt das Paneel im Verlauf hervor. Mit „Anordnen“ liegen die Kacheln so wie die Module auf dem Dach
+- Zeitleiste unter den Kacheln: die Leistung der Anlage über den Tag. Wer mit dem Finger darüber wischt oder mit der Maus darüberfährt, sieht auf den Kacheln die Leistung jedes Paneels zu dieser Uhrzeit; beim Loslassen zeigen sie wieder die aktuellen Werte
 - Kennwerte: Erzeugung heute (Wechselrichter, darunter die Optimierer), Spitze, Eigenverbrauch, Hausverbrauch, Spannung und Strom je MPPT, Status des Wechselrichters, Optimierer
 - Verlauf über 24 Stunden, 48 Stunden oder 7 Tage, umschaltbar:
   - Anlage: Leistung am Wechselrichter gegen die Summe der Optimierer, Spannung am MPPT gegen die Summe der Ausgangsspannungen, Strom je MPPT
@@ -113,6 +114,20 @@ Die **Optimierer** findet das Panel selbst, wenn die Integration [tigo_rs485](ht
 
 Eine Kachel ist ein Modul im Hochformat, gedreht wird nicht. Ein Klick auf eine Kachel hebt sie außerhalb des Anordnens wie gewohnt im Verlauf hervor.
 
+**Zeitleiste:** Unter den Kacheln steht die Leistung der Anlage über den hellen Teil des Tages, darüber der Ertrag des Tages. Wischen oder Darüberfahren wählt eine Uhrzeit: Die Kacheln zeigen dann die Leistung jedes Paneels zu diesem Zeitpunkt, die Überschrift heißt etwa „Paneele um 14:55 Uhr“, und über der Zeitleiste steht die Leistung der Anlage. So sieht man, wann welches Modul im Schatten liegt.
+
+| Fall | Verhalten |
+|---|---|
+| Zeitraum | von der ersten bis zur letzten Stunde mit Licht, zu vollen Stunden gerundet; heute mindestens so weit wie gestern, damit die Achse über den Tag stehen bleibt |
+| Licht | sobald die Anlage mehr als 20 W liefert (am Wechselrichter, sonst die Summe der Optimierer) |
+| Vor dem ersten Licht des Tages | die Zeitleiste von gestern, beschriftet mit „Gestern“ |
+| Werte | 5-Minuten-Mittel aus der Statistik von Home Assistant, dieselben wie im Verlauf; die Uhrzeit ist der Beginn der fünf Minuten |
+| Finger | waagrecht wischen wählt die Uhrzeit, Loslassen zeigt wieder jetzt; senkrecht wischen scrollt die Seite |
+| Maus | Darüberfahren wählt die Uhrzeit, Verlassen der Zeitleiste zeigt wieder jetzt |
+| Tastatur | Pfeiltasten je 5 Minuten, Bild auf und ab je Stunde, Pos1 und Ende, Escape zeigt wieder jetzt |
+| Rahmen der Kacheln | wie bei den aktuellen Werten: rot unter 80 % des Medians im String, rot gestrichelt bei 0 W; beides nur, wenn der Median zu diesem Zeitpunkt mindestens 50 W betrug |
+| Beim Anordnen | ausgeblendet |
+
 Was verglichen wird:
 
 - **Leistung:** Die Optimierer messen am Modul, der Wechselrichter am Eingang des MPPT. Ein paar Prozent Unterschied sind Verluste in Optimierern und Kabeln und die Messgenauigkeit.
@@ -165,7 +180,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.4. Die Regellogik und die Abläufe im Regler sind durch 40 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 12 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte und dem Anordnen der Optimierer mit Maus, Tastatur und simuliertem Finger. In der Home-Assistant-App ist das Anordnen nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.5.5. Die Regellogik und die Abläufe im Regler sind durch 40 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom und Auswertung durch 11 und die für PV durch 17 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger. In der Home-Assistant-App sind Anordnen und Zeitleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -323,7 +338,7 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 pytest tests                       # Regellogik, Abläufe im Regler, Erkennung der Optimierer, ohne Home Assistant
 node --test tests/test_export.mjs tests/test_energy.mjs tests/test_pv.mjs   # Rechenfunktionen für Exporte, Strom, PV und Auswertung
 python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
-python3 dev/screenshot.py /tmp/shots   # Panel rendern, beide Exporte erzeugen, Anordnen der Optimierer prüfen (braucht Playwright und Chrome)
+python3 dev/screenshot.py /tmp/shots   # Panel rendern, beide Exporte erzeugen, Anordnen und Zeitleiste prüfen (braucht Playwright und Chrome)
 python3 dev/build_translations.py  # translations/de.json und en.json neu erzeugen
 ```
 
