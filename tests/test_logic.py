@@ -44,13 +44,13 @@ def test_boost_needs_sustained_surplus():
 
 def test_boost_survives_short_dip():
     dip = Timers(below_since=NOON - timedelta(minutes=5))
-    d = run(Inputs(NOON, surplus_w=100), dip, mode=BOOST)
+    d = run(Inputs(NOON, surplus_w=-500), dip, mode=BOOST)
     assert (d.mode, d.rule) == (BOOST, "boost_keep")
 
 
 def test_boost_ends_after_off_delay():
     low = Timers(below_since=NOON - timedelta(minutes=15))
-    d = run(Inputs(NOON, surplus_w=100), low, mode=BOOST)
+    d = run(Inputs(NOON, surplus_w=-500), low, mode=BOOST)
     assert (d.mode, d.rule) == (NORMAL, "boost_end")
 
 
@@ -145,7 +145,7 @@ def test_update_timers():
     t3 = logic.update_timers(t2, Inputs(later, surplus_w=900), S)
     assert t3.above_since is None and t3.below_since is None
 
-    t4 = logic.update_timers(t3, Inputs(later, surplus_w=100), S)
+    t4 = logic.update_timers(t3, Inputs(later, surplus_w=-500), S)
     assert t4.below_since == later
 
     assert logic.update_timers(t4, Inputs(later, surplus_w=None), S) == Timers()
@@ -222,3 +222,109 @@ def test_storage_threshold_follows_return_target():
     d = run(Inputs(NOON, surplus_w=3000, storage_c=42, return_target_c=38), sunny, settings=s)
     assert d.mode == BOOST
 
+
+
+# --- Mittelwert und Lücken -------------------------------------------------
+
+
+def at(minutes):
+    return NOON + timedelta(minutes=minutes)
+
+
+def test_window_mean_weights_by_time():
+    samples = [(at(-10), 0.0), (at(-4), 2000.0), (at(-1), 500.0)]
+    # die letzten 5 min: 1 min 0 W, 3 min 2000 W, 1 min 500 W
+    assert logic.window_mean(samples, NOON, 5, 3) == (0 * 60 + 2000 * 180 + 500 * 60) / 300
+    # ohne Glättung zählt der neueste Wert
+    assert logic.window_mean(samples, NOON, 0, 3) == 500
+    # nach dem Start: Mittel über das, was da ist
+    assert logic.window_mean([(at(-2), 1000.0), (at(-1), 3000.0)], NOON, 5, 3) == 2000
+
+
+def test_window_mean_bridges_short_gaps_only():
+    samples = [(at(-6), 2400.0)]
+    assert logic.window_mean(samples, at(-4), 5, 3) == 2400  # 2 min ohne neuen Wert: gilt weiter
+    assert logic.window_mean(samples, at(-2.5), 5, 3) is None  # 3,5 min: nicht verfügbar
+    assert logic.window_mean([], NOON, 5, 3) is None
+
+
+def test_trim_keeps_value_before_window():
+    samples = [(at(-20), 1.0), (at(-8), 2.0), (at(-3), 3.0), (at(-1), 4.0)]
+    assert logic.trim_samples(samples, NOON, 5) == samples[1:]
+    assert logic.trim_samples(samples[:1], NOON, 5) == samples[:1]  # der letzte Wert bleibt immer
+    assert logic.trim_samples([], NOON, 5) == []
+
+
+def test_reason_names_the_mean():
+    smooth = Settings(smoothing_min=5)
+    d = run(Inputs(NOON, surplus_w=2140), Timers(above_since=NOON - timedelta(minutes=10)), settings=smooth)
+    assert d.mode == BOOST and "im 5-Minuten-Mittel 2.140 W" in d.reason
+    d = run(Inputs(NOON, surplus_w=200), settings=smooth)
+    assert "200 W im 5-Minuten-Mittel liegt unter" in d.reason
+
+
+# --- Ende des Anhebens nach dem Überschuss ohne Akku -----------------------
+
+
+def test_timers_end_by_balance_when_known():
+    # Einspeisung 0, weil der Akku die Wärmepumpe mit 800 W stützt
+    t = logic.update_timers(Timers(), Inputs(NOON, surplus_w=0, balance_w=-800), S)
+    assert t.below_since == NOON
+    # Akku lädt noch mit 200 W: PV trägt die Wärmepumpe
+    t = logic.update_timers(t, Inputs(NOON, surplus_w=0, balance_w=200), S)
+    assert t.below_since is None
+    # ohne Akku-Wert zählt der Überschuss
+    assert logic.update_timers(Timers(), Inputs(NOON, surplus_w=-500), S).below_since == NOON
+
+
+def test_boost_keeps_while_pv_carries_the_heat_pump():
+    d = run(Inputs(NOON, surplus_w=0, balance_w=-150), Timers(), mode=BOOST)
+    assert (d.mode, d.rule) == (BOOST, "boost_keep")
+    assert d.reason.startswith("Der Überschuss ohne Akku reicht weiter aus (aktuell -150 W)")
+
+
+def test_boost_ends_when_battery_has_to_help():
+    low = Timers(below_since=NOON - timedelta(minutes=15))
+    d = run(Inputs(NOON, surplus_w=0, balance_w=-900), low, mode=BOOST)
+    assert (d.mode, d.rule) == (NORMAL, "boost_end")
+    assert "Der Überschuss ohne Akku liegt seit 15 min unter -300 W (aktuell -900 W)" in d.reason
+
+
+# --- Absenken mit der Prognose für morgen ----------------------------------
+
+NIGHT = Settings(setback_start=time(21, 0), setback_end=time(10, 0))
+EVENING = datetime(2026, 11, 16, 22, 0)
+AFTER_MIDNIGHT = datetime(2026, 11, 17, 2, 0)
+
+
+def test_uses_tomorrow_only_before_midnight_of_a_night_window():
+    assert logic.uses_tomorrow(time(21, 0), time(21, 0), time(10, 0))
+    assert logic.uses_tomorrow(time(23, 59), time(21, 0), time(10, 0))
+    assert not logic.uses_tomorrow(time(2, 0), time(21, 0), time(10, 0))
+    assert not logic.uses_tomorrow(time(7, 0), time(5, 0), time(10, 0))
+
+
+def test_night_setback_waits_for_tomorrows_sun():
+    d = run(Inputs(EVENING, surplus_w=-400, forecast_kwh=0.2, forecast_tomorrow_kwh=14, outdoor_c=5, dhw_c=48),
+            settings=NIGHT)
+    assert (d.mode, d.rule) == (SETBACK, "setback")
+    assert d.reason.startswith("Für morgen sind 14,0 kWh PV-Ertrag vorhergesagt.")
+    assert "(21:00–10:00 Uhr)" in d.reason
+
+    d = run(Inputs(AFTER_MIDNIGHT, surplus_w=-400, forecast_kwh=14, forecast_tomorrow_kwh=2, outdoor_c=5, dhw_c=48),
+            settings=NIGHT)
+    assert d.mode == SETBACK and d.reason.startswith("Für den Rest des Tages sind 14,0 kWh")
+
+
+def test_night_setback_not_before_a_dull_day():
+    d = run(Inputs(EVENING, surplus_w=-400, forecast_kwh=0.2, forecast_tomorrow_kwh=4, outdoor_c=5, dhw_c=48),
+            settings=NIGHT)
+    assert d.mode == NORMAL and "Die Prognose für morgen von 4,0 kWh reicht nicht" in d.reason
+
+    d = run(Inputs(EVENING, surplus_w=-400, forecast_kwh=12, outdoor_c=5, dhw_c=48), settings=NIGHT)
+    assert d.mode == NORMAL and "Die PV-Prognose für morgen ist nicht verfügbar." in d.reason
+
+
+def test_reason_shows_no_negative_surplus():
+    d = run(Inputs(NOON, surplus_w=-480, forecast_kwh=5))
+    assert "Der PV-Überschuss von 0 W liegt unter" in d.reason and "-480" not in d.reason

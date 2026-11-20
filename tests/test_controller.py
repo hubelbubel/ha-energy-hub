@@ -22,11 +22,15 @@ SG_OPTIONS = ["Hardware-Eingang", "Normalbetrieb (gelb)", "Verstärkter Betrieb 
 
 
 def make(actuator, **extra):
-    """Frischer Regler um 12:00 Uhr mit 0 W Überschuss."""
+    """Frischer Regler um 12:00 Uhr mit 500 W Netzbezug.
+
+    Ohne Glättung, damit die Abläufe in groben Zeitschritten lesbar bleiben; die Glättung
+    prüfen eigene Tests mit einem Messwert alle 30 s.
+    """
     fake_ha.Store.saved = None
     CLOCK.now = CLOCK.now.replace(year=2026, month=11, day=16, hour=12, minute=0, second=0)
     hass = fake_ha.HomeAssistant()
-    hass.states.set(SURPLUS, 0, unit_of_measurement="W")
+    hass.states.set(SURPLUS, -500, unit_of_measurement="W")
     hass.states.set(FORECAST, 14, unit_of_measurement="kWh")
     hass.states.set(OUTDOOR, 6)
     hass.states.set(DHW, 47)
@@ -41,6 +45,7 @@ def make(actuator, **extra):
         c.CONF_ENT_SMART_GRID: SG,
         c.CONF_ENT_SHIFT: SHIFT,
         c.CONF_ACTUATOR: actuator,
+        c.CONF_SMOOTHING_MIN: 0,
         **extra,
     }
     ctrl = controller_mod.Controller(hass, fake_ha.ConfigEntry(options))
@@ -86,7 +91,7 @@ def test_smart_grid_boost_and_back():
         assert ctrl.mode == "boost"
         assert hass.states.get(SG).state == "Verstärkter Betrieb (grün)"
 
-        hass.states.set(SURPLUS, 50)
+        hass.states.set(SURPLUS, -500)
         await tick(ctrl, 1)
         assert ctrl.mode == "boost"  # Ausschaltverzögerung läuft
         await tick(ctrl, 15)
@@ -161,7 +166,7 @@ def test_parallel_shift_remembers_and_restores_base():
         await tick(ctrl, 6)
         assert float(hass.states.get(SHIFT).state) == 3  # wird nachgeführt
 
-        hass.states.set(SURPLUS, 0)
+        hass.states.set(SURPLUS, -500)
         await tick(ctrl, 1)
         await tick(ctrl, 20)
         assert ctrl.mode == "normal"
@@ -236,7 +241,9 @@ def test_sign_units_and_missing_sensor():
         assert ctrl.mode == "boost"
         hass.states.set(SURPLUS, "unavailable")
         await tick(ctrl, 1)
-        assert ctrl.mode == "normal"  # Sicherheitsfall wirkt sofort
+        assert ctrl.mode == "boost"  # kurzer Aussetzer: der letzte Wert gilt noch 3 min
+        await tick(ctrl, 2.5)
+        assert ctrl.mode == "normal"  # danach wirkt der Sicherheitsfall sofort
         assert ctrl.snapshot()["state"]["rule"] == "no_data"
 
     asyncio.run(run())
@@ -451,3 +458,121 @@ def test_snapshot_carries_power_settings():
 
     asyncio.run(run())
 
+
+
+BATTERY = "sensor.akku_leistung"
+TOMORROW = "sensor.pv_prognose_morgen"
+
+
+async def every_30s(ctrl, minutes, surplus_at=None, hass=None):
+    """Tickt im Takt des echten Reglers; surplus_at(i) liefert den Messwert je Takt."""
+    for i in range(int(minutes * 2)):
+        if surplus_at:
+            hass.states.set(SURPLUS, surplus_at(i))
+        await tick(ctrl, 0.5)
+
+
+def test_smoothing_rides_through_clouds():
+    async def run():
+        # Alle 3 min zieht für 30 s eine Wolke durch: 800 W statt 2.400 W
+        cloudy = lambda i: 800 if i % 6 == 5 else 2400  # noqa: E731
+        hass, ctrl = make(c.ACT_DRY_RUN, **{c.CONF_SMOOTHING_MIN: 5})
+        await ctrl.async_start()
+        await every_30s(ctrl, 25)
+        await every_30s(ctrl, 20, cloudy, hass)
+        assert ctrl.mode == "boost"
+        assert "-Minuten-Mittel" in ctrl.snapshot()["log"][0]["text"]
+
+        # dieselben Wolken ohne Glättung: der Zähler beginnt bei jeder Wolke neu
+        hass, ctrl = make(c.ACT_DRY_RUN)
+        await ctrl.async_start()
+        await every_30s(ctrl, 25)
+        await every_30s(ctrl, 20, cloudy, hass)
+        assert ctrl.mode == "normal"
+
+    asyncio.run(run())
+
+
+def test_boost_ends_by_surplus_without_battery():
+    async def run():
+        hass, ctrl = make(
+            c.ACT_SMART_GRID, **{c.CONF_ENT_BATTERY: BATTERY, c.CONF_BATTERY_SIGN: c.BATTERY_DISCHARGE_POSITIVE}
+        )
+        hass.states.set(BATTERY, -1.0, unit_of_measurement="kW")  # lädt mit 1 kW
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        assert ctrl.mode == "boost"
+        assert ctrl.snapshot()["state"]["inputs"]["balance_w"] == 3400
+
+        # Die Wärmepumpe nimmt den Überschuss, der Akku lädt noch mit 200 W: weiter anheben
+        hass.states.set(SURPLUS, 0)
+        hass.states.set(BATTERY, -0.2)
+        await tick(ctrl, 1)
+        await tick(ctrl, 30)
+        assert ctrl.mode == "boost"
+
+        # Wolke: der Akku muss mit 900 W stützen, eingespeist und bezogen wird nichts
+        hass.states.set(BATTERY, 0.9)
+        await tick(ctrl, 1)
+        assert ctrl.snapshot()["state"]["inputs"]["balance_w"] == -900
+        await tick(ctrl, 15)
+        assert ctrl.mode == "normal"
+        entry = ctrl.snapshot()["log"][0]
+        assert "Der Überschuss ohne Akku liegt seit 15 min unter -300 W" in entry["text"]
+        assert entry["values"]["balance_w"] == -900
+
+    asyncio.run(run())
+
+
+def test_battery_rule_off_or_without_battery():
+    async def run():
+        hass, ctrl = make(c.ACT_DRY_RUN, **{c.CONF_ENT_BATTERY: BATTERY, c.CONF_OFF_WITHOUT_BATTERY: False})
+        hass.states.set(BATTERY, 900, unit_of_measurement="W")
+        await ctrl.async_start()
+        await tick(ctrl)
+        assert ctrl.snapshot()["state"]["inputs"]["balance_w"] is None
+
+        hass, ctrl = make(c.ACT_DRY_RUN)  # kein Akku hinterlegt
+        await ctrl.async_start()
+        await tick(ctrl)
+        assert ctrl.snapshot()["state"]["inputs"]["balance_w"] is None
+        assert ctrl.snapshot()["settings"][c.CONF_OFF_WITHOUT_BATTERY] is True
+
+        # Akku hinterlegt, aber gerade ohne Wert: es zählt der Überschuss
+        hass, ctrl = make(c.ACT_DRY_RUN, **{c.CONF_ENT_BATTERY: BATTERY})
+        hass.states.set(BATTERY, "unavailable")
+        await ctrl.async_start()
+        await tick(ctrl)
+        assert ctrl.snapshot()["state"]["inputs"]["balance_w"] == -500
+
+    asyncio.run(run())
+
+
+def test_night_setback_with_tomorrows_forecast():
+    async def run():
+        hass, ctrl = make(
+            c.ACT_SMART_GRID,
+            **{c.CONF_ENT_FORECAST_TOMORROW: TOMORROW, c.CONF_SETBACK_START: "21:00:00", c.CONF_SETBACK_END: "10:00:00"},
+        )
+        hass.states.set(FORECAST, 0.2, unit_of_measurement="kWh")
+        hass.states.set(TOMORROW, 15000, unit_of_measurement="Wh")
+        CLOCK.now = CLOCK.now.replace(hour=20, minute=30)
+        await ctrl.async_start()
+        await tick(ctrl, 25)  # 20:55: noch vor dem Fenster
+        assert ctrl.mode == "normal"
+        await tick(ctrl, 10)  # 21:05
+        assert ctrl.mode == "setback"
+        assert hass.states.get(SG).state == "Abgesenkter Betrieb (rot)"
+        entry = ctrl.snapshot()["log"][0]
+        assert entry["text"].startswith("Für morgen sind 15,0 kWh PV-Ertrag vorhergesagt.")
+        assert entry["values"]["forecast_tomorrow_kwh"] == 15
+        assert ctrl.snapshot()["state"]["inputs"]["forecast_tomorrow_kwh"] == 15
+
+        # nach Mitternacht zählt die Prognose für den Tag, der jetzt begonnen hat
+        hass.states.set(FORECAST, 15, unit_of_measurement="kWh")
+        hass.states.set(TOMORROW, 3, unit_of_measurement="kWh")
+        await tick(ctrl, 240)  # 01:05
+        assert ctrl.mode == "setback"
+        assert ctrl.snapshot()["state"]["reason"].startswith("Für den Rest des Tages sind 15,0 kWh")
+
+    asyncio.run(run())

@@ -30,7 +30,9 @@ from .logic import (
     Timers,
     decide,
     ready_threshold,
+    trim_samples,
     update_timers,
+    window_mean,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +100,8 @@ SETTING_KEYS = (
     c.CONF_BOOST_ON_MIN,
     c.CONF_BOOST_OFF_W,
     c.CONF_BOOST_OFF_MIN,
+    c.CONF_SMOOTHING_MIN,
+    c.CONF_OFF_WITHOUT_BATTERY,
     c.CONF_MIN_HOLD_MIN,
     c.CONF_SETBACK_ENABLED,
     c.CONF_SETBACK_START,
@@ -139,7 +143,9 @@ class Controller:
         self._timers = Timers()
         self._decision = Decision(MODE_NORMAL, "Die Regelung startet.", "startup")
         self._inputs: Inputs | None = None
-        self._forecast_tomorrow: float | None = None
+        # Messwerte der letzten Minuten für Mittelwert und Lücken (nur im Arbeitsspeicher)
+        self._surplus_samples: list[tuple[datetime, float]] = []
+        self._balance_samples: list[tuple[datetime, float]] = []
         self._aux: dict[str, Any] = {}
         self._retry_at: datetime | None = None
         self._last_apply: datetime | None = None
@@ -196,6 +202,7 @@ class Controller:
             boost_off_w=float(o[c.CONF_BOOST_OFF_W]),
             boost_off_min=float(o[c.CONF_BOOST_OFF_MIN]),
             min_hold_min=float(o[c.CONF_MIN_HOLD_MIN]),
+            smoothing_min=float(o[c.CONF_SMOOTHING_MIN]),
             setback_enabled=bool(o[c.CONF_SETBACK_ENABLED]),
             setback_start=dt_util.parse_time(str(o[c.CONF_SETBACK_START])) or time(5, 0),
             setback_end=dt_util.parse_time(str(o[c.CONF_SETBACK_END])) or time(10, 0),
@@ -281,16 +288,52 @@ class Controller:
         value, unit = self._number(key)
         return None if value is None else value * _ENERGY_FACTORS.get(unit, 1.0)
 
-    def _read_inputs(self) -> Inputs:
+    @property
+    def off_without_battery(self) -> bool:
+        """Endet das Anheben nach dem Überschuss ohne Akku? Nur mit hinterlegtem Akku."""
+        o = self.options
+        return bool(o[c.CONF_OFF_WITHOUT_BATTERY]) and bool(o.get(c.CONF_ENT_BATTERY))
+
+    def _charge_w(self) -> float | None:
+        """Ladeleistung des Akkus in W, Entladen negativ."""
+        value = self._power_w(c.CONF_ENT_BATTERY)
+        if value is None:
+            return None
+        return value if self.options[c.CONF_BATTERY_SIGN] == c.BATTERY_CHARGE_POSITIVE else -value
+
+    def _read_surplus(self, now: datetime) -> tuple[float | None, float | None]:
+        """Überschuss und Überschuss ohne Akku, gemittelt; kurze Aussetzer überbrückt.
+
+        Der Überschuss ohne Akku ist None, wenn er nicht gebraucht wird. Fehlt nur der
+        Wert des Akkus, zählt für diesen Zeitpunkt der Überschuss.
+        """
+        o = self.options
+        smoothing = float(o[c.CONF_SMOOTHING_MIN])
         surplus = self._power_w(c.CONF_ENT_SURPLUS)
-        if surplus is not None and self.options[c.CONF_SURPLUS_SIGN] == c.SIGN_EXPORT_NEGATIVE:
-            surplus = -surplus
-        self._forecast_tomorrow = self._energy_kwh(c.CONF_ENT_FORECAST_TOMORROW)
+        if surplus is not None:
+            if o[c.CONF_SURPLUS_SIGN] == c.SIGN_EXPORT_NEGATIVE:
+                surplus = -surplus
+            charge = self._charge_w() if self.off_without_battery else None
+            self._surplus_samples.append((now, surplus))
+            self._balance_samples.append((now, surplus + (charge or 0.0)))
+        keep = max(smoothing, c.SURPLUS_GAP_MINUTES)
+        self._surplus_samples = trim_samples(self._surplus_samples, now, keep)
+        self._balance_samples = trim_samples(self._balance_samples, now, keep)
+        gap = c.SURPLUS_GAP_MINUTES
+        mean = window_mean(self._surplus_samples, now, smoothing, gap)
+        balance = window_mean(self._balance_samples, now, smoothing, gap) if self.off_without_battery else None
+        return mean, balance
+
+    def _read_inputs(self) -> Inputs:
+        now = dt_util.now()
+        surplus, balance = self._read_surplus(now)
         self._aux = self._read_aux()
         return Inputs(
-            now=dt_util.now(),
+            now=now,
             surplus_w=surplus,
+            balance_w=balance,
             forecast_kwh=self._energy_kwh(c.CONF_ENT_FORECAST_TODAY),
+            forecast_tomorrow_kwh=self._energy_kwh(c.CONF_ENT_FORECAST_TOMORROW),
             outdoor_c=self._number(c.CONF_ENT_OUTDOOR)[0],
             dhw_c=self._number(c.CONF_ENT_DHW)[0],
             storage_c=self._aux["storage"]["temp"],
@@ -355,7 +398,9 @@ class Controller:
             "detail": detail,
             "values": {
                 "surplus_w": inputs.surplus_w if inputs else None,
+                "balance_w": inputs.balance_w if inputs else None,
                 "forecast_kwh": inputs.forecast_kwh if inputs else None,
+                "forecast_tomorrow_kwh": inputs.forecast_tomorrow_kwh if inputs else None,
                 "outdoor_c": inputs.outdoor_c if inputs else None,
                 "dhw_c": inputs.dhw_c if inputs else None,
                 "storage_c": inputs.storage_c if inputs else None,
@@ -618,8 +663,9 @@ class Controller:
                 "below_since": _iso(self._timers.below_since),
                 "inputs": {
                     "surplus_w": inputs.surplus_w if inputs else None,
+                    "balance_w": inputs.balance_w if inputs else None,
                     "forecast_kwh": inputs.forecast_kwh if inputs else None,
-                    "forecast_tomorrow_kwh": self._forecast_tomorrow,
+                    "forecast_tomorrow_kwh": inputs.forecast_tomorrow_kwh if inputs else None,
                     "outdoor_c": inputs.outdoor_c if inputs else None,
                     "dhw_c": inputs.dhw_c if inputs else None,
                     "storage_c": inputs.storage_c if inputs else None,

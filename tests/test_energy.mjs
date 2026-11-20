@@ -255,3 +255,23 @@ test("Stundenwerte füllen im 5-Minuten-Raster die ganze Stunde", () => {
   // ragt die Stunde über das Raster hinaus, zählt nur ihr Anteil darin
   m.counterPower([[T0 - 0.5 * HOUR, 1.2, HOUR]], T0, step, 12).forEach((x, b) => (b < 6 ? near(x, 1200) : assert.equal(x, null)));
 });
+
+test("usesBalance: nur mit Schalter und hinterlegtem Akku", () => {
+  assert.equal(m.usesBalance({ off_without_battery: true }, { ent_battery_power: "sensor.akku" }), true);
+  assert.equal(m.usesBalance({ off_without_battery: false }, { ent_battery_power: "sensor.akku" }), false);
+  assert.equal(m.usesBalance({ off_without_battery: true }, { ent_battery_power: null }), false);
+  assert.equal(m.usesBalance(undefined, undefined), false);
+});
+
+test("balanceSeries: Überschuss plus Ladeleistung, ohne Akku-Wert zählt der Überschuss", () => {
+  // Einspeisung 0, Akku entlädt 800 W  →  -800 W; Akku lädt 200 W → 200 W; Lücke im Akku → Überschuss
+  assert.deepEqual(m.balanceSeries([0, 0, 1500, null], [-800, 200, null, 100]), [-800, 200, 1500, null]);
+  assert.deepEqual(m.balanceSeries([300], undefined), [300]);
+});
+
+test("shownSurplus: PV-Überschuss nie unter 0, Lücken bleiben Lücken", () => {
+  assert.equal(m.shownSurplus(-380), 0);
+  assert.equal(m.shownSurplus(2140), 2140);
+  assert.equal(m.shownSurplus(null), null);
+  assert.equal(m.shownSurplus(undefined), null);
+});

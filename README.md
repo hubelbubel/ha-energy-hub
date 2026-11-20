@@ -194,14 +194,14 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.5.6. Die Regellogik und die Abläufe im Regler sind durch 40 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Auswertung und Tage durch 16 und die für PV durch 17 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.6.0. Die Regellogik und die Abläufe im Regler sind durch 55 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Auswertung und Tage durch 19 und die für PV durch 17 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
 - **Lage:** ein Satz, was die Heizung gerade tut und warum, daneben ein Anlagenschema mit Außen-, Vorlauf-, Rücklauf- und Warmwassertemperatur.
-- **Kennwerte:** PV-Überschuss, Prognose für den Rest des Tages und für morgen, Stromaufnahme, Heizleistung, Leistungszahl.
-- **Verlauf:** Überschuss, Temperaturen und Eingriffe auf einer gemeinsamen Zeitachse (24 Stunden, 48 Stunden, 7 Tage), mit Ablesung beim Überfahren und Tabellenansicht.
-- **Regelung:** hebt an, wenn genug eigener Strom übrig ist, und senkt morgens ab, wenn die Prognose später Sonne verspricht.
+- **Kennwerte:** PV-Überschuss (gemittelt, nie unter 0 W; Netzbezug zählt als 0), Überschuss ohne Akku (darf negativ sein: so viel liefern Akku oder Netz), Prognose für den Rest des Tages und für morgen, Stromaufnahme, Heizleistung, Leistungszahl.
+- **Verlauf:** Überschuss (mit hinterlegtem Akku auch ohne Akku, gestrichelt), Temperaturen und Eingriffe auf einer gemeinsamen Zeitachse (24 Stunden, 48 Stunden, 7 Tage), mit Ablesung beim Überfahren und Tabellenansicht.
+- **Regelung:** hebt an, wenn genug eigener Strom übrig ist, und senkt im Absenkfenster ab, morgens oder über Nacht, wenn die Prognose später Sonne verspricht.
 - **Logbuch:** jede Schaltung mit Begründung, den Messwerten zum Zeitpunkt und dem Ergebnis (gesendet, nur protokolliert, fehlgeschlagen). Die Einträge erscheinen auch im Logbuch von Home Assistant.
 - **Handbetrieb:** Normalbetrieb, Anheben oder Absenken für eine Dauer oder bis du ihn beendest.
 - **Export:** zwei CSV-Dateien zum Auswerten, eine mit Verlauf und Entscheidungen, eine für die Effizienz.
@@ -212,8 +212,9 @@ Version 0.5.6. Die Regellogik und die Abläufe im Regler sind durch 40 automatis
 - Home Assistant 2025.1 oder neuer.
 - Für die Bereiche, die du nutzen willst, die passenden Sensoren (siehe „Was gebraucht wird“). Keiner davon ist Pflicht.
 - Für die Regelung: Entitäten für die Wärmepumpe. Für Dimplex liegt ein fertiges Package bei: [`packages/dimplex_wpm.yaml`](packages/dimplex_wpm.yaml). Die Vorschläge bei der Einrichtung passen zu dessen Entitätsnamen.
-- Ein Sensor für den PV-Überschuss (W oder kW). Geeignet ist auch ein Netzleistungs-Sensor, bei dem Einspeisung negativ ist; das Vorzeichen stellst du ein.
-- Für das Absenken: ein Sensor „PV-Prognose Rest heute“ (kWh oder Wh), zum Beispiel aus Solcast oder Forecast.Solar.
+- Ein Sensor für den PV-Überschuss (W oder kW). Geeignet ist auch ein Netzleistungs-Sensor, bei dem Einspeisung negativ ist; das Vorzeichen stellst du ein. Am besten ein ungeglätteter Wert, Energy Hub mittelt selbst.
+- Für das Absenken: ein Sensor „PV-Prognose Rest heute“ (kWh oder Wh), zum Beispiel aus Solcast oder Forecast.Solar. Für ein Absenkfenster über Mitternacht zusätzlich „PV-Prognose morgen“.
+- Damit das Anheben nicht den Akku leert: die Leistung der Batterie im Schritt Strom.
 
 ## Was gebraucht wird
 
@@ -243,12 +244,26 @@ Die Regeln werden alle 30 Sekunden in dieser Reihenfolge geprüft:
 
 1. **Handbetrieb** gilt sofort und vor allem anderen.
 2. **Automatik aus:** Die Integration stellt einmal auf Normalbetrieb und fasst danach nichts mehr an.
-3. **Kein Überschuss-Messwert:** Normalbetrieb, sofort. Ohne Daten wird nicht geregelt.
-4. **Anheben:** wenn der Überschuss eine einstellbare Zeit über der Einschaltschwelle liegt (Standard 1.500 W für 10 min). Es endet, wenn er eine einstellbare Zeit unter der Ausschaltschwelle liegt (300 W für 15 min).
-5. **Absenken:** im Absenkfenster (05:00 bis 10:00 Uhr), wenn die Prognose für den Rest des Tages reicht (10 kWh), es draußen nicht zu kalt ist (3 °C) und das Warmwasser warm genug ist (42 °C). Die beiden Temperaturgrenzen lassen sich abschalten, indem man das Feld leert.
+3. **Kein Überschuss-Messwert:** Normalbetrieb, sofort. Ohne Daten wird nicht geregelt. Fällt der Sensor nur kurz aus, gilt sein letzter Wert noch 3 min weiter.
+4. **Anheben:** wenn der Überschuss eine einstellbare Zeit über der Einschaltschwelle liegt (Standard 1.500 W für 10 min). Es endet, wenn der Überschuss ohne Akku eine einstellbare Zeit unter der Ausschaltschwelle liegt (−300 W für 15 min).
+5. **Absenken:** im Absenkfenster (Standard 05:00 bis 10:00 Uhr), wenn die Prognose reicht (10 kWh), es draußen nicht zu kalt ist (3 °C) und das Warmwasser warm genug ist (42 °C). Die beiden Temperaturgrenzen lassen sich abschalten, indem man das Feld leert.
 6. Sonst **Normalbetrieb**.
 
 Wechsel aus den Regeln 4 bis 6 warten eine Mindesthaltezeit ab (20 min), damit der Verdichter nicht taktet.
+
+**Mittelwert:** Die Regeln rechnen mit dem Mittel des Überschusses über die letzten 5 min (einstellbar, 0 = aus). Jeder Messwert zählt, bis der nächste kommt. Eine kurze Wolke setzt die 10 min bis zum Anheben so nicht zurück. Ist der Sensor schon gemittelt, stellst du 0 ein.
+
+**Überschuss ohne Akku:** Hebt die Wärmepumpe an, verbraucht sie den Überschuss, der sie eingeschaltet hat. Am Netzanschluss bleibt dann wenig übrig, und wenn die Sonne nachlässt, stützt der Akku die Wärmepumpe, ohne dass es dort zu sehen ist. Deshalb endet das Anheben nach dem Überschuss plus der Ladeleistung des Akkus (Entladen zählt negativ):
+
+| Lage während des Anhebens | Überschuss | Überschuss ohne Akku | Folge |
+|---|---|---|---|
+| Akku lädt noch mit 200 W | 0 W | 200 W | läuft weiter |
+| Akku entlädt 200 W | 0 W | −200 W | läuft weiter |
+| Wolke, Akku entlädt 900 W | 0 W | −900 W | endet nach 15 min |
+
+Eingeschaltet wird weiter nach dem Überschuss, der Akku lädt also zuerst. Das gilt nur mit hinterlegter Leistung der Batterie (Schritt Strom); fehlt ihr Wert, zählt der Überschuss. Rechnet dein Überschuss-Sensor den Akku schon heraus, schaltest du „Beim Beenden den Akku herausrechnen“ aus, sonst zählt er doppelt. Zählt dein Sensor die Wallbox nicht mit, hat die Wärmepumpe Vorrang vor dem Auto.
+
+**Absenkfenster über Mitternacht:** Stellst du das Fenster etwa auf 21:00 bis 10:00 Uhr, zählt vor Mitternacht die Prognose für morgen, danach die für den Rest des Tages. Abgesenkt wird also nur in Nächten vor einem sonnigen Tag; die Wärme holt die Wärmepumpe dann mit eigenem Strom nach. Wer jede Nacht absenken will, stellt das im Zeitprogramm der Wärmepumpe ein. Mit Smart Grid stellt Energy Hub im Normalbetrieb „gelb“ ein und setzt es nach fünf Minuten erneut; eine Absenkung über dieselbe Auswahl aus einer anderen Automation würde also überschrieben.
 
 Alle Werte lassen sich unter Einstellungen, Geräte & Dienste, Energy Hub, „Konfigurieren“ ändern.
 
@@ -344,7 +359,6 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 - Die Texte im Panel und im Logbuch sind deutsch. Die Einrichtungsdialoge gibt es deutsch und englisch.
 - Eine Installation je Home Assistant.
 - Die Integration liest und schreibt über Entitäten. Sie spricht nicht selbst Modbus.
-- Die Prognose für morgen wird angezeigt, aber noch nicht für Regeln benutzt.
 
 ## Entwicklung
 

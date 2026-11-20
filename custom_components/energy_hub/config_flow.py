@@ -137,6 +137,8 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_BOOST_ON_MIN, _number(0, 120, 1, "min"), True),
         (c.CONF_BOOST_OFF_W, _number(-5000, 20000, 50, "W"), True),
         (c.CONF_BOOST_OFF_MIN, _number(0, 120, 1, "min"), True),
+        (c.CONF_OFF_WITHOUT_BATTERY, selector.BooleanSelector(), True),
+        (c.CONF_SMOOTHING_MIN, _number(0, 30, 1, "min"), True),
         (c.CONF_MIN_HOLD_MIN, _number(0, 240, 1, "min"), True),
         (c.CONF_SETBACK_ENABLED, selector.BooleanSelector(), True),
         (c.CONF_SETBACK_START, selector.TimeSelector(), True),

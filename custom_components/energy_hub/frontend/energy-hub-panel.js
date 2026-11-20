@@ -750,6 +750,27 @@ export function counterPower(rows, t0, step, n, factor = 1) {
 }
 
 /**
+ * PV-Überschuss zum Anzeigen: nie unter 0. Ein negativer Wert des Sensors ist Netzbezug;
+ * die Regelung rechnet weiter mit dem echten Wert, der Export auch.
+ */
+export function shownSurplus(v) {
+  return isNum(v) ? Math.max(0, v) : null;
+}
+
+/** Endet das Anheben nach dem Überschuss ohne Akku? Nur mit hinterlegter Leistung der Batterie. */
+export function usesBalance(settings, entities) {
+  return Boolean(settings?.off_without_battery && entities?.ent_battery_power);
+}
+
+/**
+ * Überschuss ohne Akku je Raster: Überschuss plus Ladeleistung des Akkus (Entladen negativ).
+ * Fehlt der Wert des Akkus, zählt der Überschuss, so wie im Regler.
+ */
+export function balanceSeries(surplus, charge) {
+  return surplus.map((v, i) => (v === null ? null : v + (charge?.[i] ?? 0)));
+}
+
+/**
  * Strombilanz je Raster aus den Leistungs-Sensoren (alles in Watt).
  * raw: { grid, pv, battery, house, wp, wallbox, consumers: [..] } als gleich lange Reihen, null = unbekannt.
  * Liefert Bezug/Einspeisung, Laden/Entladen, Verbrauch und woher der Verbrauch gedeckt wurde.
@@ -1662,6 +1683,8 @@ select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; ba
 .plots .tick { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
 .plots .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .plots .line.thin { stroke-width: 1.5; }
+.plots .line.dash { stroke-dasharray: 5 4; }
+.key i.dash, .tip .line.dash i { border-top-style: dashed; }
 .plots .area { fill: var(--c-pv); opacity: 0.12; stroke: none; }
 .plots .ref { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 4; }
 .plots path.ref { fill: none; }
@@ -2367,10 +2390,19 @@ class EnergyHubPanel extends HTMLElement {
     if (cfg.ent_pv_surplus) {
       const above = minutesSince(st.above_since);
       const below = minutesSince(st.below_since);
-      let hint = "";
-      if (above !== null) hint = `seit ${above} min über ${fmtW(set.boost_on_w)}`;
-      else if (below !== null && st.mode === "boost") hint = `seit ${below} min unter ${fmtW(set.boost_off_w)}`;
-      items.push(["PV-Überschuss", fmtW(st.inputs.surplus_w), hint]);
+      const balance = usesBalance(set, cfg);
+      const mean = Number(set.smoothing_min) > 0 ? `Mittel ${nf0.format(set.smoothing_min)} min` : "";
+      const off = Number(set.boost_off_w);
+      const belowHint = below === null || st.mode !== "boost" ? ""
+        : balance || off >= 0 ? `seit ${below} min unter ${fmtW(off)}`
+        : `seit ${below} min über ${fmtW(-off)} Netzbezug`;
+      const aboveHint = above !== null ? `seit ${above} min über ${fmtW(set.boost_on_w)}` : "";
+      const hint = [mean, aboveHint || (balance ? "" : belowHint)].filter(Boolean).join(", ");
+      items.push(["PV-Überschuss", fmtW(shownSurplus(st.inputs.surplus_w)), hint]);
+      if (balance) {
+        items.push(["Überschuss ohne Akku", fmtW(st.inputs.balance_w),
+          belowHint || (st.mode === "boost" ? `Anheben endet unter ${fmtW(set.boost_off_w)}` : "entscheidet, wann das Anheben endet")]);
+      }
     }
     if (cfg.ent_forecast_today) items.push(["Prognose Rest heute", fmtKwh(st.inputs.forecast_kwh)]);
     if (cfg.ent_forecast_tomorrow) items.push(["Prognose morgen", fmtKwh(st.inputs.forecast_tomorrow_kwh)]);
@@ -2408,12 +2440,22 @@ class EnergyHubPanel extends HTMLElement {
   _renderRules() {
     const set = this._snap.settings;
     const settingsHref = `/config/integrations/integration/${DOMAIN}`;
+    const mean = Number(set.smoothing_min) > 0
+      ? ` Gerechnet wird mit dem Mittel der letzten ${nf0.format(set.smoothing_min)} min.`
+      : "";
     const parts = [
-      `Angehoben wird, wenn der PV-Überschuss ${nf0.format(set.boost_on_min)} min lang über ${fmtW(set.boost_on_w)} liegt.`,
-      `Das Anheben endet, wenn er ${nf0.format(set.boost_off_min)} min lang unter ${fmtW(set.boost_off_w)} liegt.`,
+      `Angehoben wird, wenn der PV-Überschuss ${nf0.format(set.boost_on_min)} min lang über ${fmtW(set.boost_on_w)} liegt.${mean}`,
+      usesBalance(set, this._snap.entities)
+        ? `Das Anheben endet, wenn der Überschuss ohne Akku ${nf0.format(set.boost_off_min)} min lang unter ${fmtW(set.boost_off_w)} liegt. Das ist der Überschuss plus die Ladeleistung des Akkus: Das Anheben läuft, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste.`
+        : Number(set.boost_off_w) < 0
+          ? `Das Anheben endet, wenn ${nf0.format(set.boost_off_min)} min lang mehr als ${fmtW(-Number(set.boost_off_w))} aus dem Netz kommen.`
+          : `Das Anheben endet, wenn er ${nf0.format(set.boost_off_min)} min lang unter ${fmtW(set.boost_off_w)} liegt.`,
     ];
     if (set.setback_enabled) {
-      const conds = [`für den Rest des Tages mindestens ${fmtKwh(set.setback_min_forecast_kwh)} vorhergesagt sind`];
+      const overnight = String(set.setback_start).slice(0, 5) > String(set.setback_end).slice(0, 5);
+      const conds = [overnight
+        ? `für den kommenden Tag mindestens ${fmtKwh(set.setback_min_forecast_kwh)} vorhergesagt sind (vor Mitternacht zählt die Prognose für morgen, danach die für den Rest des Tages)`
+        : `für den Rest des Tages mindestens ${fmtKwh(set.setback_min_forecast_kwh)} vorhergesagt sind`];
       if (isNum(set.setback_min_outdoor_c)) conds.push(`es draußen mindestens ${fmtC(set.setback_min_outdoor_c)} hat`);
       if (isNum(set.setback_min_dhw_c)) conds.push(`das Warmwasser mindestens ${fmtC(set.setback_min_dhw_c)} hat`);
       const list = conds.length > 1 ? `${conds.slice(0, -1).join(", ")} und ${conds.at(-1)}` : conds[0];
@@ -2461,8 +2503,11 @@ class EnergyHubPanel extends HTMLElement {
   _entryMeta(e) {
     const v = e.values || {};
     const bits = [];
-    if (isNum(v.surplus_w)) bits.push(`Überschuss ${fmtW(v.surplus_w)}`);
-    if (isNum(v.forecast_kwh)) bits.push(`Prognose ${fmtKwh(v.forecast_kwh)}`);
+    if (isNum(v.surplus_w)) bits.push(`Überschuss ${fmtW(shownSurplus(v.surplus_w))}`);
+    if (isNum(v.balance_w)) bits.push(`ohne Akku ${fmtW(v.balance_w)}`);
+    if (isNum(v.forecast_kwh) && isNum(v.forecast_tomorrow_kwh)) {
+      bits.push(`Prognose heute ${fmtKwh(v.forecast_kwh)}, morgen ${fmtKwh(v.forecast_tomorrow_kwh)}`);
+    } else if (isNum(v.forecast_kwh)) bits.push(`Prognose ${fmtKwh(v.forecast_kwh)}`);
     if (isNum(v.outdoor_c)) bits.push(`außen ${fmtC(v.outdoor_c)}`);
     if (isNum(v.dhw_c)) bits.push(`Warmwasser ${fmtC(v.dhw_c)}`);
     if (isNum(v.storage_c)) bits.push(`Speicher ${fmtC(v.storage_c)}`);
@@ -4964,6 +5009,7 @@ class EnergyHubPanel extends HTMLElement {
     const cfg = snap.entities;
     const numeric = [
       { key: "surplus", id: cfg.ent_pv_surplus }, ...SERIES.map((x) => ({ key: x.key, id: cfg[x.ent] })),
+      { key: "charge", id: cfg.ent_pv_surplus && usesBalance(snap.settings, cfg) ? cfg.ent_battery_power : null },
       { key: "storage", id: cfg.ent_storage }, { key: "fireplace", id: cfg.ent_fireplace },
       { key: "retTarget", id: cfg.ent_storage ? cfg.ent_return_target : null },
     ].filter((x) => x.id);
@@ -5017,8 +5063,16 @@ class EnergyHubPanel extends HTMLElement {
         factor = { kw: 1000, mw: 1e6 }[unit] || 1;
         if (snap.settings.surplus_sign === "export_negative") factor = -factor;
       }
+      if (key === "charge") { // Ladeleistung positiv, Entladen negativ
+        factor = { kw: 1000, mw: 1e6 }[unit] || 1;
+        if (snap.settings.battery_sign !== "charge_positive") factor = -factor;
+      }
       chart.series[key] = this._bucket(raw[id] || [], t0, step, n, factor);
     }
+    if (chart.series.surplus && chart.series.charge) {
+      chart.series.balance = balanceSeries(chart.series.surplus, chart.series.charge);
+    }
+    delete chart.series.charge;
     if (modeId) {
       let i = 0;
       let current = null;
@@ -5127,12 +5181,18 @@ class EnergyHubPanel extends HTMLElement {
     };
 
     // 1. PV-Überschuss
-    const surplus = chart.series.surplus;
+    const surplus = chart.series.surplus?.map(shownSurplus);
     if (surplus && surplus.some((v) => v !== null)) {
-      const vals = surplus.filter((v) => v !== null);
-      const lo = Math.min(0, ...vals);
+      const balance = chart.series.balance;
+      const vals = [...surplus, ...(balance || [])].filter((v) => v !== null);
+      // Die Ausschaltschwelle unter 0 gehört zur gestrichelten Linie; ohne sie bleibt die Achse ab 0
+      const lo = Math.min(0, ...vals, balance ? Number(set.boost_off_w) * 1.25 : 0);
       const hi = Math.max(...vals, Number(set.boost_on_w) * 1.25, 500);
-      nodes.push(h("div", { class: "plot-title" }, h("b", {}, "PV-Überschuss in Watt")));
+      nodes.push(h("div", { class: "plot-title" }, h("b", {}, "PV-Überschuss in Watt"),
+        balance ? [
+          h("span", { class: "key s-pv" }, h("i", {}), h("span", {}, "Überschuss")),
+          h("span", { class: "key s-pv" }, h("i", { class: "dash" }), h("span", {}, "ohne Akku")),
+        ] : null));
       nodes.push(plot(150, lo, hi, 4, (svg, y) => {
         const line = path(surplus, y);
         const first = surplus.findIndex((v) => v !== null);
@@ -5141,7 +5201,10 @@ class EnergyHubPanel extends HTMLElement {
             s("path", { d: `${line}L${x(chart.n - 1).toFixed(1)} ${y(0)}L${x(first).toFixed(1)} ${y(0)}Z`, class: "area" }),
             s("path", { d: line, class: "line s-pv" }));
         }
-        for (const [value, label] of [[set.boost_on_w, "Anheben ab"], [set.boost_off_w, "Ende unter"]]) {
+        const bline = balance ? path(balance, y) : "";
+        if (bline) svg.append(s("path", { d: bline, class: "line s-pv thin dash" }));
+        const endLabel = balance ? "Ende ohne Akku unter" : "Ende unter";
+        for (const [value, label] of [[set.boost_on_w, "Anheben ab"], [set.boost_off_w, endLabel]]) {
           if (!isNum(Number(value)) || value < lo || value > hi) continue;
           svg.append(
             s("line", { x1: M.l, x2: W - M.r, y1: y(value), y2: y(value), class: "ref" }),
@@ -5268,7 +5331,8 @@ class EnergyHubPanel extends HTMLElement {
       cross.style.left = `${x(i)}px`;
       const when = new Date(chart.t0 + (i + 0.5) * chart.step);
       const lines = [];
-      if (chart.series.surplus) lines.push(["s-pv", "PV-Überschuss", fmtW(chart.series.surplus[i])]);
+      if (chart.series.surplus) lines.push(["s-pv", "PV-Überschuss", fmtW(shownSurplus(chart.series.surplus[i]))]);
+      if (chart.series.balance) lines.push(["s-pv dash", "ohne Akku", fmtW(chart.series.balance[i])]);
       for (const sr of SERIES) {
         if (chart.series[sr.key]) lines.push([sr.cls, sr.name, fmtC(chart.series[sr.key][i])]);
       }
@@ -5309,7 +5373,8 @@ class EnergyHubPanel extends HTMLElement {
     if (!chart) return;
     const per = Math.max(1, Math.round(3600e3 / chart.step));
     const cols = [];
-    if (chart.series.surplus) cols.push(["PV-Überschuss", (i) => fmtW(chart.series.surplus[i])]);
+    if (chart.series.surplus) cols.push(["PV-Überschuss", (i) => fmtW(shownSurplus(chart.series.surplus[i]))]);
+    if (chart.series.balance) cols.push(["ohne Akku", (i) => fmtW(chart.series.balance[i])]);
     for (const sr of SERIES) {
       if (chart.series[sr.key]) cols.push([sr.name, (i) => fmtC(chart.series[sr.key][i])]);
     }

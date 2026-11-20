@@ -57,9 +57,9 @@
           "ent_forecast_tomorrow": "PV forecast for tomorrow"
         },
         "data_description": {
-          "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export.",
-          "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering in the morning.",
-          "ent_forecast_tomorrow": "Display only."
+          "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export. Preferably the raw value; Energy Hub averages by itself (step Rules).",
+          "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering.",
+          "ent_forecast_tomorrow": "Counts for lowering before midnight when the lowering window spans midnight (for example 21:00–10:00)."
         }
       },
       "inverter": {
@@ -119,22 +119,28 @@
       },
       "rules": {
         "title": "Rules",
-        "description": "The heating is raised when enough own power is left over. It is lowered in the morning when the forecast promises enough sun later.",
+        "description": "The heating is raised when enough own power is left over. It is lowered within the lowering window when the forecast promises enough sun later.",
         "data": {
           "boost_on_w": "Raise from surplus",
           "boost_on_min": "… once it has lasted",
           "boost_off_w": "Stop raising below",
           "boost_off_min": "… once it has stayed below for",
+          "off_without_battery": "Leave the battery out when stopping",
+          "smoothing_min": "Average the surplus over",
           "min_hold_min": "Minimum hold time per state",
-          "setback_enabled": "Lower in the morning when sun is forecast",
+          "setback_enabled": "Lower when sun is forecast",
           "setback_start": "Lowering window from",
           "setback_end": "Lowering window until",
-          "setback_min_forecast_kwh": "Lower from forecast (rest of today)",
+          "setback_min_forecast_kwh": "Lower from forecast",
           "setback_min_outdoor_c": "Do not lower below outdoor temperature",
           "setback_min_dhw_c": "Do not lower below hot water temperature"
         },
         "data_description": {
+          "boost_off_w": "Negative means: raising continues as long as at most this much comes from battery or grid.",
+          "off_without_battery": "Raising stops by the surplus plus the battery charging power. It keeps going while PV carries the heat pump and stops when the battery would have to help. Only with a battery power sensor (step Power). Switch off if the surplus sensor already leaves the battery out.",
+          "smoothing_min": "Short clouds count less. 0 = no smoothing, for example if the sensor is already averaged. If the sensor drops out, its last value counts for 3 more minutes.",
           "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
+          "setback_min_forecast_kwh": "Forecast for the rest of today; if the lowering window spans midnight, before midnight the forecast for tomorrow.",
           "setback_min_outdoor_c": "Clear the field to switch the condition off.",
           "setback_min_dhw_c": "Clear the field to switch the condition off."
         }
@@ -256,9 +262,9 @@
           "ent_forecast_tomorrow": "PV forecast for tomorrow"
         },
         "data_description": {
-          "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export.",
-          "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering in the morning.",
-          "ent_forecast_tomorrow": "Display only."
+          "ent_pv_surplus": "Power in W or kW that is currently left over, for example the grid export. Preferably the raw value; Energy Hub averages by itself (step Rules).",
+          "ent_forecast_today": "Energy in kWh or Wh, for example from Solcast or Forecast.Solar. Needed for lowering.",
+          "ent_forecast_tomorrow": "Counts for lowering before midnight when the lowering window spans midnight (for example 21:00–10:00)."
         }
       },
       "inverter": {
@@ -318,22 +324,28 @@
       },
       "rules": {
         "title": "Rules",
-        "description": "The heating is raised when enough own power is left over. It is lowered in the morning when the forecast promises enough sun later.",
+        "description": "The heating is raised when enough own power is left over. It is lowered within the lowering window when the forecast promises enough sun later.",
         "data": {
           "boost_on_w": "Raise from surplus",
           "boost_on_min": "… once it has lasted",
           "boost_off_w": "Stop raising below",
           "boost_off_min": "… once it has stayed below for",
+          "off_without_battery": "Leave the battery out when stopping",
+          "smoothing_min": "Average the surplus over",
           "min_hold_min": "Minimum hold time per state",
-          "setback_enabled": "Lower in the morning when sun is forecast",
+          "setback_enabled": "Lower when sun is forecast",
           "setback_start": "Lowering window from",
           "setback_end": "Lowering window until",
-          "setback_min_forecast_kwh": "Lower from forecast (rest of today)",
+          "setback_min_forecast_kwh": "Lower from forecast",
           "setback_min_outdoor_c": "Do not lower below outdoor temperature",
           "setback_min_dhw_c": "Do not lower below hot water temperature"
         },
         "data_description": {
+          "boost_off_w": "Negative means: raising continues as long as at most this much comes from battery or grid.",
+          "off_without_battery": "Raising stops by the surplus plus the battery charging power. It keeps going while PV carries the heat pump and stops when the battery would have to help. Only with a battery power sensor (step Power). Switch off if the surplus sensor already leaves the battery out.",
+          "smoothing_min": "Short clouds count less. 0 = no smoothing, for example if the sensor is already averaged. If the sensor drops out, its last value counts for 3 more minutes.",
           "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
+          "setback_min_forecast_kwh": "Forecast for the rest of today; if the lowering window spans midnight, before midnight the forecast for tomorrow.",
           "setback_min_outdoor_c": "Clear the field to switch the condition off.",
           "setback_min_dhw_c": "Clear the field to switch the condition off."
         }

@@ -43,6 +43,8 @@ SHOTS = [
     ("overview-desktop-empty", 1360, 900, "?tab=overview&mode=empty"),
     ("desktop-light-boost", 1360, 900, "?tab=heat&mode=boost"),
     ("desktop-dark-setback", 1360, 900, "?tab=heat&mode=setback&theme=dark"),
+    # Absenkfenster über Mitternacht, abends mit der Prognose für morgen
+    ("desktop-light-nacht", 1360, 900, "?tab=heat&mode=setback&fenster=nacht", 22),
     ("desktop-light-empty", 1360, 900, "?tab=heat&mode=empty"),
     ("mobile-light-override", 390, 844, "?tab=heat&mode=override"),
     ("mobile-dark-normal", 390, 844, "?tab=heat&mode=normal&theme=dark"),

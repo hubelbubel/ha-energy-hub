@@ -36,6 +36,8 @@
   const q = new URLSearchParams(location.search);
   const dark = q.get("theme") === "dark";
   const scene = q.get("mode") || "boost";
+  // ?fenster=nacht: Absenkfenster 21:00–10:00, vor Mitternacht mit der Prognose für morgen
+  const night = q.get("fenster") === "nacht";
   document.body.className = dark ? "dark" : "light";
 
   const now = Date.now();
@@ -236,16 +238,18 @@
   const log = scene === "empty" ? [] : [
     { ts: iso(now - 38 * 60e3), kind: "switch", from: "normal", to: "boost", result: "sent",
       detail: "select.wp_smart_grid_setzen → Verstärkter Betrieb (grün)",
-      text: "Der PV-Überschuss liegt seit 10 min über 1.500 W (aktuell 2.140 W).",
-      values: { surplus_w: 2140, forecast_kwh: 11.8, outdoor_c: 6.4, dhw_c: 46.1 } },
+      text: "Der PV-Überschuss liegt seit 10 min über 1.500 W (im 5-Minuten-Mittel 2.140 W).",
+      values: { surplus_w: 2140, balance_w: 2140, forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 46.1 } },
     { ts: iso(now - 150 * 60e3), kind: "switch", from: "setback", to: "normal", result: "sent",
       detail: "select.wp_smart_grid_setzen → Normalbetrieb (gelb)",
-      text: "Der PV-Überschuss von 420 W liegt unter der Einschaltschwelle von 1.500 W. Abgesenkt wird nur 05:00–10:00 Uhr.",
-      values: { surplus_w: 420, forecast_kwh: 14.9, outdoor_c: 4.8, dhw_c: 44.0 } },
+      text: `Der PV-Überschuss von 420 W im 5-Minuten-Mittel liegt unter der Einschaltschwelle von 1.500 W. Abgesenkt wird nur ${night ? "21:00–10:00" : "05:00–10:00"} Uhr.`,
+      values: { surplus_w: 420, balance_w: 1630, forecast_kwh: 14.9, forecast_tomorrow_kwh: 19.4, outdoor_c: 4.8, dhw_c: 44.0 } },
     { ts: iso(now - 420 * 60e3), kind: "switch", from: "normal", to: "setback", result: "sent",
       detail: "select.wp_smart_grid_setzen → Abgesenkter Betrieb (rot)",
-      text: "Für den Rest des Tages sind 18,2 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (05:00–10:00 Uhr) auf eigenen Strom.",
-      values: { surplus_w: 0, forecast_kwh: 18.2, outdoor_c: 3.6, dhw_c: 46.5 } },
+      text: night
+        ? "Für morgen sind 18,2 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (21:00–10:00 Uhr) auf eigenen Strom."
+        : "Für den Rest des Tages sind 18,2 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (05:00–10:00 Uhr) auf eigenen Strom.",
+      values: { surplus_w: -380, balance_w: -380, forecast_kwh: night ? 0.1 : 18.2, forecast_tomorrow_kwh: night ? 18.2 : 15.1, outdoor_c: 3.6, dhw_c: 46.5 } },
     { ts: iso(now - 26 * 3600e3), kind: "error", from: "boost", to: null, result: "failed",
       detail: "select.wp_smart_grid_setzen ist nicht verfügbar.",
       text: "Die Vorgabe „Normalbetrieb“ konnte nicht gesetzt werden. Nächster Versuch um 16:52 Uhr.",
@@ -257,7 +261,7 @@
 
   const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
   const snapshot = {
-    version: "0.5.6",
+    version: "0.6.0",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
@@ -267,8 +271,9 @@
           ...Object.fromEntries(Object.keys(inv).map((key) => [key, null])) }
       : ent,
     settings: {
-      boost_on_w: 1500, boost_on_min: 10, boost_off_w: 300, boost_off_min: 15, min_hold_min: 20,
-      setback_enabled: true, setback_start: "05:00:00", setback_end: "10:00:00",
+      boost_on_w: 1500, boost_on_min: 10, boost_off_w: -300, boost_off_min: 15, min_hold_min: 20,
+      smoothing_min: 5, off_without_battery: true,
+      setback_enabled: true, setback_start: night ? "21:00:00" : "05:00:00", setback_end: "10:00:00",
       setback_min_forecast_kwh: 10, setback_min_outdoor_c: 3, setback_min_dhw_c: 42,
       actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_setback_k: 2,
       surplus_sign: "surplus_positive",
@@ -279,13 +284,16 @@
       mode, since: iso(now - 38 * 60e3), automation: true, dry_run: scene === "empty",
       override: scene === "override" ? { mode: "setback", until: iso(now + 95 * 60e3) } : null,
       reason: {
-        boost: "Der PV-Überschuss reicht weiter aus (aktuell 2.140 W). Beendet wird unter 300 W für 15 min.",
-        setback: "Für den Rest des Tages sind 11,8 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (05:00–10:00 Uhr) auf eigenen Strom.",
-        normal: "Der PV-Überschuss von 2.140 W liegt erst seit 4 min über 1.500 W; angehoben wird nach 10 min. Abgesenkt wird nur 05:00–10:00 Uhr.",
+        boost: "Der Überschuss ohne Akku reicht weiter aus (im 5-Minuten-Mittel 1.860 W). Beendet wird unter -300 W für 15 min.",
+        setback: night
+          ? "Für morgen sind 19,4 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (21:00–10:00 Uhr) auf eigenen Strom."
+          : "Für den Rest des Tages sind 11,8 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (05:00–10:00 Uhr) auf eigenen Strom.",
+        normal: "Der PV-Überschuss liegt erst seit 4 min über 1.500 W (im 5-Minuten-Mittel 2.140 W); angehoben wird nach 10 min. Abgesenkt wird nur 05:00–10:00 Uhr.",
       }[mode],
       rule: "boost_keep", state_entity_id: "sensor.energy_hub_regelzustand", last_error: null, retry_at: null,
-      above_since: scene === "empty" ? null : iso(now - 48 * 60e3), below_since: null,
-      inputs: { surplus_w: scene === "empty" ? null : 2140, forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 48.3 },
+      above_since: scene === "empty" || night ? null : iso(now - 48 * 60e3), below_since: null,
+      inputs: { surplus_w: scene === "empty" ? null : night ? -20 : 2140, balance_w: scene === "empty" ? null : night ? -640 : 1860,
+        forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 48.3 },
     },
     log, log_rev: 1,
   };
@@ -355,6 +363,11 @@
       else if (id === ent.ent_dhw_target) v = boost ? 55 : 48;
       else if (id === ent.ent_forecast_today) v = Math.max(0, 19 - hour * 1.2);
       else if (id === ent.ent_forecast_tomorrow) v = 19.4;
+      else if (id === ent.ent_battery_power) {
+        const k = Math.round((t - (midnight.getTime() - 48 * 3600e3)) / STEP);
+        if (nowSim[id]?.[k] === undefined) continue;
+        v = nowSim[id][k];
+      }
       else if (id === ent.ent_smart_grid) v = boost ? "Verstärkter Betrieb (grün)" : setback ? "Abgesenkter Betrieb (rot)" : "Normalbetrieb (gelb)";
       else if (id === ent.ent_storage) v = storeTemp;
       else if (id === ent.ent_fireplace) v = fire ? 235 + 40 * Math.sin(t / 4e5) : 28;

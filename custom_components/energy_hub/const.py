@@ -4,7 +4,7 @@ from __future__ import annotations
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
 
 DOMAIN = "energy_hub"
-VERSION = "0.5.6"
+VERSION = "0.6.0"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"
@@ -18,6 +18,8 @@ STORAGE_KEY = f"{DOMAIN}.state"
 LOG_LIMIT = 500
 EVALUATE_SECONDS = 30
 REAPPLY_MINUTES = 5
+# So lange gilt der letzte Wert des Überschuss-Sensors weiter, wenn er ausfällt
+SURPLUS_GAP_MINUTES = 3
 
 # Regelzustände (definiert in logic.py, damit die Logik ohne HA testbar bleibt)
 MODES = (MODE_NORMAL, MODE_BOOST, MODE_SETBACK)
@@ -122,6 +124,8 @@ CONF_BOOST_ON_W = "boost_on_w"
 CONF_BOOST_ON_MIN = "boost_on_min"
 CONF_BOOST_OFF_W = "boost_off_w"
 CONF_BOOST_OFF_MIN = "boost_off_min"
+CONF_SMOOTHING_MIN = "smoothing_min"
+CONF_OFF_WITHOUT_BATTERY = "off_without_battery"
 CONF_MIN_HOLD_MIN = "min_hold_min"
 CONF_SETBACK_ENABLED = "setback_enabled"
 CONF_SETBACK_START = "setback_start"
@@ -200,8 +204,10 @@ DEFAULTS: dict[str, object] = {
     CONF_BATTERY_SIGN: BATTERY_DISCHARGE_POSITIVE,
     CONF_BOOST_ON_W: 1500,
     CONF_BOOST_ON_MIN: 10,
-    CONF_BOOST_OFF_W: 300,
+    CONF_BOOST_OFF_W: -300,
     CONF_BOOST_OFF_MIN: 15,
+    CONF_SMOOTHING_MIN: 5,
+    CONF_OFF_WITHOUT_BATTERY: True,
     CONF_MIN_HOLD_MIN: 20,
     CONF_SETBACK_ENABLED: True,
     CONF_SETBACK_START: "05:00:00",

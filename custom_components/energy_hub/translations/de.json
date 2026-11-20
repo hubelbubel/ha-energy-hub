@@ -57,9 +57,9 @@
           "ent_forecast_tomorrow": "PV-Prognose für morgen"
         },
         "data_description": {
-          "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss.",
-          "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken am Morgen gebraucht.",
-          "ent_forecast_tomorrow": "Wird nur angezeigt."
+          "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss. Am besten der ungeglättete Wert; Energy Hub mittelt selbst (Schritt Regeln).",
+          "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken gebraucht.",
+          "ent_forecast_tomorrow": "Zählt beim Absenken vor Mitternacht, wenn das Absenkfenster über Mitternacht geht (etwa 21:00–10:00)."
         }
       },
       "inverter": {
@@ -119,22 +119,28 @@
       },
       "rules": {
         "title": "Regeln",
-        "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird morgens, wenn die Prognose später genug Sonne verspricht.",
+        "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird im Absenkfenster, wenn die Prognose später genug Sonne verspricht.",
         "data": {
           "boost_on_w": "Anheben ab Überschuss",
           "boost_on_min": "… wenn er so lange anliegt",
           "boost_off_w": "Anheben beenden unter",
           "boost_off_min": "… wenn er so lange darunter liegt",
+          "off_without_battery": "Beim Beenden den Akku herausrechnen",
+          "smoothing_min": "Überschuss mitteln über",
           "min_hold_min": "Mindesthaltezeit je Zustand",
-          "setback_enabled": "Morgens absenken, wenn Sonne vorhergesagt ist",
+          "setback_enabled": "Absenken, wenn Sonne vorhergesagt ist",
           "setback_start": "Absenkfenster von",
           "setback_end": "Absenkfenster bis",
-          "setback_min_forecast_kwh": "Absenken ab Prognose (Rest heute)",
+          "setback_min_forecast_kwh": "Absenken ab Prognose",
           "setback_min_outdoor_c": "Nicht absenken unter Außentemperatur",
           "setback_min_dhw_c": "Nicht absenken unter Warmwassertemperatur"
         },
         "data_description": {
+          "boost_off_w": "Negativ heißt: Das Anheben läuft weiter, solange höchstens so viel aus Akku oder Netz kommt.",
+          "off_without_battery": "Das Anheben endet nach dem Überschuss plus Ladeleistung des Akkus. So läuft es weiter, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste. Wirkt nur mit hinterlegter Leistung der Batterie (Schritt Strom). Ausschalten, wenn der Überschuss-Sensor den Akku schon herausrechnet.",
+          "smoothing_min": "Kurze Wolken zählen dann weniger. 0 = keine Glättung, etwa wenn der Sensor schon gemittelt ist. Fällt der Sensor aus, gilt sein letzter Wert noch 3 min.",
           "min_hold_min": "Schützt den Verdichter vor häufigem Umschalten. Handbetrieb und fehlende Messwerte wirken sofort.",
+          "setback_min_forecast_kwh": "Prognose für den Rest des Tages; geht das Absenkfenster über Mitternacht, vor Mitternacht die Prognose für morgen.",
           "setback_min_outdoor_c": "Feld leeren, um die Bedingung abzuschalten.",
           "setback_min_dhw_c": "Feld leeren, um die Bedingung abzuschalten."
         }
@@ -256,9 +262,9 @@
           "ent_forecast_tomorrow": "PV-Prognose für morgen"
         },
         "data_description": {
-          "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss.",
-          "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken am Morgen gebraucht.",
-          "ent_forecast_tomorrow": "Wird nur angezeigt."
+          "ent_pv_surplus": "Leistung in W oder kW, die gerade übrig ist, zum Beispiel die Einspeisung am Netzanschluss. Am besten der ungeglättete Wert; Energy Hub mittelt selbst (Schritt Regeln).",
+          "ent_forecast_today": "Energie in kWh oder Wh, zum Beispiel aus Solcast oder Forecast.Solar. Wird für das Absenken gebraucht.",
+          "ent_forecast_tomorrow": "Zählt beim Absenken vor Mitternacht, wenn das Absenkfenster über Mitternacht geht (etwa 21:00–10:00)."
         }
       },
       "inverter": {
@@ -318,22 +324,28 @@
       },
       "rules": {
         "title": "Regeln",
-        "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird morgens, wenn die Prognose später genug Sonne verspricht.",
+        "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird im Absenkfenster, wenn die Prognose später genug Sonne verspricht.",
         "data": {
           "boost_on_w": "Anheben ab Überschuss",
           "boost_on_min": "… wenn er so lange anliegt",
           "boost_off_w": "Anheben beenden unter",
           "boost_off_min": "… wenn er so lange darunter liegt",
+          "off_without_battery": "Beim Beenden den Akku herausrechnen",
+          "smoothing_min": "Überschuss mitteln über",
           "min_hold_min": "Mindesthaltezeit je Zustand",
-          "setback_enabled": "Morgens absenken, wenn Sonne vorhergesagt ist",
+          "setback_enabled": "Absenken, wenn Sonne vorhergesagt ist",
           "setback_start": "Absenkfenster von",
           "setback_end": "Absenkfenster bis",
-          "setback_min_forecast_kwh": "Absenken ab Prognose (Rest heute)",
+          "setback_min_forecast_kwh": "Absenken ab Prognose",
           "setback_min_outdoor_c": "Nicht absenken unter Außentemperatur",
           "setback_min_dhw_c": "Nicht absenken unter Warmwassertemperatur"
         },
         "data_description": {
+          "boost_off_w": "Negativ heißt: Das Anheben läuft weiter, solange höchstens so viel aus Akku oder Netz kommt.",
+          "off_without_battery": "Das Anheben endet nach dem Überschuss plus Ladeleistung des Akkus. So läuft es weiter, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste. Wirkt nur mit hinterlegter Leistung der Batterie (Schritt Strom). Ausschalten, wenn der Überschuss-Sensor den Akku schon herausrechnet.",
+          "smoothing_min": "Kurze Wolken zählen dann weniger. 0 = keine Glättung, etwa wenn der Sensor schon gemittelt ist. Fällt der Sensor aus, gilt sein letzter Wert noch 3 min.",
           "min_hold_min": "Schützt den Verdichter vor häufigem Umschalten. Handbetrieb und fehlende Messwerte wirken sofort.",
+          "setback_min_forecast_kwh": "Prognose für den Rest des Tages; geht das Absenkfenster über Mitternacht, vor Mitternacht die Prognose für morgen.",
           "setback_min_outdoor_c": "Feld leeren, um die Bedingung abzuschalten.",
           "setback_min_dhw_c": "Feld leeren, um die Bedingung abzuschalten."
         }

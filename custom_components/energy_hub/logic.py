@@ -7,8 +7,9 @@ Home Assistant testen (siehe tests/test_logic.py).
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 MODE_NORMAL = "normal"
 MODE_BOOST = "boost"
@@ -30,9 +31,11 @@ class Settings:
 
     boost_on_w: float = 1500
     boost_on_min: float = 10
-    boost_off_w: float = 300
+    boost_off_w: float = -300
     boost_off_min: float = 15
     min_hold_min: float = 20
+    # Nur für die Begründungen: über wie viele Minuten der Regler die Messwerte mittelt
+    smoothing_min: float = 0
     setback_enabled: bool = True
     setback_start: time = time(5, 0)
     setback_end: time = time(10, 0)
@@ -48,11 +51,18 @@ class Settings:
 
 @dataclass(frozen=True)
 class Inputs:
-    """Messwerte zum Zeitpunkt der Entscheidung. None = nicht verfügbar."""
+    """Messwerte zum Zeitpunkt der Entscheidung. None = nicht verfügbar.
+
+    balance_w ist der Überschuss ohne Akku: PV-Überschuss plus Ladeleistung des Akkus
+    (Entladen zählt negativ). Er entscheidet über das Ende des Anhebens; None heißt,
+    es zählt wie bisher der PV-Überschuss.
+    """
 
     now: datetime
     surplus_w: float | None = None
+    balance_w: float | None = None
     forecast_kwh: float | None = None
+    forecast_tomorrow_kwh: float | None = None
     outdoor_c: float | None = None
     dhw_c: float | None = None
     storage_c: float | None = None
@@ -115,18 +125,75 @@ def in_window(now: time, start: time, end: time) -> bool:
     return now >= start or now < end
 
 
+def window_mean(
+    samples: Sequence[tuple[datetime, float]], now: datetime, minutes: float, max_age_min: float
+) -> float | None:
+    """Zeitgewichteter Mittelwert der Messwerte aus den letzten `minutes` Minuten.
+
+    Jeder Messwert gilt bis zum nächsten, der neueste bis jetzt. So überbrückt der Regler
+    kurze Aussetzer eines Sensors. Ist der neueste Wert älter als max_age_min, gilt der
+    Sensor als nicht verfügbar (None). Ohne Glättung (minutes <= 0) zählt der neueste Wert.
+    """
+    if not samples:
+        return None
+    last_at, last_value = samples[-1]
+    if (now - last_at).total_seconds() > max_age_min * 60:
+        return None
+    if minutes <= 0:
+        return last_value
+    start = now - timedelta(minutes=minutes)
+    total = 0.0
+    weight = 0.0
+    for i, (at, value) in enumerate(samples):
+        end = samples[i + 1][0] if i + 1 < len(samples) else now
+        seconds = (end - max(at, start)).total_seconds()
+        if seconds > 0:
+            total += value * seconds
+            weight += seconds
+    return total / weight if weight else last_value
+
+
+def trim_samples(
+    samples: list[tuple[datetime, float]], now: datetime, minutes: float
+) -> list[tuple[datetime, float]]:
+    """Behält, was window_mean noch braucht: die Werte im Zeitraum und den letzten davor."""
+    start = now - timedelta(minutes=max(0.0, minutes))
+    first = next((i for i, (at, _value) in enumerate(samples) if at > start), len(samples))
+    return samples[max(0, first - 1):]
+
+
 def update_timers(timers: Timers, inputs: Inputs, settings: Settings) -> Timers:
-    """Führt die Zeitmarken für 'über Einschaltschwelle' / 'unter Ausschaltschwelle'."""
+    """Führt die Zeitmarken für 'über Einschaltschwelle' / 'unter Ausschaltschwelle'.
+
+    Eingeschaltet wird nach dem PV-Überschuss, ausgeschaltet nach dem Überschuss ohne Akku,
+    sofern er bekannt ist.
+    """
     surplus = inputs.surplus_w
     if surplus is None:
         return Timers()
     above = timers.above_since if surplus >= settings.boost_on_w else None
     if surplus >= settings.boost_on_w and above is None:
         above = inputs.now
-    below = timers.below_since if surplus < settings.boost_off_w else None
-    if surplus < settings.boost_off_w and below is None:
+    off = inputs.balance_w if inputs.balance_w is not None else surplus
+    below = timers.below_since if off < settings.boost_off_w else None
+    if off < settings.boost_off_w and below is None:
         below = inputs.now
     return Timers(above_since=above, below_since=below)
+
+
+def _measured(value: float, s: Settings) -> str:
+    """'aktuell 2.140 W' oder mit Glättung 'im 5-Minuten-Mittel 2.140 W'."""
+    if s.smoothing_min > 0:
+        return f"im {s.smoothing_min:.0f}-Minuten-Mittel {fmt_w(value)}"
+    return f"aktuell {fmt_w(value)}"
+
+
+def _off_measure(inputs: Inputs) -> tuple[float, str]:
+    """Wert und Name der Größe, nach der das Anheben endet."""
+    if inputs.balance_w is not None:
+        return inputs.balance_w, "Der Überschuss ohne Akku"
+    assert inputs.surplus_w is not None
+    return inputs.surplus_w, "Der PV-Überschuss"
 
 
 def ready_threshold(return_target_c: float | None, delta_k: float, fallback_c: float) -> float:
@@ -170,6 +237,16 @@ def _storage_block(inputs: Inputs, s: Settings) -> str | None:
     )
 
 
+def uses_tomorrow(now: time, start: time, end: time) -> bool:
+    """Zählt gerade die Prognose für morgen?
+
+    Ja im Abendteil eines Absenkfensters über Mitternacht (etwa 21:00 bis Mitternacht bei
+    21:00–10:00): Die Prognose für den Rest des Tages liegt dann bei null, gewartet wird
+    auf die Sonne des nächsten Tages. Nach Mitternacht zählt wieder „Rest heute“.
+    """
+    return start > end and now >= start
+
+
 def _setback_check(inputs: Inputs, s: Settings) -> tuple[bool, str]:
     """Prüft die Absenkbedingungen. Liefert (erfüllt, Begründung)."""
     window = f"{s.setback_start:%H:%M}–{s.setback_end:%H:%M} Uhr"
@@ -177,11 +254,14 @@ def _setback_check(inputs: Inputs, s: Settings) -> tuple[bool, str]:
         return False, "Absenken ist abgeschaltet."
     if not in_window(inputs.now.time(), s.setback_start, s.setback_end):
         return False, f"Abgesenkt wird nur {window}."
-    if inputs.forecast_kwh is None:
-        return False, "Die PV-Prognose ist nicht verfügbar."
-    if inputs.forecast_kwh < s.setback_min_forecast_kwh:
+    tomorrow = uses_tomorrow(inputs.now.time(), s.setback_start, s.setback_end)
+    forecast = inputs.forecast_tomorrow_kwh if tomorrow else inputs.forecast_kwh
+    which = "für morgen " if tomorrow else ""
+    if forecast is None:
+        return False, f"Die PV-Prognose {which}ist nicht verfügbar."
+    if forecast < s.setback_min_forecast_kwh:
         return False, (
-            f"Die Prognose von {fmt_num(inputs.forecast_kwh, 'kWh')} reicht nicht zum "
+            f"Die Prognose {which}von {fmt_num(forecast, 'kWh')} reicht nicht zum "
             f"Absenken (mindestens {fmt_num(s.setback_min_forecast_kwh, 'kWh')})."
         )
     if s.setback_min_outdoor_c is not None:
@@ -200,8 +280,9 @@ def _setback_check(inputs: Inputs, s: Settings) -> tuple[bool, str]:
                 f"Das Warmwasser hat nur {fmt_num(inputs.dhw_c, '°C')}, deshalb wird nicht "
                 f"abgesenkt (Grenze {fmt_num(s.setback_min_dhw_c, '°C')})."
             )
+    when = "Für morgen" if tomorrow else "Für den Rest des Tages"
     return True, (
-        f"Für den Rest des Tages sind {fmt_num(inputs.forecast_kwh, 'kWh')} PV-Ertrag "
+        f"{when} sind {fmt_num(forecast, 'kWh')} PV-Ertrag "
         f"vorhergesagt. Die Heizung wartet im Absenkfenster ({window}) auf eigenen Strom."
     )
 
@@ -225,22 +306,23 @@ def _wanted(
             if ok:
                 return Decision(MODE_SETBACK, f"{block} {text}", "setback")
             return Decision(MODE_NORMAL, block, "storage")
+        off_value, off_name = _off_measure(inputs)
         if below_for is None or below_for < s.boost_off_min:
             if below_for is None:
                 reason = (
-                    f"Der PV-Überschuss reicht weiter aus (aktuell {fmt_w(surplus)}). "
+                    f"{off_name} reicht weiter aus ({_measured(off_value, s)}). "
                     f"Beendet wird unter {fmt_w(s.boost_off_w)} für {fmt_min(s.boost_off_min)}."
                 )
             else:
                 reason = (
-                    f"Der PV-Überschuss liegt seit {fmt_min(below_for)} unter "
-                    f"{fmt_w(s.boost_off_w)} (aktuell {fmt_w(surplus)}). Nach "
+                    f"{off_name} liegt seit {fmt_min(below_for)} unter "
+                    f"{fmt_w(s.boost_off_w)} ({_measured(off_value, s)}). Nach "
                     f"{fmt_min(s.boost_off_min)} endet das Anheben."
                 )
             return Decision(MODE_BOOST, reason, "boost_keep")
         ended = (
-            f"Der PV-Überschuss liegt seit {fmt_min(below_for)} unter "
-            f"{fmt_w(s.boost_off_w)} (aktuell {fmt_w(surplus)})."
+            f"{off_name} liegt seit {fmt_min(below_for)} unter "
+            f"{fmt_w(s.boost_off_w)} ({_measured(off_value, s)})."
         )
         ok, text = _setback_check(inputs, s)
         if ok:
@@ -252,7 +334,7 @@ def _wanted(
         return Decision(
             MODE_BOOST,
             f"Der PV-Überschuss liegt seit {fmt_min(above_for)} über "
-            f"{fmt_w(s.boost_on_w)} (aktuell {fmt_w(surplus)}).",
+            f"{fmt_w(s.boost_on_w)} ({_measured(surplus, s)}).",
             "boost",
         )
 
@@ -265,12 +347,14 @@ def _wanted(
     if above_for is not None:
         boost_text = (
             f"Der PV-Überschuss liegt erst seit {fmt_min(above_for)} über "
-            f"{fmt_w(s.boost_on_w)} (aktuell {fmt_w(surplus)}); angehoben wird nach "
+            f"{fmt_w(s.boost_on_w)} ({_measured(surplus, s)}); angehoben wird nach "
             f"{fmt_min(s.boost_on_min)}."
         )
     else:
+        mean = f" im {s.smoothing_min:.0f}-Minuten-Mittel" if s.smoothing_min > 0 else ""
+        # Angezeigt wird nie weniger als 0 W; ein negativer Wert ist Netzbezug
         boost_text = (
-            f"Der PV-Überschuss von {fmt_w(surplus)} liegt unter der Einschaltschwelle "
+            f"Der PV-Überschuss von {fmt_w(max(0.0, surplus))}{mean} liegt unter der Einschaltschwelle "
             f"von {fmt_w(s.boost_on_w)}."
         )
     return Decision(MODE_NORMAL, f"{boost_text} {text}", "idle")

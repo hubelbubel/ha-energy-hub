@@ -2,6 +2,16 @@
 
 Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releases; den zeigt Home Assistant beim Update an. Ältere Versionen stehen nur im Verlauf auf GitHub.
 
+## 0.6.0 – 2026-11-20
+
+- Die Regelung rechnet mit dem Mittel des PV-Überschusses über die letzten 5 Minuten (einstellbar, 0 = aus). Kurze Wolken setzen die Wartezeit bis zum Anheben nicht mehr zurück.
+- Fällt der Überschuss-Sensor kurz aus, gilt sein letzter Wert noch 3 Minuten. Erst danach geht die Heizung zur Sicherheit in den Normalbetrieb.
+- Das Anheben endet nach dem Überschuss ohne Akku, also dem Überschuss plus der Ladeleistung des Akkus. So läuft es weiter, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste. Neu im Schritt Regeln: „Beim Beenden den Akku herausrechnen“ (an). Wirkt nur mit hinterlegter Leistung der Batterie.
+- Neue Ausschaltschwelle −300 W statt 300 W. Wer die Regeln schon einmal gespeichert hat, behält seinen Wert und sollte ihn prüfen.
+- Absenken über Nacht: Geht das Absenkfenster über Mitternacht (etwa 21:00 bis 10:00 Uhr), zählt vor Mitternacht die Prognose für morgen.
+- Bereich Wärme: Kennwert „Überschuss ohne Akku“, im Verlauf als gestrichelte Linie, im Logbuch bei jedem Eintrag.
+- Bereich Wärme: Der PV-Überschuss wird nie unter 0 W angezeigt, auch nicht im Verlauf und im Logbuch. Netzbezug zählt dort als 0 W. Im Export stehen weiter die echten Werte.
+
 ## 0.5.6 – 2026-11-20
 
 - Tagesleiste unten in allen Bereichen: Sie zeigt, welcher Tag zu sehen ist. Mit den Pfeilen geht es einen Tag zurück oder vor, „Heute“ springt zurück auf heute. Gibt es keine älteren Daten mehr, ist der Pfeil zurück ausgegraut.
