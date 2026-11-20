@@ -2,6 +2,17 @@
 
 Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releases; den zeigt Home Assistant beim Update an. Ältere Versionen stehen nur im Verlauf auf GitHub.
 
+## 0.7.0 – 2026-11-20
+
+- Stark anheben: eine zweite Stufe. Bleiben beim Anheben 10 min lang noch mehr als 2.000 W übrig, stellt Energy Hub auf „Verstärkt Stufe 3 (dunkelgrün)“ bzw. hebt die Heizkurve um 4 K statt 2 K an. Trägt die PV das nicht mehr, geht es zurück auf einfaches Anheben. Kennt die Smart-Grid-Auswahl keine zweite Stufe, bleibt es bei Grün. Neu im Schritt Regeln: „Stark anheben (zweite Stufe)“ (an) und die Schwelle; im Schritt Eingriff die Option bzw. der Betrag. Auch von Hand und im Dienst `set_override` als `strong`.
+- Angehoben wird jetzt nach dem, was für die Wärmepumpe übrig ist: Überschuss plus das, was sie gerade selbst zieht. Läuft sie im Normalbetrieb schon mit Solarstrom, hebt Energy Hub sie trotzdem an. Strom aus dem Akku zählt dabei nicht als übrig. Dafür braucht es die elektrische Leistung der Wärmepumpe.
+- Die Schwelle zum Anheben passt sich an: Energy Hub lernt, wie viel die Wärmepumpe im Lauf zieht, und hebt an, sobald so viel übrig ist. Der Wert folgt langsam der Jahreszeit. Abschaltbar mit „Schwelle an die Wärmepumpe anpassen“; dann gilt wieder die feste Schwelle.
+- Wird der Akku laut Prognose heute ohnehin voll, zählt seine Ladeleistung beim Anheben mit. Die Wärmepumpe muss dann nicht warten, bis der Akku voll ist. Die Kapazität des Akkus lernt Energy Hub aus Ladung und Ladestand; dafür braucht es den Ladestand der Batterie.
+- Bereich Wärme: neuer Kennwert „Für die Wärmepumpe übrig“, im Verlauf gepunktet, dazu die Schwelle für die zweite Stufe. Für den gezeigten Tag steht da, woher der Strom der Wärmepumpe kam (vom Dach, aus dem Akku, aus dem Netz) und wie viel beim Anheben vom Dach kam.
+- Auswertung der letzten 7 Tage: „Beim Anheben … % Solarstrom“ statt nur der Dauer. Die Aussage zur Wärmepumpe rechnet jetzt vorsichtig: Netzbezug und Akku zählen zuerst bei der Wärmepumpe.
+- Neuer Problem-Sensor: an, wenn die Wärmepumpe eine Vorgabe nicht annimmt, der Überschuss oder die Prognose keinen Wert liefert, die Stellgröße fehlt oder die Wärmepumpe nichts meldet. Die Gründe stehen im Attribut `problems`. Damit lässt sich eine Benachrichtigung als normale Automation bauen.
+- Effizienz-Export: neue Spalte `stark_angehoben_min`; `angehoben_min` zählt beide Stufen.
+
 ## 0.6.0 – 2026-11-20
 
 - Die Regelung rechnet mit dem Mittel des PV-Überschusses über die letzten 5 Minuten (einstellbar, 0 = aus). Kurze Wolken setzen die Wartezeit bis zum Anheben nicht mehr zurück.

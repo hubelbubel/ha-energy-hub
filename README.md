@@ -83,7 +83,7 @@ Im Schritt „Strom“ wählst du Leistungs-Sensoren (W oder kW). Energie in kWh
 | Leistung am Netzanschluss | ein Sensor mit Vorzeichen; welche Richtung positiv ist, stellst du ein |
 | Leistung der PV-Anlage | |
 | Leistung der Batterie | ein Sensor mit Vorzeichen, zum Beispiel aus der Integration deiner Batterie |
-| Ladestand der Batterie | in Prozent |
+| Ladestand der Batterie | in Prozent; daraus und aus der Leistung lernt die Regelung die Kapazität |
 | Verbrauch des Hauses | freiwillig; ohne ihn gilt Verbrauch = PV + Bezug − Einspeisung + Entladen − Laden |
 | Leistung der Wallbox | zum Beispiel aus der go-e-Integration |
 | Weitere Verbraucher | beliebig viele Leistungs-Sensoren, etwa Badheizung, Waschmaschine, Trockner, Spülmaschine |
@@ -178,13 +178,14 @@ Die Aussagen in der Übersicht sind feste Regeln mit Zahlen, kein Sprachmodell. 
 | Eingespeist, obwohl die Batterie nicht voll war | mindestens 1 kWh und 20 % der Einspeisung bei Ladestand unter 95 % |
 | Netzbezug, obwohl die Batterie geladen war | mindestens 1 kWh und 20 % des Bezugs bei Ladestand über 20 % |
 | Grundlast nachts | Median des Verbrauchs zwischen 1 und 5 Uhr ohne Wärmepumpe und Wallbox; ohne Bewertung |
-| Wärmepumpe: Anteil Solarstrom | Anteil, den das Dach zeitgleich liefern konnte; „überwiegend bei Sonne“ ab 50 % |
+| Wärmepumpe: Anteil Solarstrom | Herkunft ihres Stroms, vorsichtig gerechnet: Netzbezug und Strom aus der Batterie zählen zuerst bei der Wärmepumpe, erst der Rest gilt als Solarstrom; „überwiegend mit Solarstrom“ ab 50 % |
 | … läuft meist mit Netzstrom | Verbraucher mit mindestens 1 kWh, davon mindestens 60 % zeitgleich mit Netzbezug, während mindestens halb so viel eingespeist wurde; höchstens drei |
 | Die Wärmepumpe taktet / läuft in langen Zügen | mittlere Laufzeit unter 10 min / mindestens 30 min, bei mindestens fünf vollständigen Läufen |
 | Arbeitszahl | Wärme durch Strom aus den Leistungs-Sensoren; gut ab 3,5, auffällig unter 2,5 |
 | Der Heizstab lief | jede Laufzeit über null |
 | Der Kamin-Speicher hat mitgeheizt | mindestens eine Entnahme |
-| PV-Überschuss floss in die Heizung | Zeit im Zustand „angehoben“ über null, mit gewähltem Eingriff |
+| Beim Anheben … % Solarstrom | Zeit im Zustand „angehoben“ (beide Stufen) über null, mit gewähltem Eingriff, und mindestens 0,5 kWh Strom der Wärmepumpe dabei; gerechnet wie die Zeile zur Wärmepumpe. Gut ab 70 %, auffällig unter 40 %: dann ist die Schwelle zum Anheben zu niedrig |
+| PV-Überschuss floss in die Heizung | dasselbe ohne Strombilanz (kein Netzanschluss hinterlegt) |
 | Im Probebetrieb hätte die Regelung angehoben | dasselbe im Probebetrieb; ohne Bewertung, gesendet wurde nichts |
 | Die Regelung läuft im Probebetrieb | solange kein Eingriff gewählt ist |
 
@@ -194,16 +195,16 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.6.0. Die Regellogik und die Abläufe im Regler sind durch 55 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Auswertung und Tage durch 19 und die für PV durch 17 weitere. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 69 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Wärmepumpe, Auswertung und Tage durch 24 und die für PV durch 17 weitere. Die zweite Stufe, „für die Wärmepumpe übrig“, die gelernte Leistung der Wärmepumpe und die gelernte Kapazität des Akkus sind nur mit nachgebildetem Home Assistant und Beispieldaten geprüft. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
 - **Lage:** ein Satz, was die Heizung gerade tut und warum, daneben ein Anlagenschema mit Außen-, Vorlauf-, Rücklauf- und Warmwassertemperatur.
-- **Kennwerte:** PV-Überschuss (gemittelt, nie unter 0 W; Netzbezug zählt als 0), Überschuss ohne Akku (darf negativ sein: so viel liefern Akku oder Netz), Prognose für den Rest des Tages und für morgen, Stromaufnahme, Heizleistung, Leistungszahl.
-- **Verlauf:** Überschuss (mit hinterlegtem Akku auch ohne Akku, gestrichelt), Temperaturen und Eingriffe auf einer gemeinsamen Zeitachse (24 Stunden, 48 Stunden, 7 Tage), mit Ablesung beim Überfahren und Tabellenansicht.
-- **Regelung:** hebt an, wenn genug eigener Strom übrig ist, und senkt im Absenkfenster ab, morgens oder über Nacht, wenn die Prognose später Sonne verspricht.
+- **Kennwerte:** PV-Überschuss (gemittelt, nie unter 0 W; Netzbezug zählt als 0), für die Wärmepumpe übrig (nie unter 0 W), Überschuss ohne Akku (darf negativ sein: so viel liefern Akku oder Netz), Prognose für den Rest des Tages und für morgen, Stromaufnahme, Heizleistung, Leistungszahl. Dazu für den gezeigten Tag, woher der Strom der Wärmepumpe kam (vom Dach, aus dem Akku, aus dem Netz) und wie viel davon beim Anheben vom Dach kam; gerechnet wie in der Auswertung.
+- **Verlauf:** Überschuss, für die Wärmepumpe übrig (gepunktet) und mit hinterlegtem Akku ohne Akku (gestrichelt), dazu die Schwellen; Temperaturen und Eingriffe (stark angehoben als höherer, kräftigerer Balken) auf einer gemeinsamen Zeitachse (24 Stunden, 48 Stunden, 7 Tage), mit Ablesung beim Überfahren und Tabellenansicht.
+- **Regelung:** hebt an, wenn genug eigener Strom für die Wärmepumpe übrig ist, in zwei Stufen, und senkt im Absenkfenster ab, morgens oder über Nacht, wenn die Prognose später Sonne verspricht.
 - **Logbuch:** jede Schaltung mit Begründung, den Messwerten zum Zeitpunkt und dem Ergebnis (gesendet, nur protokolliert, fehlgeschlagen). Die Einträge erscheinen auch im Logbuch von Home Assistant.
-- **Handbetrieb:** Normalbetrieb, Anheben oder Absenken für eine Dauer oder bis du ihn beendest.
+- **Handbetrieb:** Normalbetrieb, Anheben, stark anheben oder Absenken für eine Dauer oder bis du ihn beendest.
 - **Export:** zwei CSV-Dateien zum Auswerten, eine mit Verlauf und Entscheidungen, eine für die Effizienz.
 - **Kamin und Speicher:** zeigt, wann der Kamin brennt, wann der Speicher bereit ist und wie oft Wärme aus ihm geholt wurde, und hebt nicht an, solange der Speicher die Heizung versorgen kann.
 
@@ -214,7 +215,8 @@ Version 0.6.0. Die Regellogik und die Abläufe im Regler sind durch 55 automatis
 - Für die Regelung: Entitäten für die Wärmepumpe. Für Dimplex liegt ein fertiges Package bei: [`packages/dimplex_wpm.yaml`](packages/dimplex_wpm.yaml). Die Vorschläge bei der Einrichtung passen zu dessen Entitätsnamen.
 - Ein Sensor für den PV-Überschuss (W oder kW). Geeignet ist auch ein Netzleistungs-Sensor, bei dem Einspeisung negativ ist; das Vorzeichen stellst du ein. Am besten ein ungeglätteter Wert, Energy Hub mittelt selbst.
 - Für das Absenken: ein Sensor „PV-Prognose Rest heute“ (kWh oder Wh), zum Beispiel aus Solcast oder Forecast.Solar. Für ein Absenkfenster über Mitternacht zusätzlich „PV-Prognose morgen“.
-- Damit das Anheben nicht den Akku leert: die Leistung der Batterie im Schritt Strom.
+- Damit das Anheben nicht den Akku leert: die Leistung der Batterie im Schritt Strom; damit die Regelung erkennt, ob der Akku ohnehin voll wird, dazu ihr Ladestand.
+- Damit die Regelung die Wärmepumpe aus dem Überschuss herausrechnet und ihre Leistung lernt: die elektrische Leistung der Wärmepumpe.
 
 ## Was gebraucht wird
 
@@ -245,11 +247,12 @@ Die Regeln werden alle 30 Sekunden in dieser Reihenfolge geprüft:
 1. **Handbetrieb** gilt sofort und vor allem anderen.
 2. **Automatik aus:** Die Integration stellt einmal auf Normalbetrieb und fasst danach nichts mehr an.
 3. **Kein Überschuss-Messwert:** Normalbetrieb, sofort. Ohne Daten wird nicht geregelt. Fällt der Sensor nur kurz aus, gilt sein letzter Wert noch 3 min weiter.
-4. **Anheben:** wenn der Überschuss eine einstellbare Zeit über der Einschaltschwelle liegt (Standard 1.500 W für 10 min). Es endet, wenn der Überschuss ohne Akku eine einstellbare Zeit unter der Ausschaltschwelle liegt (−300 W für 15 min).
+4. **Anheben:** wenn für die Wärmepumpe eine einstellbare Zeit lang genug übrig ist (Standard 10 min über 1.500 W, mit gelernter Schwelle so viel, wie sie im Lauf zieht). Es endet, wenn der Überschuss ohne Akku eine einstellbare Zeit unter der Ausschaltschwelle liegt (−300 W für 15 min).
+   **Stark anheben:** wenn beim Anheben ebenso lange noch mehr als 2.000 W übrig sind. Trägt die PV das nicht mehr (Ausschaltregel wie oben), geht es zurück auf einfaches Anheben, solange für die Wärmepumpe genug übrig ist, sonst gleich in den Normalbetrieb.
 5. **Absenken:** im Absenkfenster (Standard 05:00 bis 10:00 Uhr), wenn die Prognose reicht (10 kWh), es draußen nicht zu kalt ist (3 °C) und das Warmwasser warm genug ist (42 °C). Die beiden Temperaturgrenzen lassen sich abschalten, indem man das Feld leert.
 6. Sonst **Normalbetrieb**.
 
-Wechsel aus den Regeln 4 bis 6 warten eine Mindesthaltezeit ab (20 min), damit der Verdichter nicht taktet.
+Wechsel aus den Regeln 4 bis 6 warten eine Mindesthaltezeit ab (20 min), damit der Verdichter nicht taktet. Das gilt auch zwischen den beiden Stufen des Anhebens.
 
 **Mittelwert:** Die Regeln rechnen mit dem Mittel des Überschusses über die letzten 5 min (einstellbar, 0 = aus). Jeder Messwert zählt, bis der nächste kommt. Eine kurze Wolke setzt die 10 min bis zum Anheben so nicht zurück. Ist der Sensor schon gemittelt, stellst du 0 ein.
 
@@ -261,7 +264,27 @@ Wechsel aus den Regeln 4 bis 6 warten eine Mindesthaltezeit ab (20 min), damit d
 | Akku entlädt 200 W | 0 W | −200 W | läuft weiter |
 | Wolke, Akku entlädt 900 W | 0 W | −900 W | endet nach 15 min |
 
-Eingeschaltet wird weiter nach dem Überschuss, der Akku lädt also zuerst. Das gilt nur mit hinterlegter Leistung der Batterie (Schritt Strom); fehlt ihr Wert, zählt der Überschuss. Rechnet dein Überschuss-Sensor den Akku schon heraus, schaltest du „Beim Beenden den Akku herausrechnen“ aus, sonst zählt er doppelt. Zählt dein Sensor die Wallbox nicht mit, hat die Wärmepumpe Vorrang vor dem Auto.
+Das gilt nur mit hinterlegter Leistung der Batterie (Schritt Strom); fehlt ihr Wert, zählt der Überschuss. Rechnet dein Überschuss-Sensor den Akku schon heraus, schaltest du „Den Akku herausrechnen“ aus, sonst zählt er doppelt. Zählt dein Sensor die Wallbox nicht mit, hat die Wärmepumpe Vorrang vor dem Auto.
+
+**Für die Wärmepumpe übrig:** Läuft die Wärmepumpe gerade im Normalbetrieb, verbraucht sie den Überschuss selbst, und am Netzanschluss sieht es nach „zu wenig“ aus, obwohl die PV sie trägt. Deshalb wird nicht nach dem Überschuss angehoben, sondern nach dem, was für die Wärmepumpe übrig ist: Überschuss plus ihre elektrische Leistung (Schritt Wärmepumpe). Der Akku lädt zuerst; was er entlädt, zählt nicht als übrig. Ohne Leistung der Wärmepumpe und ohne Akku zählt der Überschuss allein, wie bis Version 0.6.
+
+| Lage im Normalbetrieb | Überschuss | Wärmepumpe | Akku | Übrig für die Wärmepumpe |
+|---|---|---|---|---|
+| Wärmepumpe steht, Sonne | 2.000 W | 40 W | lädt 1.000 W | 2.040 W |
+| Wärmepumpe läuft, Sonne | 400 W | 1.600 W | lädt 1.000 W | 2.000 W |
+| Wärmepumpe läuft, Akku stützt | 0 W | 1.600 W | entlädt 900 W | 700 W |
+
+**Gelernte Schwelle:** Statt der festen 1.500 W gilt, was die Wärmepumpe im Lauf zieht, sobald Energy Hub das aus 30 min Laufzeit gelernt hat. Als Lauf zählt eine elektrische Leistung ab 300 W. Bis 6 h Laufzeit ist es der Mittelwert, danach ein gleitender Mittelwert über rund 6 h Laufzeit; so folgt der Wert langsam der Jahreszeit (bei Kälte zieht eine Luft-Wärmepumpe mehr). Der Wert ist auf 50 W gerundet, übersteht Neustarts und steht im Panel unter „So wird geregelt“. Abschalten lässt sich das mit „Schwelle an die Wärmepumpe anpassen“; dann gilt wieder die feste Schwelle.
+
+**Akku wird ohnehin voll:** Mit Ladestand der Batterie (Schritt Strom) lernt Energy Hub ihre Kapazität: Energie, die in den Akku floss, geteilt durch die Änderung des Ladestands, geschätzt je 20 Prozentpunkte und über die letzten fünf Schätzungen gemittelt. Reicht die Prognose für den Rest des Tages für mindestens das Doppelte dessen, was dem Akku zum Vollladen fehlt, zählt auch seine Ladeleistung als übrig. Die Wärmepumpe darf dann schon anheben, während der Akku noch lädt, statt mittags auf einen vollen Akku zu warten.
+
+| Akku | Ladestand | fehlt | Prognose Rest heute | Ladeleistung zählt als übrig |
+|---|---|---|---|---|
+| 10 kWh | 60 % | 4 kWh | 9 kWh | ja |
+| 10 kWh | 60 % | 4 kWh | 7 kWh | nein, der Akku lädt zuerst |
+| noch nicht gelernt | | | | nein |
+
+**Stark anheben:** gemessen am Überschuss, während angehoben ist, also an dem, was trotz Anheben noch eingespeist wird (wird der Akku ohnehin voll, am Überschuss ohne Akku). Was die zweite Stufe tut, stellst du an der Wärmepumpe ein; bei Dimplex ist es „Verstärkt Stufe 3 (dunkelgrün)“. Kennt die Smart-Grid-Auswahl diese Option nicht, setzt Energy Hub die für Anheben und schreibt das ins Logbuch. Mit Parallelverschiebung hebt die zweite Stufe um 4 K statt 2 K an. Abschalten lässt sie sich mit „Stark anheben (zweite Stufe)“.
 
 **Absenkfenster über Mitternacht:** Stellst du das Fenster etwa auf 21:00 bis 10:00 Uhr, zählt vor Mitternacht die Prognose für morgen, danach die für den Rest des Tages. Abgesenkt wird also nur in Nächten vor einem sonnigen Tag; die Wärme holt die Wärmepumpe dann mit eigenem Strom nach. Wer jede Nacht absenken will, stellt das im Zeitprogramm der Wärmepumpe ein. Mit Smart Grid stellt Energy Hub im Normalbetrieb „gelb“ ein und setzt es nach fünf Minuten erneut; eine Absenkung über dieselbe Auswahl aus einer anderen Automation würde also überschrieben.
 
@@ -272,8 +295,8 @@ Alle Werte lassen sich unter Einstellungen, Geräte & Dienste, Energy Hub, „Ko
 | Stellgröße | Was passiert |
 |---|---|
 | Probebetrieb (Standard) | Nichts wird gesendet. Entscheidungen stehen als „nur protokolliert“ im Logbuch. |
-| Smart Grid | Eine Auswahl-Entität wird auf die Option für Normal, Anheben oder Absenken gestellt. Bei Dimplex hebt „grün“ Heizung und Warmwasser an, „rot“ senkt beide ab; die Beträge stellt man am Wärmepumpenmanager ein. |
-| Parallelverschiebung | Eine Zahl-Entität wird um einen Betrag erhöht oder verringert. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt. |
+| Smart Grid | Eine Auswahl-Entität wird auf die Option für Normal, Anheben, stark anheben oder Absenken gestellt. Bei Dimplex hebt „grün“ Heizung und Warmwasser an, „dunkelgrün“ ist die zweite Stufe, „rot“ senkt beide ab; die Beträge stellt man am Wärmepumpenmanager ein. |
+| Parallelverschiebung | Eine Zahl-Entität wird um einen Betrag erhöht oder verringert (Standard +2 K, stark +4 K, −2 K). Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt. |
 
 Geht eine Vorgabe an der Wärmepumpe verloren (bei Dimplex etwa nach einem Spannungsreset), setzt die Integration sie nach fünf Minuten erneut und schreibt das ins Logbuch. Schlägt ein Schreiben fehl, steht der Grund im Logbuch und im Panel; der nächste Versuch folgt nach fünf Minuten.
 
@@ -348,9 +371,20 @@ Zu beachten:
 
 ## Entitäten und Dienste
 
-- `sensor.energy_hub_regelzustand`: `normal`, `boost` oder `setback`, mit Begründung (`reason`), Zeitpunkt (`since`) und Handbetrieb als Attributen.
+- `sensor.energy_hub_regelzustand`: `normal`, `boost`, `strong` (stark angehoben) oder `setback`, mit Begründung (`reason`), Zeitpunkt (`since`) und Handbetrieb als Attributen.
+- `binary_sensor.energy_hub_problem`: an, solange etwas die Regelung behindert; die Gründe in Klartext stehen im Attribut `problems`. Daraus baust du eine Benachrichtigung als normale Automation, etwa mit `for: "00:15:00"`.
 - `switch.energy_hub_automatik`: Automatik ein oder aus.
 - `energy_hub.set_override` (`mode`, optional `minutes`) und `energy_hub.clear_override`: Handbetrieb aus Automationen heraus.
+
+Der Problem-Sensor meldet:
+
+| Problem | Wann |
+|---|---|
+| Die Wärmepumpe hat die letzte Vorgabe nicht angenommen | Schreiben an die Stellgröße ist fehlgeschlagen, bis eine Vorgabe wieder klappt |
+| Der PV-Überschuss liefert keinen Wert | Sensor hinterlegt, aber länger als 3 min ohne Wert (Automatik an) |
+| Die Stellgröße ist nicht verfügbar | Smart-Grid-Auswahl oder Parallelverschiebung gewählt, Entität fehlt oder ist nicht verfügbar |
+| Die Wärmepumpe meldet keine Werte | Sensoren der Wärmepumpe hinterlegt, keiner hat einen Wert |
+| Die PV-Prognose liefert keinen Wert | Absenken an, Prognose hinterlegt, aber ohne Wert |
 
 Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einrichtung.
 

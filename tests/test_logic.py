@@ -328,3 +328,154 @@ def test_night_setback_not_before_a_dull_day():
 def test_reason_shows_no_negative_surplus():
     d = run(Inputs(NOON, surplus_w=-480, forecast_kwh=5))
     assert "Der PV-Überschuss von 0 W liegt unter" in d.reason and "-480" not in d.reason
+
+
+# --- Stark anheben ----------------------------------------------------------
+
+STRONG = logic.MODE_STRONG
+
+
+def test_strong_timer_runs_only_while_raised():
+    sunny = Inputs(NOON, surplus_w=2600)
+    assert logic.update_timers(Timers(), sunny, S, NORMAL).strong_since is None
+    t = logic.update_timers(Timers(), sunny, S, BOOST)
+    assert t.strong_since == NOON
+    later = NOON + timedelta(minutes=4)
+    assert logic.update_timers(t, Inputs(later, surplus_w=2100), S, BOOST).strong_since == NOON
+    assert logic.update_timers(t, Inputs(later, surplus_w=1900), S, BOOST).strong_since is None
+    off = Settings(strong_enabled=False)
+    assert logic.update_timers(Timers(), sunny, off, BOOST).strong_since is None
+
+
+def test_strong_after_delay_and_back_to_boost():
+    t = Timers(strong_since=NOON - timedelta(minutes=4))
+    d = run(Inputs(NOON, surplus_w=2600, balance_w=2600), t, mode=BOOST)
+    assert (d.mode, d.rule) == (BOOST, "boost_keep")
+    assert "stark angehoben wird nach 10 min" in d.reason
+
+    t = Timers(strong_since=NOON - timedelta(minutes=10))
+    d = run(Inputs(NOON, surplus_w=2600, balance_w=2600), t, mode=BOOST)
+    assert (d.mode, d.rule) == (STRONG, "strong")
+    assert d.reason == "Trotz Anheben sind seit 10 min mehr als 2.000 W übrig (aktuell 2.600 W)."
+
+    # Stark angehoben trägt die PV die Wärmepumpe nicht mehr, für einfaches Anheben reicht es: eine Stufe zurück
+    low = Timers(below_since=NOON - timedelta(minutes=15))
+    d = run(Inputs(NOON, surplus_w=0, balance_w=-700, available_w=2800, available_free_w=2800), low, mode=STRONG)
+    assert (d.mode, d.rule) == (BOOST, "strong_end")
+    assert d.reason.endswith("Für einfaches Anheben reicht es noch (aktuell 2.800 W für die Wärmepumpe übrig, nötig 1.500 W).")
+    # reicht es auch dafür nicht, endet das Anheben ganz
+    d = run(Inputs(NOON, surplus_w=0, balance_w=-700, available_w=900, available_free_w=900), low, mode=STRONG)
+    assert (d.mode, d.rule) == (NORMAL, "boost_end")
+
+    d = run(Inputs(NOON, surplus_w=900, balance_w=900), Timers(), mode=STRONG)
+    assert (d.mode, d.rule) == (STRONG, "boost_keep")
+
+
+def test_storage_ends_strong_like_boost():
+    s = Settings(storage_ready_c=40)
+    d = run(Inputs(NOON, surplus_w=3000, storage_c=55), Timers(), mode=STRONG, settings=s)
+    assert (d.mode, d.rule) == (NORMAL, "storage")
+
+
+# --- Einschalten nach dem, was für die Wärmepumpe übrig ist -----------------
+
+
+def test_heat_pump_draw_counts_as_available():
+    # Die Wärmepumpe läuft normal mit 1.600 W, eingespeist werden nur 400 W: die PV trägt sie trotzdem
+    inputs = Inputs(NOON, surplus_w=400, available_w=2000, available_free_w=2000)
+    t = logic.update_timers(Timers(), inputs, S)
+    assert t.above_since == NOON
+    d = run(inputs, Timers(above_since=NOON - timedelta(minutes=10)))
+    assert (d.mode, d.rule) == (BOOST, "boost")
+    assert d.reason == "Für die Wärmepumpe sind seit 10 min mehr als 1.500 W übrig (aktuell 2.000 W)."
+
+    d = run(Inputs(NOON, surplus_w=-200, available_w=900, available_free_w=900, forecast_kwh=3))
+    assert d.reason.startswith("Für die Wärmepumpe sind 900 W übrig, angehoben wird ab 1.500 W.")
+
+
+def test_learned_threshold_replaces_the_fixed_one():
+    inputs = Inputs(NOON, surplus_w=200, available_w=1300, available_free_w=1300, run_w=1250)
+    rule = logic.on_rule(inputs, S)
+    assert (rule.threshold, rule.learned) == (1250, True)
+    d = run(inputs, Timers(above_since=NOON - timedelta(minutes=10)))
+    assert d.mode == BOOST
+    assert d.reason == ("Für die Wärmepumpe sind seit 10 min mehr als 1.250 W übrig (aktuell 1.300 W). "
+                        "So viel zieht die Wärmepumpe im Lauf.")
+
+    fixed = Settings(boost_on_learned=False)
+    assert logic.on_rule(inputs, fixed).threshold == 1500
+    assert logic.update_timers(Timers(), inputs, fixed).above_since is None
+
+
+def test_battery_that_fills_anyway_lends_its_charge():
+    # Akku 10 kWh bei 60 %: es fehlen 4 kWh, vorhergesagt sind noch 9 kWh
+    base = dict(surplus_w=100, balance_w=2100, available_w=1700, available_free_w=3700,
+                battery_soc=60, battery_kwh=10)
+    assert logic.battery_missing_kwh(Inputs(NOON, **base)) == 4
+    sunny = Inputs(NOON, forecast_kwh=9, **base)
+    rule = logic.on_rule(sunny, S)
+    assert rule.fills and rule.value == 3700
+    d = run(sunny, Timers(above_since=NOON - timedelta(minutes=10)))
+    assert d.mode == BOOST
+    assert d.reason.endswith("Der Akku wird heute ohnehin voll, deshalb zählt auch seine Ladeleistung.")
+
+    dull = Inputs(NOON, forecast_kwh=7, **base)  # 7 kWh < 2 × 4 kWh: der Akku lädt zuerst
+    rule = logic.on_rule(dull, S)
+    assert not rule.fills and rule.value == 1700
+    # ohne gelernte Kapazität oder Ladestand bleibt es beim Vorrang des Akkus
+    assert not logic.battery_fills(Inputs(NOON, forecast_kwh=50, **{**base, "battery_kwh": None}))
+    assert not logic.battery_fills(Inputs(NOON, forecast_kwh=50, **{**base, "battery_soc": None}))
+
+
+def test_strong_counts_the_battery_when_it_fills_anyway():
+    base = dict(surplus_w=500, balance_w=2500, available_w=2000, available_free_w=4000,
+                battery_soc=90, battery_kwh=10)
+    assert logic.strong_value(Inputs(NOON, forecast_kwh=5, **base)) == 2500
+    assert logic.strong_value(Inputs(NOON, forecast_kwh=1, **base)) == 500
+
+
+# --- Lernen -----------------------------------------------------------------
+
+
+def test_learn_run_power_mean_then_sliding():
+    value, minutes = None, 0.0
+    for power in (1000, 2000):
+        value, minutes = logic.learn_run_power(value, minutes, power, 0.5)
+    assert value == 1500 and minutes == 1
+    assert logic.learned_run_w(value, minutes) is None  # zu wenig Laufzeit
+    # Stillstand und Umwälzpumpe zählen nicht
+    assert logic.learn_run_power(value, minutes, 120, 0.5) == (value, minutes)
+    assert logic.learn_run_power(value, minutes, None, 0.5) == (value, minutes)
+    for _ in range(58):
+        value, minutes = logic.learn_run_power(value, minutes, 1500, 0.5)
+    assert minutes == 30 and logic.learned_run_w(value, minutes) == 1500
+    # nach Monaten im Lauf folgt der Wert neuen Messungen nur langsam
+    value, minutes = 1500.0, 10000.0
+    value, minutes = logic.learn_run_power(value, minutes, 2100, 0.5)
+    assert 1500 < value < 1501
+    assert logic.learned_run_w(1523, 100) == 1500 and logic.learned_run_w(1530, 100) == 1550
+
+
+def test_capacity_from_charge_and_soc():
+    seg, est = logic.capacity_step(None, NOON, 40, 2000)
+    assert est is None and seg.soc == 40
+    now = NOON
+    estimates = []
+    for _ in range(12 * 6):  # 6 h mit 2 kW: 12 kWh
+        now += timedelta(minutes=5)
+        soc = 40 + (now - NOON).total_seconds() / 3600 * 2 / 10 * 100  # 10-kWh-Akku
+        seg, est = logic.capacity_step(seg, now, round(soc), 2000)
+        if est is not None:
+            estimates.append(est)
+    assert estimates and all(abs(e - 10) < 0.6 for e in estimates)
+
+    # Lücke: der Abschnitt beginnt neu
+    seg2, est = logic.capacity_step(seg, now + timedelta(minutes=30), 50, 2000)
+    assert est is None and seg2.start == now + timedelta(minutes=30) and seg2.kwh == 0
+    # ohne Ladestand keine Schätzung
+    assert logic.capacity_step(seg, now, None, 2000) == (None, None)
+
+    value, count = None, 0
+    for e in (10.0, 12.0, 11.0):
+        value, count = logic.learn_capacity(value, count, e)
+    assert count == 3 and value == 11

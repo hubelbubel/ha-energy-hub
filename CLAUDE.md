@@ -18,7 +18,7 @@ custom_components/energy_hub/
   config_flow.py    Einrichtung in 8 Schritten; Optionen zeigen dieselben Formulare
   websocket_api.py  Schnittstelle Panel ↔ Regler
   const.py          Konstanten, Standardwerte, VERSION, STORAGE_VERSION
-  sensor.py, switch.py, services.yaml
+  sensor.py, binary_sensor.py, switch.py, services.yaml
   frontend/energy-hub-panel.js   das ganze Panel (~4400 Zeilen), ES-Modul ohne Build-Schritt und ohne Abhängigkeiten
   translations/de.json, en.json  GENERIERT – nicht von Hand ändern
   brand/            icon.png, dark_icon.png (+@2x) – GENERIERT mit dev/brand.py, Quelle docs/logo.svg

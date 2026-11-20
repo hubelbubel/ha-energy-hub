@@ -23,12 +23,21 @@ from .logic import (
     MODE_LABEL,
     MODE_NORMAL,
     MODE_SETBACK,
+    MODE_STRONG,
     Decision,
     Inputs,
     Override,
+    Segment,
     Settings,
     Timers,
+    battery_fills,
+    battery_missing_kwh,
+    capacity_step,
     decide,
+    learn_capacity,
+    learn_run_power,
+    learned_run_w,
+    on_rule,
     ready_threshold,
     trim_samples,
     update_timers,
@@ -97,11 +106,14 @@ ENTITY_KEYS = (
 
 SETTING_KEYS = (
     c.CONF_BOOST_ON_W,
+    c.CONF_BOOST_ON_LEARNED,
     c.CONF_BOOST_ON_MIN,
     c.CONF_BOOST_OFF_W,
     c.CONF_BOOST_OFF_MIN,
     c.CONF_SMOOTHING_MIN,
     c.CONF_OFF_WITHOUT_BATTERY,
+    c.CONF_STRONG_ENABLED,
+    c.CONF_STRONG_ON_W,
     c.CONF_MIN_HOLD_MIN,
     c.CONF_SETBACK_ENABLED,
     c.CONF_SETBACK_START,
@@ -111,6 +123,7 @@ SETTING_KEYS = (
     c.CONF_SETBACK_MIN_DHW,
     c.CONF_ACTUATOR,
     c.CONF_SHIFT_BOOST_K,
+    c.CONF_SHIFT_STRONG_K,
     c.CONF_SHIFT_SETBACK_K,
     c.CONF_SURPLUS_SIGN,
     c.CONF_STORAGE_READY_DELTA_K,
@@ -122,6 +135,21 @@ SETTING_KEYS = (
     c.CONF_BATTERY_SIGN,
     c.CONF_TIGO_MPPT1,
     c.CONF_TIGO_MPPT2,
+)
+
+
+# Sensoren der Wärmepumpe: Liefert keiner einen Wert, meldet der Problem-Sensor das
+HEATPUMP_KEYS = (
+    c.CONF_ENT_FLOW,
+    c.CONF_ENT_RETURN,
+    c.CONF_ENT_RETURN_TARGET,
+    c.CONF_ENT_DHW,
+    c.CONF_ENT_DHW_TARGET,
+    c.CONF_ENT_OUTDOOR,
+    c.CONF_ENT_STATUS,
+    c.CONF_ENT_COMPRESSOR,
+    c.CONF_ENT_POWER_EL,
+    c.CONF_ENT_POWER_HEAT,
 )
 
 
@@ -143,9 +171,16 @@ class Controller:
         self._timers = Timers()
         self._decision = Decision(MODE_NORMAL, "Die Regelung startet.", "startup")
         self._inputs: Inputs | None = None
-        # Messwerte der letzten Minuten für Mittelwert und Lücken (nur im Arbeitsspeicher)
-        self._surplus_samples: list[tuple[datetime, float]] = []
-        self._balance_samples: list[tuple[datetime, float]] = []
+        # Messwerte der letzten Minuten für Mittelwert und Lücken (nur im Arbeitsspeicher):
+        # Überschuss, ohne Akku, für die Wärmepumpe übrig (Akku zuerst bzw. mit seiner Ladeleistung)
+        self._samples: dict[str, list[tuple[datetime, float]]] = {
+            "surplus": [], "balance": [], "available": [], "available_free": [],
+        }
+        # Lernen: Zeitpunkt der letzten Messung, letztes Speichern, laufender Abschnitt für die Kapazität
+        self._learn_at: datetime | None = None
+        self._learn_saved_at: datetime | None = None
+        self._segment: Segment | None = None
+        self._problems: list[str] = []
         self._aux: dict[str, Any] = {}
         self._retry_at: datetime | None = None
         self._last_apply: datetime | None = None
@@ -198,9 +233,12 @@ class Controller:
 
         return Settings(
             boost_on_w=float(o[c.CONF_BOOST_ON_W]),
+            boost_on_learned=bool(o[c.CONF_BOOST_ON_LEARNED]),
             boost_on_min=float(o[c.CONF_BOOST_ON_MIN]),
             boost_off_w=float(o[c.CONF_BOOST_OFF_W]),
             boost_off_min=float(o[c.CONF_BOOST_OFF_MIN]),
+            strong_enabled=bool(o[c.CONF_STRONG_ENABLED]),
+            strong_on_w=float(o[c.CONF_STRONG_ON_W]),
             min_hold_min=float(o[c.CONF_MIN_HOLD_MIN]),
             smoothing_min=float(o[c.CONF_SMOOTHING_MIN]),
             setback_enabled=bool(o[c.CONF_SETBACK_ENABLED]),
@@ -225,6 +263,11 @@ class Controller:
             "shift_base": None,
             "log": [],
             "pv_grid": {},
+            # Gelerntes: Leistung der Wärmepumpe im Lauf (W, Minuten Laufzeit), Kapazität des Akkus
+            "run_w": None,
+            "run_min": 0.0,
+            "battery_kwh": None,
+            "battery_n": 0,
             **stored,
         }
         if self._data["mode"] not in c.MODES:
@@ -301,11 +344,18 @@ class Controller:
             return None
         return value if self.options[c.CONF_BATTERY_SIGN] == c.BATTERY_CHARGE_POSITIVE else -value
 
-    def _read_surplus(self, now: datetime) -> tuple[float | None, float | None]:
-        """Überschuss und Überschuss ohne Akku, gemittelt; kurze Aussetzer überbrückt.
+    @property
+    def uses_available(self) -> bool:
+        """Wird „für die Wärmepumpe übrig“ gerechnet? Mit Leistung der Wärmepumpe oder Akku."""
+        return bool(self.options.get(c.CONF_ENT_POWER_EL)) or self.off_without_battery
 
-        Der Überschuss ohne Akku ist None, wenn er nicht gebraucht wird. Fehlt nur der
-        Wert des Akkus, zählt für diesen Zeitpunkt der Überschuss.
+    def _read_surplus(self, now: datetime) -> dict[str, float | None]:
+        """Überschuss, ohne Akku und für die Wärmepumpe übrig, gemittelt; kurze Aussetzer überbrückt.
+
+        Für die Wärmepumpe übrig ist der Überschuss plus ihre eigene Leistung; Entladen des
+        Akkus zählt dabei nicht als übrig, Laden nur in der Reihe „available_free“. Was nicht
+        gebraucht wird, ist None. Fehlt nur der Wert des Akkus oder der Wärmepumpe, zählt er
+        für diesen Zeitpunkt als 0.
         """
         o = self.options
         smoothing = float(o[c.CONF_SMOOTHING_MIN])
@@ -313,25 +363,74 @@ class Controller:
         if surplus is not None:
             if o[c.CONF_SURPLUS_SIGN] == c.SIGN_EXPORT_NEGATIVE:
                 surplus = -surplus
-            charge = self._charge_w() if self.off_without_battery else None
-            self._surplus_samples.append((now, surplus))
-            self._balance_samples.append((now, surplus + (charge or 0.0)))
+            charge = (self._charge_w() if self.off_without_battery else None) or 0.0
+            heat_pump = self._power_w(c.CONF_ENT_POWER_EL) or 0.0
+            values = {
+                "surplus": surplus,
+                "balance": surplus + charge,
+                "available": surplus + heat_pump + min(0.0, charge),
+                "available_free": surplus + heat_pump + charge,
+            }
+            for key, value in values.items():
+                self._samples[key].append((now, value))
         keep = max(smoothing, c.SURPLUS_GAP_MINUTES)
-        self._surplus_samples = trim_samples(self._surplus_samples, now, keep)
-        self._balance_samples = trim_samples(self._balance_samples, now, keep)
         gap = c.SURPLUS_GAP_MINUTES
-        mean = window_mean(self._surplus_samples, now, smoothing, gap)
-        balance = window_mean(self._balance_samples, now, smoothing, gap) if self.off_without_battery else None
-        return mean, balance
+        used = {
+            "surplus": True,
+            "balance": self.off_without_battery,
+            "available": self.uses_available,
+            "available_free": self.uses_available,
+        }
+        out: dict[str, float | None] = {}
+        for key, samples in self._samples.items():
+            self._samples[key] = trim_samples(samples, now, keep)
+            out[key] = window_mean(self._samples[key], now, smoothing, gap) if used[key] else None
+        return out
+
+    def _learn(self, now: datetime) -> None:
+        """Lernt die Leistung der Wärmepumpe im Lauf und die Kapazität des Akkus."""
+        last, self._learn_at = self._learn_at, now
+        dt_min = 0.0 if last is None else min(1.0, max(0.0, (now - last).total_seconds() / 60))
+        data = self._data
+        data["run_w"], data["run_min"] = learn_run_power(
+            data.get("run_w"), float(data.get("run_min") or 0.0), self._power_w(c.CONF_ENT_POWER_EL), dt_min
+        )
+        soc = self._number(c.CONF_ENT_BATTERY_SOC)[0]
+        self._segment, estimate = capacity_step(self._segment, now, soc, self._charge_w())
+        if estimate is not None:
+            data["battery_kwh"], data["battery_n"] = learn_capacity(
+                data.get("battery_kwh"), int(data.get("battery_n") or 0), estimate
+            )
+            _LOGGER.debug("Kapazität des Akkus geschätzt: %.1f kWh", estimate)
+        if self._learn_saved_at is None or now - self._learn_saved_at >= timedelta(minutes=c.LEARN_SAVE_MINUTES):
+            self._learn_saved_at = now
+            self._save()
+
+    @property
+    def run_w(self) -> float | None:
+        """Gelernte Leistung der Wärmepumpe im Lauf, sobald genug Laufzeit beisammen ist."""
+        return learned_run_w(self._data.get("run_w"), float(self._data.get("run_min") or 0.0))
+
+    @property
+    def battery_kwh(self) -> float | None:
+        """Gelernte Kapazität des Akkus, auf 0,1 kWh gerundet."""
+        value = self._data.get("battery_kwh")
+        return None if value is None else round(float(value), 1)
 
     def _read_inputs(self) -> Inputs:
         now = dt_util.now()
-        surplus, balance = self._read_surplus(now)
+        power = self._read_surplus(now)
+        self._learn(now)
         self._aux = self._read_aux()
         return Inputs(
             now=now,
-            surplus_w=surplus,
-            balance_w=balance,
+            surplus_w=power["surplus"],
+            balance_w=power["balance"],
+            available_w=power["available"],
+            available_free_w=power["available_free"],
+            run_w=self.run_w,
+            battery_soc=self._number(c.CONF_ENT_BATTERY_SOC)[0],
+            battery_kwh=self.battery_kwh,
             forecast_kwh=self._energy_kwh(c.CONF_ENT_FORECAST_TODAY),
             forecast_tomorrow_kwh=self._energy_kwh(c.CONF_ENT_FORECAST_TOMORROW),
             outdoor_c=self._number(c.CONF_ENT_OUTDOOR)[0],
@@ -399,6 +498,7 @@ class Controller:
             "values": {
                 "surplus_w": inputs.surplus_w if inputs else None,
                 "balance_w": inputs.balance_w if inputs else None,
+                "available_w": self._on_value(inputs),
                 "forecast_kwh": inputs.forecast_kwh if inputs else None,
                 "forecast_tomorrow_kwh": inputs.forecast_tomorrow_kwh if inputs else None,
                 "outdoor_c": inputs.outdoor_c if inputs else None,
@@ -480,11 +580,25 @@ class Controller:
                 _LOGGER.exception("Auswertung fehlgeschlagen")
             self._notify()
 
+    def _on_value(self, inputs: Inputs | None) -> float | None:
+        """Was für die Wärmepumpe übrig ist, so wie die Regel es gerade zählt; None ohne diese Rechnung."""
+        if inputs is None or inputs.available_w is None:
+            return None
+        rule = on_rule(inputs, self._settings())
+        return rule.value if rule else None
+
     async def _evaluate(self) -> None:
         inputs = self._inputs = self._read_inputs()
         now = inputs.now
         settings = self._settings()
-        self._timers = update_timers(self._timers, inputs, settings)
+        self._timers = update_timers(self._timers, inputs, settings, self.mode)
+        try:
+            await self._decide_and_apply(inputs, settings)
+        finally:
+            self._problems = self._find_problems()
+
+    async def _decide_and_apply(self, inputs: Inputs, settings: Settings) -> None:
+        now = inputs.now
 
         override = self.override
         if override and override.until and now >= override.until:
@@ -551,21 +665,62 @@ class Controller:
             detail=detail,
         )
 
-    # --------------------------------------------------------------- Stellgröße
-    def _smart_grid_option(self, mode: str) -> str:
+    # ----------------------------------------------------------------- Probleme
+    @property
+    def problems(self) -> list[str]:
+        """Was gerade nicht stimmt, in Klartext; leer, wenn alles läuft."""
+        return list(self._problems)
+
+    def _missing(self, key: str) -> bool:
+        entity_id = self.options.get(key)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, "")
+
+    def _find_problems(self) -> list[str]:
+        """Probleme, die die Regelung behindern. Grundlage des Problem-Sensors."""
         o = self.options
-        return str(
+        out: list[str] = []
+        if self._last_error:
+            out.append(f"Die Wärmepumpe hat die letzte Vorgabe nicht angenommen: {self._last_error}")
+        if o.get(c.CONF_ENT_SURPLUS) and self._decision.rule == "no_data":
+            out.append(f"Der PV-Überschuss ({o[c.CONF_ENT_SURPLUS]}) liefert keinen Wert.")
+        actuator = o[c.CONF_ACTUATOR]
+        key = {c.ACT_SMART_GRID: c.CONF_ENT_SMART_GRID, c.ACT_SHIFT: c.CONF_ENT_SHIFT}.get(actuator)
+        if key and self._missing(key):
+            out.append(f"Die Stellgröße ({o.get(key) or 'nicht eingestellt'}) ist nicht verfügbar.")
+        heat_pump = [k for k in HEATPUMP_KEYS if o.get(k)]
+        if heat_pump and all(self._missing(k) for k in heat_pump):
+            out.append("Die Wärmepumpe meldet keine Werte.")
+        if o[c.CONF_SETBACK_ENABLED] and o.get(c.CONF_ENT_FORECAST_TODAY) and self._missing(c.CONF_ENT_FORECAST_TODAY):
+            out.append(f"Die PV-Prognose ({o[c.CONF_ENT_FORECAST_TODAY]}) liefert keinen Wert.")
+        return out
+
+    # --------------------------------------------------------------- Stellgröße
+    def _smart_grid_option(self, mode: str, offered: list[str] | None = None) -> str:
+        """Option der Smart-Grid-Auswahl für einen Zustand.
+
+        Gibt es die Option für „Stark anheben“ in der Auswahl nicht (offered), gilt die für
+        „Anheben“: Nicht jede Wärmepumpe kennt eine zweite Stufe.
+        """
+        o = self.options
+        option = str(
             {
                 MODE_NORMAL: o[c.CONF_OPT_NORMAL],
                 MODE_BOOST: o[c.CONF_OPT_BOOST],
+                MODE_STRONG: o[c.CONF_OPT_STRONG],
                 MODE_SETBACK: o[c.CONF_OPT_SETBACK],
             }[mode]
         )
+        if mode == MODE_STRONG and offered is not None and option not in offered:
+            return str(o[c.CONF_OPT_BOOST])
+        return option
 
     def _shift_target(self, mode: str, base: float) -> float:
         o = self.options
         if mode == MODE_BOOST:
             return base + float(o[c.CONF_SHIFT_BOOST_K])
+        if mode == MODE_STRONG:
+            return base + float(o[c.CONF_SHIFT_STRONG_K])
         if mode == MODE_SETBACK:
             return base - float(o[c.CONF_SHIFT_SETBACK_K])
         return base
@@ -577,7 +732,8 @@ class Controller:
             state = self.hass.states.get(o.get(c.CONF_ENT_SMART_GRID) or "")
             if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
                 return None, ""
-            return state.state == self._smart_grid_option(mode), state.state
+            offered = list(state.attributes.get("options") or [])
+            return state.state == self._smart_grid_option(mode, offered), state.state
         if o[c.CONF_ACTUATOR] == c.ACT_SHIFT:
             base = self._data.get("shift_base")
             if mode == MODE_NORMAL or base is None:
@@ -602,8 +758,9 @@ class Controller:
                 state = self.hass.states.get(entity_id)
                 if state is None or state.state == STATE_UNAVAILABLE:
                     return "failed", f"{entity_id} ist nicht verfügbar."
-                option = self._smart_grid_option(mode)
-                if option not in (state.attributes.get("options") or []):
+                offered = list(state.attributes.get("options") or [])
+                option = self._smart_grid_option(mode, offered)
+                if option not in offered:
                     return "failed", f"Die Option „{option}“ gibt es bei {entity_id} nicht."
                 await self.hass.services.async_call(
                     "select",
@@ -611,7 +768,10 @@ class Controller:
                     {"entity_id": entity_id, "option": option},
                     blocking=True,
                 )
-                return "sent", f"{entity_id} → {option}"
+                detail = f"{entity_id} → {option}"
+                if option != self._smart_grid_option(mode):
+                    detail += f" (die Option „{self._smart_grid_option(mode)}“ gibt es nicht)"
+                return "sent", detail
 
             entity_id = o.get(c.CONF_ENT_SHIFT)
             if not entity_id:
@@ -661,9 +821,21 @@ class Controller:
                 "retry_at": _iso(self._retry_at),
                 "above_since": _iso(self._timers.above_since),
                 "below_since": _iso(self._timers.below_since),
+                "strong_since": _iso(self._timers.strong_since),
+                "on": self._on_snapshot(inputs),
+                "learned": {
+                    "run_w": self.run_w,
+                    "run_min": round(float(self._data.get("run_min") or 0.0), 1),
+                    "battery_kwh": self.battery_kwh,
+                    "battery_n": int(self._data.get("battery_n") or 0),
+                },
+                "problems": self.problems,
                 "inputs": {
                     "surplus_w": inputs.surplus_w if inputs else None,
                     "balance_w": inputs.balance_w if inputs else None,
+                    "available_w": inputs.available_w if inputs else None,
+                    "available_free_w": inputs.available_free_w if inputs else None,
+                    "battery_soc": inputs.battery_soc if inputs else None,
                     "forecast_kwh": inputs.forecast_kwh if inputs else None,
                     "forecast_tomorrow_kwh": inputs.forecast_tomorrow_kwh if inputs else None,
                     "outdoor_c": inputs.outdoor_c if inputs else None,
@@ -678,3 +850,19 @@ class Controller:
         if with_log:
             data["log"] = list(reversed(self._data["log"]))
         return data
+
+    def _on_snapshot(self, inputs: Inputs | None) -> dict[str, Any] | None:
+        """Die Einschaltregel fürs Panel: Wert, Schwelle und woher beides kommt."""
+        if inputs is None:
+            return None
+        rule = on_rule(inputs, self._settings())
+        if rule is None:
+            return None
+        return {
+            "value_w": rule.value,
+            "threshold_w": rule.threshold,
+            "available": rule.available,
+            "learned": rule.learned,
+            "battery_fills": battery_fills(inputs),
+            "battery_missing_kwh": battery_missing_kwh(inputs),
+        }

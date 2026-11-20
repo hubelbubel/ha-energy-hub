@@ -24,7 +24,12 @@ const DURATIONS = [
   { minutes: 480, label: "8 Stunden" },
   { minutes: null, label: "bis ich es beende" },
 ];
-const MODE_NAME = { normal: "Normalbetrieb", boost: "Anheben", setback: "Absenken" };
+const MODE_NAME = { normal: "Normalbetrieb", boost: "Anheben", strong: "Stark anheben", setback: "Absenken" };
+// Zustände, in denen die Heizung angehoben ist, und wie der Eingriff in Verlauf und Tabelle heißt
+const RAISED = ["boost", "strong"];
+// Kurze Namen für die Knöpfe „Von Hand“ auf schmalen Bildschirmen
+const MODE_SHORT = { normal: "Normal", boost: "Anheben", strong: "Stark", setback: "Absenken" };
+const MODE_DONE = { normal: "keiner", boost: "angehoben", strong: "stark angehoben", setback: "abgesenkt" };
 const SERIES = [
   { key: "flow", ent: "ent_flow", name: "Vorlauf", cls: "s-flow" },
   { key: "return", ent: "ent_return", name: "Rücklauf", cls: "s-return" },
@@ -341,9 +346,10 @@ export function csvCell(v) {
 
 export function entryTitle(e) {
   if (e.kind === "switch") {
-    if (e.to === "boost") return "Angehoben";
+    if (e.to === "strong") return "Stark angehoben";
+    if (e.to === "boost") return e.from === "strong" ? "Zurück auf Anheben" : "Angehoben";
     if (e.to === "setback") return "Abgesenkt";
-    if (e.from === "boost") return "Anheben beendet";
+    if (e.from === "boost" || e.from === "strong") return "Anheben beendet";
     if (e.from === "setback") return "Absenken beendet";
     return "Normalbetrieb";
   }
@@ -388,7 +394,7 @@ export function buildExport({ version, created, t0, step, n, columns, log, setti
     "texte: Zustand am Ende des Rasters",
     "_anteil: Anteil der Zeit im Zustand Ein (0 bis 1); _starts: Einschaltvorgänge im Raster",
     "pv_ueberschuss_w: positiv = Überschuss",
-    "regelzustand: normal, boost (angehoben) oder setback (abgesenkt)",
+    "regelzustand: normal, boost (angehoben), strong (stark angehoben) oder setback (abgesenkt)",
     "ereignisse: Logbuch-Einträge im Raster, mehrere durch | getrennt",
     ...Object.entries(settings || {}).map(([k, v]) => `einstellung.${k}: ${v ?? ""}`),
     ...columns.map((col) => `spalte.${col.name}: ${col.entity || "nicht hinterlegt"}${col.unit ? ` [${col.unit}]` : ""}`),
@@ -445,7 +451,7 @@ export const HOUR_HEADER = [
   "warmwasser_c", "warmwasser_soll_c", "verdichter_min", "verdichter_starts", "status_min",
   "heizstab_min", "zweiter_waermeerzeuger_min", "strom_aus_leistung_kwh", "waerme_aus_leistung_kwh",
   "strom_zaehler_kwh", "waerme_heizen_zaehler_kwh", "waerme_warmwasser_zaehler_kwh",
-  "umweltenergie_zaehler_kwh", "pv_ueberschuss_kwh", "netzbezug_kwh", "angehoben_min", "abgesenkt_min",
+  "umweltenergie_zaehler_kwh", "pv_ueberschuss_kwh", "netzbezug_kwh", "angehoben_min", "stark_angehoben_min", "abgesenkt_min",
   "speicher_c", "kamin_c", "kamin_min", "speicher_bereit_min", "sperre_regenerativ_min", "speicher_entnahmen",
 ];
 export const DRAW_HEADER = [
@@ -492,7 +498,7 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3, opts =
   const hours = Array.from({ length: n }, () => ({
     outdoor: [0, 0], dhw: [0, 0], retTarget: [0, 0], dhwTarget: [0, 0], flowOn: [0, 0], retOn: [0, 0],
     flowMax: null, compMs: null, starts: null, status: new Map(), heaterMs: null, secondMs: null,
-    elWh: null, heatWh: null, pvWh: null, gridWh: null, boostMs: null, setbackMs: null, end: {}, first: {},
+    elWh: null, heatWh: null, pvWh: null, gridWh: null, boostMs: null, strongMs: null, setbackMs: null, end: {}, first: {},
     storage: [0, 0], fireplace: [0, 0], fireMs: null, readyMs: null, drawMs: null, draws: null,
   }));
   const draws = [];
@@ -571,7 +577,8 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3, opts =
       h.gridWh = (h.gridWh ?? 0) + (Math.max(0, -surplus) * dt) / 3.6e6;
     }
     if (!isGap(mode)) {
-      h.boostMs = (h.boostMs ?? 0) + (mode === "boost" ? dt : 0);
+      h.boostMs = (h.boostMs ?? 0) + (RAISED.includes(mode) ? dt : 0);
+      h.strongMs = (h.strongMs ?? 0) + (mode === "strong" ? dt : 0);
       h.setbackMs = (h.setbackMs ?? 0) + (mode === "setback" ? dt : 0);
     }
     const storage = num(values, "storage");
@@ -652,7 +659,7 @@ export function analyseEfficiency(data, factors, t0, tEnd, step = 3600e3, opts =
     mean(h.dhw), mean(h.dhwTarget), min(h.compMs), h.starts, statusText(h.status),
     min(h.heaterMs), min(h.secondMs), kwh(h.elWh), kwh(h.heatWh),
     delta(b, "eEl"), delta(b, "eHeat"), delta(b, "eDhw"), delta(b, "eEnv"),
-    kwh(h.pvWh), kwh(h.gridWh), min(h.boostMs), min(h.setbackMs),
+    kwh(h.pvWh), kwh(h.gridWh), min(h.boostMs), min(h.strongMs), min(h.setbackMs),
     mean(h.storage), mean(h.fireplace), min(h.fireMs), min(h.readyMs), min(h.drawMs), h.draws,
   ]);
   return { hourRows, cycleRows: cycles, drawRows: draws, has };
@@ -680,6 +687,7 @@ export function buildEfficiencyExport({ version, created, t0, step, analysis, se
     "strom_aus_leistung_kwh, waerme_aus_leistung_kwh: aus den Leistungs-Sensoren aufsummiert",
     "_zaehler_kwh: Zunahme des Zähler-Sensors in der Stunde",
     "pv_ueberschuss_kwh: aufsummierter positiver Anteil des Überschuss-Sensors; netzbezug_kwh: aufsummierter negativer Anteil",
+    "angehoben_min: beide Stufen zusammen; stark_angehoben_min: davon die zweite Stufe",
     "verdichterlaeufe: eine Zeile je Lauf; betriebsart = Betriebsstatus mit dem größten Zeitanteil; strom_kwh und waerme_kwh aus den Leistungs-Sensoren",
     "kamin_min: Minuten mit Kamin über der Schwelle",
     "speicher_bereit_min: Minuten mit Speicher mindestens einstellung.storage_ready_delta_k über ruecklauf_soll; ohne Rücklaufsoll gilt einstellung.storage_ready_c",
@@ -768,6 +776,53 @@ export function usesBalance(settings, entities) {
  */
 export function balanceSeries(surplus, charge) {
   return surplus.map((v, i) => (v === null ? null : v + (charge?.[i] ?? 0)));
+}
+
+/**
+ * Für die Wärmepumpe übrig je Raster, so wie die Regelung einschaltet: Überschuss plus Leistung
+ * der Wärmepumpe; Entladen des Akkus zählt nicht als übrig (charge: Laden positiv). Fehlt ein
+ * Wert der Wärmepumpe oder des Akkus, zählt er als 0, wie im Regler.
+ */
+export function availableSeries(surplus, wp, charge) {
+  return surplus.map((v, i) => (v === null ? null : v + (wp?.[i] ?? 0) + Math.min(0, charge?.[i] ?? 0)));
+}
+
+/**
+ * Woher der Strom der Wärmepumpe kam, in kWh, über die Raster i0 bis i1 einer Bilanz
+ * (energyBalance). Vorsichtig gerechnet: Was das Haus gerade aus dem Netz bezog, zählt zuerst
+ * bei der Wärmepumpe, danach Strom aus dem Akku; erst der Rest gilt als Solarstrom. Raster ohne
+ * Netzwert bleiben außen vor. modes (optional, je Raster) trennt die Zeit, in der angehoben war.
+ * Liefert { wp, pv, bat, grid, raised: { wp, pv, bat, grid, min } }, null, wo nichts bekannt ist.
+ */
+export function heatPumpSupply(bal, stepMs, i0 = 0, i1 = bal.wp.length, modes = null) {
+  const factor = stepMs / 3.6e9;
+  const zero = () => ({ wp: null, pv: null, bat: null, grid: null });
+  const all = zero();
+  const raised = { ...zero(), min: modes ? 0 : null };
+  const add = (sum, key, v) => { sum[key] = (sum[key] ?? 0) + v * factor; };
+  for (let b = Math.max(0, i0); b < Math.min(bal.wp.length, i1); b++) {
+    const up = Boolean(modes && RAISED.includes(modes[b]));
+    if (up) raised.min += stepMs / 60000;
+    const wp = bal.wp[b];
+    if (!isNum(wp) || !isNum(bal.imp[b])) continue;
+    const grid = Math.min(wp, bal.imp[b]);
+    const bat = Math.min(wp - grid, bal.dis[b] ?? 0);
+    const parts = { wp, grid, bat, pv: wp - grid - bat };
+    for (const [key, v] of Object.entries(parts)) {
+      add(all, key, v);
+      if (up) add(raised, key, v);
+    }
+  }
+  return { ...all, raised };
+}
+
+/** Herkunft als Text: „3,1 kWh vom Dach, 0,4 aus dem Akku, 1,2 aus dem Netz“. */
+export function supplyText(sup, withBattery = true) {
+  if (!isNum(sup?.wp)) return "";
+  const parts = [`${nf1.format(sup.pv)} kWh vom Dach`];
+  if (withBattery) parts.push(`${nf1.format(sup.bat)} aus dem Akku`);
+  parts.push(`${nf1.format(sup.grid)} aus dem Netz`);
+  return parts.join(", ");
 }
 
 /**
@@ -937,14 +992,13 @@ export function powerFindings(bal, soc, names, stepMs, t0) {
       text: `Zwischen 1 und 5 Uhr braucht das Haus ohne Wärmepumpe und Wallbox im Mittel ${nf0.format(base)} W. Über den Tag sind das ${kwh((base * 24) / 1000)}.` });
   }
 
-  // Wärmepumpe: wie viel davon das Dach zeitgleich liefern konnte
-  if (total.wp >= 1 && total.pv !== null) {
-    let solar = 0;
-    for (let b = 0; b < n; b++) solar += Math.min(bal.wp[b] ?? 0, bal.pv[b] ?? 0) * factor;
-    const share = clamp01(solar / total.wp);
+  // Wärmepumpe: woher ihr Strom kam, vorsichtig gerechnet (siehe heatPumpSupply)
+  const sup = heatPumpSupply(bal, stepMs);
+  if (total.wp >= 1 && sup.wp > 0) {
+    const share = clamp01(sup.pv / sup.wp);
     out.push({ tone: share >= 0.5 ? "good" : "info", area: "Strom",
-      title: share >= 0.5 ? "Die Wärmepumpe läuft überwiegend bei Sonne" : `Wärmepumpe: bis zu ${fmtPct(share)} Solarstrom`,
-      text: `Die Wärmepumpe brauchte ${kwh(total.wp)}, das sind ${fmtPct(total.wp / total.cons)} des Verbrauchs. Bis zu ${fmtPct(share)} davon konnte das Dach zeitgleich liefern.` });
+      title: share >= 0.5 ? "Die Wärmepumpe läuft überwiegend mit Solarstrom" : `Wärmepumpe: ${fmtPct(share)} Solarstrom`,
+      text: `Die Wärmepumpe brauchte ${kwh(sup.wp)}, das sind ${fmtPct(total.wp / total.cons)} des Verbrauchs: ${supplyText(sup, bal.dis.some(isNum))}. Was das Haus zugleich aus Netz oder Akku bezog, zählt zuerst bei der Wärmepumpe.` });
   }
 
   // Einzelne Verbraucher, die überwiegend mit Netzstrom laufen, obwohl Solarstrom eingespeist wurde
@@ -971,6 +1025,8 @@ export function powerFindings(bal, soc, names, stepMs, t0) {
 /**
  * Auffälligkeiten bei der Wärme aus den Summen eines Zeitraums.
  * agg: { days, starts, cycles, meanRunMin, elKwh, heatKwh, heaterMin, draws, drawMin, boostMin, dryRun }
+ * Dazu, wenn bekannt: raised (Herkunft des Stroms beim Anheben, siehe heatPumpSupply) und battery
+ * (ein Akku ist hinterlegt).
  */
 export function heatFindings(agg) {
   const out = [];
@@ -1008,6 +1064,14 @@ export function heatFindings(agg) {
   if (agg.boostMin > 0 && agg.dryRun) {
     out.push({ tone: "info", area: "Wärme", title: "Im Probebetrieb hätte die Regelung angehoben",
       text: `Zusammen ${fmtDur(agg.boostMin)}. Gesendet wurde nichts.` });
+  } else if (agg.boostMin > 0 && agg.raised?.wp >= 0.5) {
+    // Beim Anheben soll die Wärmepumpe vom Dach laufen; kommt viel aus Netz oder Akku, ist die Schwelle zu niedrig
+    const r = agg.raised;
+    const share = clamp01(r.pv / r.wp);
+    out.push({ tone: share >= 0.7 ? "good" : share < 0.4 ? "warn" : "info", area: "Wärme",
+      title: `Beim Anheben ${fmtPct(share)} Solarstrom`,
+      text: `Die Heizung war ${fmtDur(agg.boostMin)} angehoben. Die Wärmepumpe brauchte dabei ${kwh(r.wp)}: ${supplyText(r, agg.battery !== false)}.`
+        + (share < 0.4 ? " Kommt beim Anheben viel aus Netz oder Akku, ist die Schwelle zum Anheben zu niedrig." : "") });
   } else if (agg.boostMin > 0) {
     out.push({ tone: "good", area: "Wärme", title: "PV-Überschuss floss in die Heizung",
       text: `Die Heizung war ${fmtDur(agg.boostMin)} angehoben.` });
@@ -1622,6 +1686,12 @@ h2 { margin: 0 0 14px; font-size: 16px; font-weight: 500; }
 .seg button + button { border-left: 1px solid var(--rule); }
 .seg button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--plane); }
+.seg button[hidden] { display: none; }
+.seg.modes .short { display: none; }
+@media (max-width: 520px) {
+  .seg.modes .long { display: none; }
+  .seg.modes .short { display: inline; }
+}
 select { padding: 7px 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); font-size: 14px; }
 .plain { padding: 7px 12px; border: 1px solid var(--rule); border-radius: 8px; background: transparent; cursor: pointer; font-size: 14px; }
 .plain:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
@@ -1693,12 +1763,15 @@ button.info[aria-expanded="true"] { background: var(--ink); border-color: var(--
 .plots .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .plots .line.thin { stroke-width: 1.5; }
 .plots .line.dash { stroke-dasharray: 5 4; }
+.plots .line.dot { stroke-dasharray: 0.5 3.5; stroke-linecap: round; stroke-width: 2.5; }
 .key i.dash, .tip .line.dash i { border-top-style: dashed; }
+.key i.dot, .tip .line.dot i { border-top-style: dotted; border-top-width: 3px; }
 .plots .area { fill: var(--c-pv); opacity: 0.12; stroke: none; }
 .plots .ref { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 4; }
 .plots path.ref { fill: none; }
 .plots .ref-label { fill: var(--ink-2); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
 .plots .block { fill: var(--ink); opacity: 0.72; }
+.plots .block.strong { opacity: 1; }
 .plots .lane { stroke: var(--rule); stroke-width: 1; }
 .cross { position: absolute; top: 0; bottom: 22px; width: 1px; background: var(--ink); opacity: 0.5; pointer-events: none; display: none; }
 .tip { position: absolute; top: 4px; z-index: 2; min-width: 190px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14); font-size: 13px; pointer-events: none; display: none; }
@@ -2080,12 +2153,13 @@ class EnergyHubPanel extends HTMLElement {
     $.autoText = h("span", { class: "switch-text" });
 
     $.modes = {};
-    const seg = h("div", { class: "seg", role: "group", "aria-label": "Von Hand" });
-    for (const mode of ["normal", "boost", "setback"]) {
+    const seg = h("div", { class: "seg modes", role: "group", "aria-label": "Von Hand" });
+    for (const mode of ["normal", "boost", "strong", "setback"]) {
       $.modes[mode] = h("button", {
         "aria-pressed": "false",
+        "aria-label": MODE_NAME[mode],
         onclick: () => this._call("set_override", { mode, minutes: this._duration }),
-      }, MODE_NAME[mode]);
+      }, h("span", { class: "long" }, MODE_NAME[mode]), h("span", { class: "short" }, MODE_SHORT[mode]));
       seg.append($.modes[mode]);
     }
     $.duration = h("select", {
@@ -2324,6 +2398,7 @@ class EnergyHubPanel extends HTMLElement {
     for (const [mode, btn] of Object.entries($.modes)) {
       btn.setAttribute("aria-pressed", String(st.override?.mode === mode));
     }
+    $.modes.strong.hidden = !snap.settings.strong_enabled && st.override?.mode !== "strong";
     $.endOverride.hidden = !st.override;
 
     // Anlagenschema
@@ -2397,20 +2472,34 @@ class EnergyHubPanel extends HTMLElement {
     const { state: st, entities: cfg, settings: set } = this._snap;
     const items = [];
     if (cfg.ent_pv_surplus) {
+      const on = st.on || null;
+      const raised = RAISED.includes(st.mode);
       const above = minutesSince(st.above_since);
       const below = minutesSince(st.below_since);
+      const strongFor = minutesSince(st.strong_since);
       const balance = usesBalance(set, cfg);
       const mean = Number(set.smoothing_min) > 0 ? `Mittel ${nf0.format(set.smoothing_min)} min` : "";
       const off = Number(set.boost_off_w);
-      const belowHint = below === null || st.mode !== "boost" ? ""
+      const limit = fmtW(on ? on.threshold_w : set.boost_on_w);
+      const belowHint = below === null || !raised ? ""
         : balance || off >= 0 ? `seit ${below} min unter ${fmtW(off)}`
         : `seit ${below} min über ${fmtW(-off)} Netzbezug`;
-      const aboveHint = above !== null ? `seit ${above} min über ${fmtW(set.boost_on_w)}` : "";
-      const hint = [mean, aboveHint || (balance ? "" : belowHint)].filter(Boolean).join(", ");
-      items.push(["PV-Überschuss", fmtW(shownSurplus(st.inputs.surplus_w)), hint]);
+      const aboveHint = above !== null && !raised ? `seit ${above} min über ${limit}` : "";
+      const strongHint = st.mode !== "boost" || !set.strong_enabled ? ""
+        : strongFor !== null ? `seit ${strongFor} min über ${fmtW(set.strong_on_w)}`
+        : `stark anheben ab ${fmtW(set.strong_on_w)}`;
+      if (on?.available) {
+        items.push(["PV-Überschuss", fmtW(shownSurplus(st.inputs.surplus_w)), [mean, strongHint].filter(Boolean).join(", ")]);
+        const avHint = raised ? "" : aboveHint || `Anheben ab ${limit}${on.learned ? ", gelernt" : ""}`;
+        items.push(["Für die Wärmepumpe übrig", fmtW(shownSurplus(on.value_w)),
+          [avHint, on.battery_fills ? "mit Ladeleistung, der Akku wird ohnehin voll" : ""].filter(Boolean).join(", ")]);
+      } else {
+        const hint = [mean, aboveHint || strongHint || (balance ? "" : belowHint)].filter(Boolean).join(", ");
+        items.push(["PV-Überschuss", fmtW(shownSurplus(st.inputs.surplus_w)), hint]);
+      }
       if (balance) {
         items.push(["Überschuss ohne Akku", fmtW(st.inputs.balance_w),
-          belowHint || (st.mode === "boost" ? `Anheben endet unter ${fmtW(set.boost_off_w)}` : "entscheidet, wann das Anheben endet")]);
+          belowHint || (raised ? `Anheben endet unter ${fmtW(set.boost_off_w)}` : "entscheidet, wann das Anheben endet")]);
       }
     }
     if (cfg.ent_forecast_today) items.push(["Prognose Rest heute", fmtKwh(st.inputs.forecast_kwh)]);
@@ -2418,6 +2507,16 @@ class EnergyHubPanel extends HTMLElement {
     const el = this._value("ent_power_el", "power");
     const heat = this._value("ent_power_heat", "power");
     if (cfg.ent_power_el) items.push(["Strom Wärmepumpe", fmtKw(el)]);
+    const sup = this._wpSupply?.day === this._day ? this._wpSupply : null;
+    if (sup && isNum(sup.wp) && sup.wp > 0) {
+      const battery = Boolean(cfg.ent_battery_power);
+      items.push([`Wärmepumpe ${this._dayWord()}`, `${nf1.format(sup.wp)} kWh`, supplyText(sup, battery)]);
+      const r = sup.raised;
+      if (isNum(r.wp) && r.wp > 0) {
+        items.push([`Beim Anheben ${this._dayWord()}`, `${nf1.format(r.wp)} kWh`,
+          `${fmtPct(clamp01(r.pv / r.wp))} vom Dach, ${fmtDur(r.min)} angehoben${st.dry_run ? " (nur im Probebetrieb)" : ""}`]);
+      }
+    }
     if (cfg.ent_power_heat) items.push(["Heizleistung", fmtKw(heat)]);
     if (isNum(el) && isNum(heat) && el >= 200 && heat > 0) {
       items.push(["Leistungszahl", nf1.format(heat / el), "Wärme je Strom, Momentanwert"]);
@@ -2452,14 +2551,41 @@ class EnergyHubPanel extends HTMLElement {
     const mean = Number(set.smoothing_min) > 0
       ? ` Gerechnet wird mit dem Mittel der letzten ${nf0.format(set.smoothing_min)} min.`
       : "";
+    const st = this._snap.state;
+    const cfg = this._snap.entities;
+    const learned = st.learned || {};
+    const available = Boolean(cfg.ent_power_el) || usesBalance(set, cfg);
+    const threshold = st.on ? st.on.threshold_w : Number(set.boost_on_w);
+    let on = available
+      ? `Angehoben wird, wenn für die Wärmepumpe ${nf0.format(set.boost_on_min)} min lang mehr als ${fmtW(threshold)} übrig sind.`
+      : `Angehoben wird, wenn der PV-Überschuss ${nf0.format(set.boost_on_min)} min lang über ${fmtW(threshold)} liegt.`;
+    if (st.on?.learned) {
+      on += ` So viel zieht sie im Lauf, gelernt aus ${fmtDur(learned.run_min)} Laufzeit.`;
+    } else if (set.boost_on_learned && cfg.ent_power_el) {
+      on += ` Sobald Energy Hub aus 30 min Laufzeit gelernt hat, wie viel die Wärmepumpe zieht, gilt dieser Wert (bisher ${fmtDur(learned.run_min || 0)}).`;
+    }
+    if (available) {
+      on += cfg.ent_power_el
+        ? " Übrig ist der Überschuss plus das, was die Wärmepumpe gerade selbst zieht."
+        : " Übrig ist der Überschuss.";
+      if (usesBalance(set, cfg)) on += " Der Akku lädt zuerst, Strom aus ihm zählt nicht.";
+    }
     const parts = [
-      `Angehoben wird, wenn der PV-Überschuss ${nf0.format(set.boost_on_min)} min lang über ${fmtW(set.boost_on_w)} liegt.${mean}`,
+      `${on}${mean}`,
       usesBalance(set, this._snap.entities)
         ? `Das Anheben endet, wenn der Überschuss ohne Akku ${nf0.format(set.boost_off_min)} min lang unter ${fmtW(set.boost_off_w)} liegt. Das ist der Überschuss plus die Ladeleistung des Akkus: Das Anheben läuft, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste.`
         : Number(set.boost_off_w) < 0
           ? `Das Anheben endet, wenn ${nf0.format(set.boost_off_min)} min lang mehr als ${fmtW(-Number(set.boost_off_w))} aus dem Netz kommen.`
           : `Das Anheben endet, wenn er ${nf0.format(set.boost_off_min)} min lang unter ${fmtW(set.boost_off_w)} liegt.`,
     ];
+    if (usesBalance(set, cfg) && cfg.ent_battery_soc) {
+      parts.push(isNum(learned.battery_kwh)
+        ? `Der Akku fasst rund ${fmtKwh(learned.battery_kwh)}, gelernt aus Ladung und Ladestand. Reicht die Prognose für den Rest des Tages für das Doppelte dessen, was ihm zum Vollladen fehlt, zählt auch seine Ladeleistung als übrig.`
+        : "Sobald Energy Hub die Kapazität des Akkus aus Ladung und Ladestand gelernt hat, zählt auch seine Ladeleistung als übrig, wenn er laut Prognose ohnehin voll wird.");
+    }
+    if (set.strong_enabled) {
+      parts.push(`Stark angehoben wird, wenn beim Anheben ${nf0.format(set.boost_on_min)} min lang noch mehr als ${fmtW(set.strong_on_w)} übrig sind. Trägt die PV das nicht mehr, geht es zurück auf einfaches Anheben, solange es dafür reicht.`);
+    }
     if (set.setback_enabled) {
       const overnight = String(set.setback_start).slice(0, 5) > String(set.setback_end).slice(0, 5);
       const conds = [overnight
@@ -2481,7 +2607,7 @@ class EnergyHubPanel extends HTMLElement {
     parts.push({
       dry_run: "Eingriff: keiner, die Regelung läuft im Probebetrieb.",
       smart_grid: "Eingriff: Smart-Grid-Zustand der Wärmepumpe.",
-      parallel_shift: `Eingriff: Parallelverschiebung der Heizkurve, +${nf0.format(set.shift_boost_k)} K beim Anheben und −${nf0.format(set.shift_setback_k)} K beim Absenken.`,
+      parallel_shift: `Eingriff: Parallelverschiebung der Heizkurve, +${nf0.format(set.shift_boost_k)} K beim Anheben${set.strong_enabled ? `, +${nf0.format(set.shift_strong_k)} K beim starken Anheben` : ""} und −${nf0.format(set.shift_setback_k)} K beim Absenken.`,
     }[set.actuator]);
     const key = parts.join("|");
     if (key === this._rulesKey) return;
@@ -2501,6 +2627,7 @@ class EnergyHubPanel extends HTMLElement {
 
   _entryGlyph(e) {
     const d = e.kind === "error" ? "M7 1 L13 13 H1 Z M6.2 5.5 h1.6 v3.6 h-1.6 Z M6.2 10 h1.6 v1.6 h-1.6 Z"
+      : e.kind === "switch" && e.to === "strong" ? "M7 0.5 L12.5 6.5 H1.5 Z M7 6.5 L12.5 12.5 H1.5 Z"
       : e.kind === "switch" && e.to === "boost" ? "M7 2 L12.5 11 H1.5 Z"
       : e.kind === "switch" && e.to === "setback" ? "M7 12 L1.5 3 H12.5 Z"
       : e.kind === "switch" ? "M2 6 H12 V8 H2 Z"
@@ -2513,6 +2640,7 @@ class EnergyHubPanel extends HTMLElement {
     const v = e.values || {};
     const bits = [];
     if (isNum(v.surplus_w)) bits.push(`Überschuss ${fmtW(shownSurplus(v.surplus_w))}`);
+    if (isNum(v.available_w)) bits.push(`für die Wärmepumpe übrig ${fmtW(shownSurplus(v.available_w))}`);
     if (isNum(v.balance_w)) bits.push(`ohne Akku ${fmtW(v.balance_w)}`);
     if (isNum(v.forecast_kwh) && isNum(v.forecast_tomorrow_kwh)) {
       bits.push(`Prognose heute ${fmtKwh(v.forecast_kwh)}, morgen ${fmtKwh(v.forecast_tomorrow_kwh)}`);
@@ -2861,6 +2989,7 @@ class EnergyHubPanel extends HTMLElement {
     }
     if (!st.automation) return "Die Automatik ist aus. Die Heizung läuft normal.";
     if (st.mode === "boost") return `Die Heizung ist seit ${since} angehoben.`;
+    if (st.mode === "strong") return `Die Heizung ist seit ${since} stark angehoben.`;
     if (st.mode === "setback") return `Die Heizung ist seit ${since} abgesenkt.`;
     return "Die Heizung läuft im Normalbetrieb.";
   }
@@ -3082,6 +3211,26 @@ class EnergyHubPanel extends HTMLElement {
     return { t0, t1, n, step, day, bal, balE, counters: used, missing, soc: pick(src.soc, false), names: consumers.map((id) => this._name(id)) };
   }
 
+  /**
+   * Woher der Strom der Wärmepumpe am gezeigten Tag kam (ab Raster i0), mit dem Anteil beim
+   * Anheben aus dem Verlauf des Regelzustands. Ohne Leistung der Wärmepumpe null.
+   */
+  async _wpSupplyFor(en, i0) {
+    const snap = this._snap;
+    if (!snap.entities.ent_power_el) return null;
+    const id = snap.state.state_entity_id;
+    let modes = null;
+    if (id) {
+      try {
+        const rows = await this._history(id, en.t0, en.t1);
+        if (rows.length) modes = stepText(rows, en.t0, en.step, en.n, Math.min(en.t1, Date.now()));
+      } catch (_err) {
+        modes = null; // ohne Verlauf des Regelzustands nur die Summe des Tages
+      }
+    }
+    return heatPumpSupply(en.bal, en.step, i0, en.n, modes);
+  }
+
   /** 48 Stunden bis zum Ende des gezeigten Tages; daraus die Kennwerte des Tages und seine Stunden. */
   async _loadEnergy() {
     if (!this._snap || !this._hass?.callWS || !this._hasPower()) {
@@ -3098,6 +3247,10 @@ class EnergyHubPanel extends HTMLElement {
       this._today = energyTotals(en.balE, en.step, i0, en.n); // Kennwerte des gezeigten Tages
       this._hours = hourlyMix(en.balE, en.t0, en.step, start);
       this._renderToday();
+      const supply = await this._wpSupplyFor(en, i0);
+      if (day !== this._day) return;
+      this._wpSupply = supply && { ...supply, day };
+      this._queueRender();
       this._drawHours();
       this._drawPower();
       if (this._tab === "pv") this._renderPv();
@@ -3127,9 +3280,10 @@ class EnergyHubPanel extends HTMLElement {
     if (!snap || !this._hass?.callWS) return;
     this._analysisAt = Date.now();
     const findings = [];
+    let week = null;
     try {
       if (this._hasPower()) {
-        const week = await this._energySet(168, 300e3, "5minute", null); // immer die letzten 7 Tage
+        week = await this._energySet(168, 300e3, "5minute", null); // immer die letzten 7 Tage
         findings.push(...powerFindings(week.bal, week.soc, { consumers: week.names, wallbox: "Wallbox" }, week.step, week.t0));
       }
     } catch (_err) {
@@ -3142,7 +3296,7 @@ class EnergyHubPanel extends HTMLElement {
       // ohne Daten von Wechselrichter und Optimierern gibt es keine PV-Auswertung
     }
     try {
-      if (this._hasHeatPump()) findings.push(...heatFindings(await this._heatWeek()));
+      if (this._hasHeatPump()) findings.push(...heatFindings(await this._heatWeek(week)));
     } catch (_err) {
       // ohne Verlauf der Wärmepumpe gibt es keine Wärme-Auswertung
     }
@@ -3150,8 +3304,11 @@ class EnergyHubPanel extends HTMLElement {
     this._renderFindings();
   }
 
-  /** Summen der Wärmepumpe über 7 Tage, berechnet wie im Effizienz-Export. */
-  async _heatWeek() {
+  /**
+   * Summen der Wärmepumpe über 7 Tage, berechnet wie im Effizienz-Export. Mit der Strombilanz
+   * derselben Tage (week) dazu, woher der Strom beim Anheben kam.
+   */
+  async _heatWeek(week = null) {
     const snap = this._snap;
     const cfg = snap.entities;
     const now = Date.now();
@@ -3188,6 +3345,10 @@ class EnergyHubPanel extends HTMLElement {
       drawMin: a.drawRows.reduce((total, row) => total + row[DRAW_HEADER.indexOf("dauer_min")], 0),
       boostMin: sum("angehoben_min"),
       dryRun: snap.state.dry_run,
+      raised: week && data.mode
+        ? heatPumpSupply(week.bal, week.step, 0, week.n, stepText(data.mode, week.t0, week.step, week.n, Math.min(week.t1, now))).raised
+        : null,
+      battery: Boolean(cfg.ent_battery_power),
     };
   }
 
@@ -5030,6 +5191,7 @@ class EnergyHubPanel extends HTMLElement {
     const numeric = [
       { key: "surplus", id: cfg.ent_pv_surplus }, ...SERIES.map((x) => ({ key: x.key, id: cfg[x.ent] })),
       { key: "charge", id: cfg.ent_pv_surplus && usesBalance(snap.settings, cfg) ? cfg.ent_battery_power : null },
+      { key: "wp", id: cfg.ent_pv_surplus ? cfg.ent_power_el : null },
       { key: "storage", id: cfg.ent_storage }, { key: "fireplace", id: cfg.ent_fireplace },
       { key: "retTarget", id: cfg.ent_storage ? cfg.ent_return_target : null },
     ].filter((x) => x.id);
@@ -5087,12 +5249,17 @@ class EnergyHubPanel extends HTMLElement {
         factor = { kw: 1000, mw: 1e6 }[unit] || 1;
         if (snap.settings.battery_sign !== "charge_positive") factor = -factor;
       }
+      if (key === "wp") factor = { kw: 1000, mw: 1e6 }[unit] || 1;
       chart.series[key] = this._bucket(raw[id] || [], t0, step, n, factor);
     }
     if (chart.series.surplus && chart.series.charge) {
       chart.series.balance = balanceSeries(chart.series.surplus, chart.series.charge);
     }
+    if (chart.series.surplus && (chart.series.wp || chart.series.charge)) {
+      chart.series.available = availableSeries(chart.series.surplus, chart.series.wp, chart.series.charge);
+    }
     delete chart.series.charge;
+    delete chart.series.wp;
     if (modeId) {
       let i = 0;
       let current = null;
@@ -5100,7 +5267,7 @@ class EnergyHubPanel extends HTMLElement {
       for (let b = 0; b < n; b++) {
         const edge = t0 + (b + 1) * step;
         while (i < rows.length && rows[i][0] <= edge) current = rows[i++][1];
-        chart.modes[b] = ["normal", "boost", "setback"].includes(current) ? current : null;
+        chart.modes[b] = current in MODE_DONE ? current : null;
       }
     }
     if (lockId && raw[lockId]?.length) { // ohne Verlauf (früherer Tag, schon gelöscht) keine Zeile „liefert“
@@ -5200,18 +5367,21 @@ class EnergyHubPanel extends HTMLElement {
       return svg;
     };
 
-    // 1. PV-Überschuss
+    // 1. PV-Überschuss, für die Wärmepumpe übrig (gepunktet) und ohne Akku (gestrichelt)
     const surplus = chart.series.surplus?.map(shownSurplus);
     if (surplus && surplus.some((v) => v !== null)) {
       const balance = chart.series.balance;
-      const vals = [...surplus, ...(balance || [])].filter((v) => v !== null);
+      const avail = chart.series.available?.map(shownSurplus);
+      const onW = Number(snap.state.on ? snap.state.on.threshold_w : set.boost_on_w);
+      const vals = [...surplus, ...(balance || []), ...(avail || [])].filter((v) => v !== null);
       // Die Ausschaltschwelle unter 0 gehört zur gestrichelten Linie; ohne sie bleibt die Achse ab 0
       const lo = Math.min(0, ...vals, balance ? Number(set.boost_off_w) * 1.25 : 0);
-      const hi = Math.max(...vals, Number(set.boost_on_w) * 1.25, 500);
+      const hi = Math.max(...vals, onW * 1.25, 500);
       nodes.push(h("div", { class: "plot-title" }, h("b", {}, "PV-Überschuss in Watt"),
-        balance ? [
+        balance || avail ? [
           h("span", { class: "key s-pv" }, h("i", {}), h("span", {}, "Überschuss")),
-          h("span", { class: "key s-pv" }, h("i", { class: "dash" }), h("span", {}, "ohne Akku")),
+          avail ? h("span", { class: "key s-pv" }, h("i", { class: "dot" }), h("span", {}, "für die Wärmepumpe übrig")) : null,
+          balance ? h("span", { class: "key s-pv" }, h("i", { class: "dash" }), h("span", {}, "ohne Akku")) : null,
         ] : null));
       nodes.push(plot(150, lo, hi, 4, (svg, y) => {
         const line = path(surplus, y);
@@ -5221,14 +5391,24 @@ class EnergyHubPanel extends HTMLElement {
             s("path", { d: `${line}L${x(chart.n - 1).toFixed(1)} ${y(0)}L${x(first).toFixed(1)} ${y(0)}Z`, class: "area" }),
             s("path", { d: line, class: "line s-pv" }));
         }
+        const aline = avail ? path(avail, y) : "";
+        if (aline) svg.append(s("path", { d: aline, class: "line s-pv dot" }));
         const bline = balance ? path(balance, y) : "";
         if (bline) svg.append(s("path", { d: bline, class: "line s-pv thin dash" }));
         const endLabel = balance ? "Ende ohne Akku unter" : "Ende unter";
-        for (const [value, label] of [[set.boost_on_w, "Anheben ab"], [set.boost_off_w, endLabel]]) {
+        const refs = [[onW, "Anheben ab"], [set.boost_off_w, endLabel]];
+        if (set.strong_enabled) refs.push([set.strong_on_w, "Stark ab"]);
+        // Liegen zwei Schwellen dicht beieinander, steht die zweite Beschriftung links
+        const used = [];
+        for (const [value, label] of refs) {
           if (!isNum(Number(value)) || value < lo || value > hi) continue;
+          const yy = y(value);
+          const left = used.some((u) => Math.abs(u - yy) < 14);
+          used.push(yy);
           svg.append(
-            s("line", { x1: M.l, x2: W - M.r, y1: y(value), y2: y(value), class: "ref" }),
-            s("text", { x: W - M.r, y: y(value) - 5, class: "ref-label", "text-anchor": "end" }, `${label} ${fmtW(Number(value))}`));
+            s("line", { x1: M.l, x2: W - M.r, y1: yy, y2: yy, class: "ref" }),
+            s("text", { x: left ? M.l + 4 : W - M.r, y: yy - 5, class: "ref-label", "text-anchor": left ? "start" : "end" },
+              `${label} ${fmtW(Number(value))}`));
         }
       }));
     }
@@ -5312,10 +5492,12 @@ class EnergyHubPanel extends HTMLElement {
       const mode = chart.modes[b];
       let e = b;
       while (e + 1 < chart.n && chart.modes[e + 1] === mode) e++;
-      if (mode === "boost" || mode === "setback") {
+      if (RAISED.includes(mode) || mode === "setback") {
         const x0 = M.l + (b / chart.n) * iw;
         const x1 = M.l + ((e + 1) / chart.n) * iw;
-        strip.append(s("rect", { x: x0, y: mode === "boost" ? mid - 18 : mid + 1, width: Math.max(1.5, x1 - x0), height: 17, class: "block" }));
+        // stark angehoben: höher und kräftiger als einfach angehoben
+        const box = mode === "strong" ? { y: mid - 22, height: 21 } : mode === "boost" ? { y: mid - 18, height: 17 } : { y: mid + 1, height: 17 };
+        strip.append(s("rect", { x: x0, ...box, width: Math.max(1.5, x1 - x0), class: mode === "strong" ? "block strong" : "block" }));
       }
       b = e + 1;
     }
@@ -5329,7 +5511,9 @@ class EnergyHubPanel extends HTMLElement {
       strip.append(s("text", { x: xt(t), y: stripH - 6, class: "tick", "text-anchor": "middle" }, label));
     }
     nodes.push(h("div", { class: "plot-title" }, h("b", {}, "Eingriffe"),
-      h("span", {}, "Balken nach oben: angehoben. Balken nach unten: abgesenkt.")));
+      h("span", {}, set.strong_enabled || chart.modes.includes("strong")
+        ? "Balken nach oben: angehoben, höher und kräftiger: stark angehoben. Balken nach unten: abgesenkt."
+        : "Balken nach oben: angehoben. Balken nach unten: abgesenkt.")));
     nodes.push(strip);
 
     if (nodes.length <= 2 && !chart.modes.some(Boolean)) {
@@ -5352,6 +5536,7 @@ class EnergyHubPanel extends HTMLElement {
       const when = new Date(chart.t0 + (i + 0.5) * chart.step);
       const lines = [];
       if (chart.series.surplus) lines.push(["s-pv", "PV-Überschuss", fmtW(shownSurplus(chart.series.surplus[i]))]);
+      if (chart.series.available) lines.push(["s-pv dot", "für die Wärmepumpe übrig", fmtW(shownSurplus(chart.series.available[i]))]);
       if (chart.series.balance) lines.push(["s-pv dash", "ohne Akku", fmtW(chart.series.balance[i])]);
       for (const sr of SERIES) {
         if (chart.series[sr.key]) lines.push([sr.cls, sr.name, fmtC(chart.series[sr.key][i])]);
@@ -5369,7 +5554,7 @@ class EnergyHubPanel extends HTMLElement {
         h("div", { class: "when" }, `${tfShortDay.format(when)}, ${tfTime.format(when)} Uhr`),
         ...lines.map(([cls, name, value]) => h("div", { class: `line ${cls}` }, h("i", {}), h("span", {}, name), h("b", {}, value))),
         ...states.map(([name, value]) => h("div", { class: "line" }, h("span", {}, name), h("b", {}, value))),
-        h("div", { class: "line" }, h("span", {}, "Eingriff"), h("b", {}, mode ? { normal: "keiner", boost: "angehoben", setback: "abgesenkt" }[mode] : "–")));
+        h("div", { class: "line" }, h("span", {}, "Eingriff"), h("b", {}, mode ? MODE_DONE[mode] : "–")));
       tip.style.display = "block";
       const tw = tip.offsetWidth;
       tip.style.left = `${x(i) + 14 + tw > W ? Math.max(0, x(i) - 14 - tw) : x(i) + 14}px`;
@@ -5394,6 +5579,7 @@ class EnergyHubPanel extends HTMLElement {
     const per = Math.max(1, Math.round(3600e3 / chart.step));
     const cols = [];
     if (chart.series.surplus) cols.push(["PV-Überschuss", (i) => fmtW(shownSurplus(chart.series.surplus[i]))]);
+    if (chart.series.available) cols.push(["für die Wärmepumpe übrig", (i) => fmtW(shownSurplus(chart.series.available[i]))]);
     if (chart.series.balance) cols.push(["ohne Akku", (i) => fmtW(chart.series.balance[i])]);
     for (const sr of SERIES) {
       if (chart.series[sr.key]) cols.push([sr.name, (i) => fmtC(chart.series[sr.key][i])]);
@@ -5408,7 +5594,7 @@ class EnergyHubPanel extends HTMLElement {
       rows.push(h("tr", {},
         h("td", {}, `${tfShortDay.format(when)} ${tfTime.format(when)}`),
         cols.map(([, get]) => h("td", {}, get(i))),
-        h("td", {}, mode ? { normal: "–", boost: "angehoben", setback: "abgesenkt" }[mode] : "")));
+        h("td", {}, mode && mode !== "normal" ? MODE_DONE[mode] : mode ? "–" : "")));
     }
     this.$.table.replaceChildren(h("table", {},
       h("thead", {}, h("tr", {}, h("th", {}, "Zeit"), cols.map(([name]) => h("th", {}, name)), h("th", {}, "Eingriff"))),

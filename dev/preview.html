@@ -24,7 +24,7 @@
   Vorschau des Panels ohne Home Assistant, mit erfundenen Beispieldaten.
   Start:  python3 -m http.server 8000   (im Hauptordner des Repositories)
   Dann:   http://localhost:8000/dev/preview.html
-  Parameter: ?theme=dark  ?mode=normal|boost|setback|override|empty  ?tab=overview|power|pv|heat
+  Parameter: ?theme=dark  ?mode=normal|boost|strong|setback|override|empty  ?tab=overview|power|pv|heat
              ?ohne=wp,speicher,regelung,strom,batterie,wallbox,wr,tigo  (diese Teile sind nicht hinterlegt)
              ?weg=wp  (Wärmepumpe hinterlegt, aber nicht erreichbar, etwa ohne Modbus-Karte)
              ?ohneverlauf=netz  (Sensor hat einen Wert, aber keinen Verlauf, etwa vom Recorder ausgeschlossen)
@@ -207,13 +207,14 @@
   const extra = ["sensor.wp_statuscode", "binary_sensor.wp_heizungspumpe_m13"];
   const st = (state, unit) => ({ state: String(state), attributes: { unit_of_measurement: unit } });
   const running = scene !== "normal";
+  const strong = scene === "strong";
   const states = {
     [ent.ent_flow]: st(running ? 36.4 : 29.1, "°C"), [ent.ent_return]: st(running ? 31.2 : 28.6, "°C"),
-    [ent.ent_return_target]: st(scene === "boost" ? 33.0 : 30.5, "°C"), [ent.ent_dhw]: st(48.3, "°C"),
-    [ent.ent_dhw_target]: st(scene === "boost" ? 55 : 48, "°C"), [ent.ent_outdoor]: st(6.4, "°C"),
+    [ent.ent_return_target]: st(scene === "boost" || strong ? 33.0 : 30.5, "°C"), [ent.ent_dhw]: st(48.3, "°C"),
+    [ent.ent_dhw_target]: st(scene === "boost" || strong ? 55 : 48, "°C"), [ent.ent_outdoor]: st(6.4, "°C"),
     [ent.ent_status]: st(running ? "Heizen" : "Aus"), [ent.ent_compressor]: st(running ? "on" : "off"),
-    [ent.ent_power_el]: st(running ? 1840 : 40, "W"), [ent.ent_power_heat]: st(running ? 7350 : 0, "W"),
-    [ent.ent_pv_surplus]: st(2140, "W"), [ent.ent_forecast_today]: st(11.8, "kWh"),
+    [ent.ent_power_el]: st(strong ? 2650 : running ? 1840 : 40, "W"), [ent.ent_power_heat]: st(strong ? 9100 : running ? 7350 : 0, "W"),
+    [ent.ent_pv_surplus]: st(strong ? 1150 : 2140, "W"), [ent.ent_forecast_today]: st(11.8, "kWh"),
     [ent.ent_forecast_tomorrow]: st(19.4, "kWh"),
     [ent.ent_storage]: st(fireNow ? 58.4 : 36.2, "°C"), [ent.ent_lock]: st(fireNow ? "Regenerativ" : "Keine"),
     [ent.ent_fireplace]: st(fireNow ? 246 : 28, "°C"), [ent.ent_fireplace_status]: st(fireNow ? "Heizbetrieb" : "Standby"),
@@ -236,10 +237,14 @@
   Object.assign(ent, pw, inv);
 
   const log = scene === "empty" ? [] : [
+    ...(strong ? [{ ts: iso(now - 12 * 60e3), kind: "switch", from: "boost", to: "strong", result: "sent",
+      detail: "select.wp_smart_grid_setzen → Verstärkt Stufe 3 (dunkelgrün)",
+      text: "Trotz Anheben sind seit 10 min mehr als 2.000 W übrig (im 5-Minuten-Mittel 2.380 W).",
+      values: { surplus_w: 2380, balance_w: 2380, available_w: 4220, forecast_kwh: 10.9, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 47.6 } }] : []),
     { ts: iso(now - 38 * 60e3), kind: "switch", from: "normal", to: "boost", result: "sent",
       detail: "select.wp_smart_grid_setzen → Verstärkter Betrieb (grün)",
-      text: "Der PV-Überschuss liegt seit 10 min über 1.500 W (im 5-Minuten-Mittel 2.140 W).",
-      values: { surplus_w: 2140, balance_w: 2140, forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 46.1 } },
+      text: "Für die Wärmepumpe sind seit 10 min mehr als 1.650 W übrig (im 5-Minuten-Mittel 2.180 W). So viel zieht die Wärmepumpe im Lauf.",
+      values: { surplus_w: 2140, balance_w: 2140, available_w: 2180, forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 46.1 } },
     { ts: iso(now - 150 * 60e3), kind: "switch", from: "setback", to: "normal", result: "sent",
       detail: "select.wp_smart_grid_setzen → Normalbetrieb (gelb)",
       text: `Der PV-Überschuss von 420 W im 5-Minuten-Mittel liegt unter der Einschaltschwelle von 1.500 W. Abgesenkt wird nur ${night ? "21:00–10:00" : "05:00–10:00"} Uhr.`,
@@ -259,9 +264,11 @@
     { ts: iso(now - 30 * 3600e3), kind: "automation", text: "Automatik eingeschaltet.", values: {} },
   ];
 
-  const mode = { boost: "boost", setback: "setback", override: "setback" }[scene] || "normal";
+  const mode = { boost: "boost", strong: "strong", setback: "setback", override: "setback" }[scene] || "normal";
+  const surplusNow = scene === "empty" ? null : night ? -20 : strong ? 1150 : 2140;
+  const wpNow = strong ? 2650 : running ? 1840 : 40;
   const snapshot = {
-    version: "0.6.0",
+    version: "0.7.0",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"
@@ -271,29 +278,38 @@
           ...Object.fromEntries(Object.keys(inv).map((key) => [key, null])) }
       : ent,
     settings: {
-      boost_on_w: 1500, boost_on_min: 10, boost_off_w: -300, boost_off_min: 15, min_hold_min: 20,
-      smoothing_min: 5, off_without_battery: true,
+      boost_on_w: 1500, boost_on_learned: true, boost_on_min: 10, boost_off_w: -300, boost_off_min: 15, min_hold_min: 20,
+      smoothing_min: 5, off_without_battery: true, strong_enabled: true, strong_on_w: 2000,
       setback_enabled: true, setback_start: night ? "21:00:00" : "05:00:00", setback_end: "10:00:00",
       setback_min_forecast_kwh: 10, setback_min_outdoor_c: 3, setback_min_dhw_c: 42,
-      actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_setback_k: 2,
+      actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_strong_k: 4, shift_setback_k: 2,
       surplus_sign: "surplus_positive",
       grid_sign: "import_positive", battery_sign: "discharge_positive", tigo_string_mppt1: null, tigo_string_mppt2: null,
       storage_ready_delta_k: 5, storage_ready_c: 40, storage_blocks_boost: true, fireplace_on_c: 80, lock_regen_value: "Regenerativ",
     },
     state: {
-      mode, since: iso(now - 38 * 60e3), automation: true, dry_run: scene === "empty",
+      mode, since: iso(now - (strong ? 12 : 38) * 60e3), automation: true, dry_run: scene === "empty",
       override: scene === "override" ? { mode: "setback", until: iso(now + 95 * 60e3) } : null,
       reason: {
-        boost: "Der Überschuss ohne Akku reicht weiter aus (im 5-Minuten-Mittel 1.860 W). Beendet wird unter -300 W für 15 min.",
+        boost: "Der Überschuss ohne Akku reicht weiter aus (im 5-Minuten-Mittel 1.860 W). Beendet wird unter -300 W für 15 min. Trotz Anheben sind seit 3 min mehr als 2.000 W übrig; stark angehoben wird nach 10 min.",
+        strong: "Der Überschuss ohne Akku reicht weiter aus (im 5-Minuten-Mittel 1.150 W). Beendet wird unter -300 W für 15 min.",
         setback: night
           ? "Für morgen sind 19,4 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (21:00–10:00 Uhr) auf eigenen Strom."
           : "Für den Rest des Tages sind 11,8 kWh PV-Ertrag vorhergesagt. Die Heizung wartet im Absenkfenster (05:00–10:00 Uhr) auf eigenen Strom.",
-        normal: "Der PV-Überschuss liegt erst seit 4 min über 1.500 W (im 5-Minuten-Mittel 2.140 W); angehoben wird nach 10 min. Abgesenkt wird nur 05:00–10:00 Uhr.",
+        normal: "Für die Wärmepumpe sind erst seit 4 min mehr als 1.650 W übrig (im 5-Minuten-Mittel 2.180 W); angehoben wird nach 10 min. So viel zieht die Wärmepumpe im Lauf. Abgesenkt wird nur 05:00–10:00 Uhr.",
       }[mode],
       rule: "boost_keep", state_entity_id: "sensor.energy_hub_regelzustand", last_error: null, retry_at: null,
-      above_since: scene === "empty" || night ? null : iso(now - 48 * 60e3), below_since: null,
-      inputs: { surplus_w: scene === "empty" ? null : night ? -20 : 2140, balance_w: scene === "empty" ? null : night ? -640 : 1860,
-        forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 48.3 },
+      above_since: scene === "empty" || night ? null : iso(now - (scene === "normal" ? 4 : 48) * 60e3), below_since: null,
+      strong_since: scene === "boost" ? iso(now - 3 * 60e3) : null,
+      on: scene === "empty" ? null : {
+        value_w: night ? 0 : surplusNow + wpNow, threshold_w: 1650, available: true, learned: true,
+        battery_fills: false, battery_missing_kwh: 2.4,
+      },
+      learned: { run_w: 1650, run_min: 842, battery_kwh: scene === "empty" ? null : 5.1, battery_n: 6 },
+      problems: [],
+      inputs: { surplus_w: surplusNow, balance_w: scene === "empty" ? null : night ? -640 : strong ? 1150 : 1860,
+        available_w: scene === "empty" ? null : night ? -20 + wpNow : surplusNow + wpNow,
+        forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 48.3, battery_soc: 52 },
     },
     log, log_rev: 1,
   };
@@ -341,20 +357,23 @@
       const sun = Math.max(0, Math.sin(((hour - 7.5) / 9.5) * Math.PI));
       const cloud = 0.75 + 0.25 * Math.sin(t / 9e5) * Math.cos(t / 23e5);
       const boost = hour > 11.2 && hour < 15.4;
+      const strongNow = hour > 12.5 && hour < 13.6;
       const setback = hour >= 5 && hour < 9.5;
       const cyc = Math.sin(t / 26e5);
       const fire = hour >= 17.5 && hour < 21.5;
       const storeTemp = fire ? 36 + (hour - 17.5) * 8.5 : 70 - ((hour + 24 - 21.5) % 24) * 1.9;
       let v;
-      if (id === ent.ent_pv_surplus) v = Math.round(sun * cloud * 3900 - 350);
+      // Überschuss am Netzanschluss: die Wärmepumpe zieht ihn herunter, wenn sie läuft
+      const wpW = cyc > -0.3 ? 1800 + 300 * cyc + (strongNow ? 800 : 0) : 40;
+      if (id === ent.ent_pv_surplus) v = Math.round(sun * cloud * 5200 - 350 - wpW);
       else if (id === ent.ent_outdoor) v = 3 + 5 * Math.max(0, Math.sin(((hour - 6) / 14) * Math.PI));
       else if (id === ent.ent_flow) v = (boost ? 36 : setback ? 27.5 : 31.5) + 2.4 * cyc;
       else if (id === ent.ent_return) v = (boost ? 31.5 : setback ? 25.5 : 28.3) + 1.6 * cyc;
       else if (id === ent.ent_dhw) v = boost ? 44 + (hour - 11.2) * 2.6 : 50.5 - ((hour + 24 - 15.4) % 24) * 0.42;
-      else if (id === snapshot.state.state_entity_id) v = boost ? "boost" : setback ? "setback" : "normal";
+      else if (id === snapshot.state.state_entity_id) v = strongNow ? "strong" : boost ? "boost" : setback ? "setback" : "normal";
       else if (id === ent.ent_compressor) v = cyc > -0.3 ? "on" : "off";
       else if (id === ent.ent_status) v = cyc > -0.3 ? (hour > 12 && hour < 13 ? "Warmwasser" : "Heizen") : "Aus";
-      else if (id === ent.ent_power_el) v = cyc > -0.3 ? 1800 + 300 * cyc : 40;
+      else if (id === ent.ent_power_el) v = wpW;
       else if (id === ent.ent_power_heat) v = cyc > -0.3 ? 7200 + 800 * cyc : 0;
       else if (id === ent.ent_heater) v = hour >= 13 && hour < 13.2 ? "on" : "off";
       else if (id === ent.ent_energy_heat) v = 5000 + Math.floor((t / 3600e3) * 3.1) % 100000;
@@ -368,7 +387,7 @@
         if (nowSim[id]?.[k] === undefined) continue;
         v = nowSim[id][k];
       }
-      else if (id === ent.ent_smart_grid) v = boost ? "Verstärkter Betrieb (grün)" : setback ? "Abgesenkter Betrieb (rot)" : "Normalbetrieb (gelb)";
+      else if (id === ent.ent_smart_grid) v = strongNow ? "Verstärkt Stufe 3 (dunkelgrün)" : boost ? "Verstärkter Betrieb (grün)" : setback ? "Abgesenkter Betrieb (rot)" : "Normalbetrieb (gelb)";
       else if (id === ent.ent_storage) v = storeTemp;
       else if (id === ent.ent_fireplace) v = fire ? 235 + 40 * Math.sin(t / 4e5) : 28;
       else if (id === ent.ent_fireplace_status) v = fire ? "Heizbetrieb" : "Standby";

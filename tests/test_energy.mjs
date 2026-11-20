@@ -275,3 +275,62 @@ test("shownSurplus: PV-Überschuss nie unter 0, Lücken bleiben Lücken", () => 
   assert.equal(m.shownSurplus(null), null);
   assert.equal(m.shownSurplus(undefined), null);
 });
+
+/* ---- Wärmepumpe: für sie übrig, Herkunft ihres Stroms ---- */
+
+test("availableSeries: Überschuss plus Wärmepumpe, Entladen zählt nicht als übrig", () => {
+  assert.deepEqual(
+    m.availableSeries([400, 400, -300, null], [1600, null, 2000, 1000], [500, 0, -900, 0]),
+    [2000, 400, 800, null]); // Laden bleibt beim Akku, Entladen wird abgezogen, fehlende Wärmepumpe zählt 0
+  assert.deepEqual(m.availableSeries([100], null, null), [100]);
+});
+
+test("heatPumpSupply: Netz und Akku zählen zuerst bei der Wärmepumpe", () => {
+  const bal = m.energyBalance({
+    // 1. Sonne: alles vom Dach  2. Wolke: Akku hilft  3. Abend: Netz und Akku  4. ohne Netzwert
+    grid: [-1000, 0, 800, null], pv: [5000, 1500, 0, 0], battery: [-1500, 700, 1500, 0], wp: [2000, 2000, 2000, 2000],
+  });
+  const r3 = (list) => list.map((v) => (v === null ? null : Math.round(v * 1000) / 1000));
+  const all = m.heatPumpSupply(bal, HOUR);
+  assert.deepEqual(r3([all.wp, all.pv, all.bat, all.grid]), [6, 3.3, 1.9, 0.8]);
+  assert.equal(all.raised.min, null);
+
+  const raised = m.heatPumpSupply(bal, HOUR, 0, 4, ["boost", "strong", "normal", "boost"]).raised;
+  assert.deepEqual(r3([raised.wp, raised.pv, raised.bat, raised.grid, raised.min]), [4, 3.3, 0.7, 0, 180]);
+  // ab Raster 2: nur der Abend
+  const evening = m.heatPumpSupply(bal, HOUR, 2);
+  assert.deepEqual(r3([evening.wp, evening.pv, evening.grid]), [2, 0, 0.8]);
+
+  assert.equal(m.supplyText(all), "3,3 kWh vom Dach, 1,9 aus dem Akku, 0,8 aus dem Netz");
+  assert.equal(m.supplyText(evening, false), "0,0 kWh vom Dach, 0,8 aus dem Netz");
+  assert.equal(m.supplyText(m.heatPumpSupply(m.energyBalance({ grid: [null], wp: [1000] }), HOUR)), "");
+});
+
+test("heatFindings: woher der Strom beim Anheben kam", () => {
+  const base = { days: 7, starts: 0, cycles: 0, meanRunMin: null, elKwh: 0, heatKwh: 0, heaterMin: null, draws: 0, drawMin: 0, boostMin: 300, dryRun: false };
+  const sunny = m.heatFindings({ ...base, raised: { wp: 10, pv: 8.5, bat: 1, grid: 0.5, min: 300 } });
+  assert.deepEqual(sunny.map((f) => [f.tone, f.title]), [["good", "Beim Anheben 85 % Solarstrom"]]);
+  assert.equal(sunny[0].text, "Die Heizung war 5 h 0 min angehoben. Die Wärmepumpe brauchte dabei 10,0 kWh: 8,5 kWh vom Dach, 1,0 aus dem Akku, 0,5 aus dem Netz.");
+  const grey = m.heatFindings({ ...base, raised: { wp: 10, pv: 3, bat: 2, grid: 5, min: 300 }, battery: true });
+  assert.equal(grey[0].tone, "warn");
+  assert.ok(grey[0].text.endsWith("ist die Schwelle zum Anheben zu niedrig."), grey[0].text);
+  // ohne Strombilanz bleibt es bei der Dauer
+  assert.equal(m.heatFindings({ ...base, raised: null })[0].title, "PV-Überschuss floss in die Heizung");
+});
+
+test("powerFindings: Herkunft des Stroms der Wärmepumpe", () => {
+  const { bal, soc } = week();
+  const found = m.powerFindings(bal, soc, { consumers: ["Spülmaschine"] }, HOUR, T0);
+  const wp = found.find((f) => f.title.includes("Wärmepumpe"));
+  // je Tag 5 h mit 2 kW vom Dach, abends 4 h mit 1,5 kW aus Akku und Netz
+  assert.equal(wp.title, "Die Wärmepumpe läuft überwiegend mit Solarstrom");
+  assert.ok(wp.text.startsWith("Die Wärmepumpe brauchte 112,0 kWh"), wp.text);
+  assert.ok(wp.text.includes("70,0 kWh vom Dach"), wp.text);
+});
+
+test("entryTitle: Stufen beim Anheben", () => {
+  assert.equal(m.entryTitle({ kind: "switch", from: "boost", to: "strong" }), "Stark angehoben");
+  assert.equal(m.entryTitle({ kind: "switch", from: "strong", to: "boost" }), "Zurück auf Anheben");
+  assert.equal(m.entryTitle({ kind: "switch", from: "normal", to: "boost" }), "Angehoben");
+  assert.equal(m.entryTitle({ kind: "switch", from: "strong", to: "normal" }), "Anheben beendet");
+});

@@ -576,3 +576,189 @@ def test_night_setback_with_tomorrows_forecast():
         assert ctrl.snapshot()["state"]["reason"].startswith("Für den Rest des Tages sind 15,0 kWh")
 
     asyncio.run(run())
+
+
+# --- Stark anheben, Wärmepumpe herausrechnen, Akku, Probleme ----------------
+
+POWER_EL = "sensor.wp_elektrische_leistung"
+SOC = "sensor.akku_ladestand"
+SG_STRONG = [*SG_OPTIONS, "Verstärkt Stufe 3 (dunkelgrün)"]
+
+
+def test_strong_raise_and_step_back():
+    async def run():
+        hass, ctrl = make(
+            c.ACT_SMART_GRID,
+            **{c.CONF_ENT_BATTERY: BATTERY, c.CONF_BATTERY_SIGN: c.BATTERY_DISCHARGE_POSITIVE,
+               c.CONF_ENT_POWER_EL: POWER_EL, c.CONF_BOOST_ON_LEARNED: False},
+        )
+        hass.states.set(SG, "Hardware-Eingang", options=SG_STRONG)
+        hass.states.set(BATTERY, 0, unit_of_measurement="W")
+        hass.states.set(POWER_EL, 40, unit_of_measurement="W")
+        await ctrl.async_start()
+        hass.states.set(SURPLUS, 4600, unit_of_measurement="W")
+        await sunny_until_boost(hass, ctrl)
+        assert ctrl.mode == "boost"
+
+        # Die Wärmepumpe zieht 2.000 W, trotzdem bleiben 2.600 W übrig: nach 10 min und der Haltezeit stark anheben
+        hass.states.set(POWER_EL, 2000)
+        hass.states.set(SURPLUS, 2600)
+        await tick(ctrl, 1)
+        assert ctrl.snapshot()["state"]["strong_since"] is not None
+        await tick(ctrl, 10)
+        assert ctrl.mode == "boost" and ctrl.snapshot()["state"]["rule"] == "hold"
+        await tick(ctrl, 10)
+        assert ctrl.mode == "strong"
+        assert hass.states.get(SG).state == "Verstärkt Stufe 3 (dunkelgrün)"
+        assert ctrl.snapshot()["log"][0]["text"].startswith("Trotz Anheben sind seit")
+
+        # Stark angehoben zieht sie 3.500 W, der Akku muss mit 900 W stützen: zurück auf Grün
+        hass.states.set(POWER_EL, 3500)
+        hass.states.set(SURPLUS, 0)
+        hass.states.set(BATTERY, 900)
+        await tick(ctrl, 1)
+        await tick(ctrl, 20)
+        assert ctrl.mode == "boost"
+        assert hass.states.get(SG).state == "Verstärkter Betrieb (grün)"
+        assert ctrl.snapshot()["log"][0]["text"].endswith("nötig 1.500 W).")
+
+        # Auch einfach angehoben stützt der Akku: Normalbetrieb
+        hass.states.set(POWER_EL, 2000)
+        await tick(ctrl, 20)
+        assert ctrl.mode == "normal"
+        titles = [(e["from"], e["to"]) for e in ctrl.snapshot()["log"] if e["kind"] == "switch"]
+        assert titles[:3] == [("boost", "normal"), ("strong", "boost"), ("boost", "strong")]
+
+    asyncio.run(run())
+
+
+def test_strong_falls_back_to_boost_option_and_shift_steps():
+    async def run():
+        hass, ctrl = make(c.ACT_SMART_GRID)  # Auswahl ohne Dunkelgrün
+        await ctrl.async_start()
+        await ctrl.async_set_override("strong", None)
+        assert ctrl.mode == "strong"
+        assert hass.states.get(SG).state == "Verstärkter Betrieb (grün)"
+        assert "gibt es nicht" in ctrl.snapshot()["log"][0]["detail"]
+        await tick(ctrl, 10)
+        assert log_kinds(ctrl)[0][0] != "reapply"  # Grün gilt als richtig gesetzt
+
+        hass, ctrl = make(c.ACT_SHIFT)
+        await ctrl.async_start()
+        await ctrl.async_set_override("boost", None)
+        assert float(hass.states.get(SHIFT).state) == 3  # Grundwert 1 + 2 K
+        await ctrl.async_set_override("strong", None)
+        assert float(hass.states.get(SHIFT).state) == 5  # Grundwert 1 + 4 K
+        await ctrl.async_clear_override()
+        await tick(ctrl, 21)
+        assert ctrl.mode == "normal" and float(hass.states.get(SHIFT).state) == 1
+
+    asyncio.run(run())
+
+
+def test_running_heat_pump_counts_as_available_and_its_draw_is_learned():
+    async def run():
+        hass, ctrl = make(c.ACT_DRY_RUN, **{c.CONF_ENT_POWER_EL: POWER_EL})
+        hass.states.set(POWER_EL, 1.2, unit_of_measurement="kW")
+        await ctrl.async_start()
+        # Die Wärmepumpe läuft normal mit 1.200 W, eingespeist werden 100 W: zusammen unter 1.500 W
+        hass.states.set(SURPLUS, 100)
+        await every_30s(ctrl, 25)
+        state = ctrl.snapshot()["state"]
+        assert state["inputs"]["available_w"] == 1300
+        assert state["learned"]["run_w"] is None  # erst nach 30 min Laufzeit
+        assert ctrl.mode == "normal" and state["above_since"] is None
+        await every_30s(ctrl, 6)
+        state = ctrl.snapshot()["state"]
+        assert state["learned"]["run_w"] == 1200  # jetzt reicht es: die PV trägt die Wärmepumpe
+        assert state["on"] == {
+            "value_w": 1300, "threshold_w": 1200, "available": True, "learned": True,
+            "battery_fills": False, "battery_missing_kwh": None,
+        }
+        await every_30s(ctrl, 10)
+        assert ctrl.mode == "boost"
+        entry = ctrl.snapshot()["log"][0]
+        assert entry["text"].startswith("Für die Wärmepumpe sind seit 10 min mehr als 1.200 W übrig")
+        assert entry["text"].endswith("So viel zieht die Wärmepumpe im Lauf.")
+        assert entry["values"]["available_w"] == 1300
+
+        # Umwälzpumpe allein zählt nicht zum Lernen; das Gelernte übersteht einen Neustart
+        hass.states.set(POWER_EL, 0.08)
+        await every_30s(ctrl, 5)
+        minutes = ctrl.snapshot()["state"]["learned"]["run_min"]
+        await ctrl.async_stop()
+        again = controller_mod.Controller(hass, ctrl.entry)
+        await again.async_start()
+        assert again.run_w == 1200 and again.snapshot()["state"]["learned"]["run_min"] == minutes
+
+    asyncio.run(run())
+
+
+def test_battery_capacity_is_learned_and_lends_its_charge():
+    async def run():
+        hass, ctrl = make(
+            c.ACT_DRY_RUN,
+            **{c.CONF_ENT_BATTERY: BATTERY, c.CONF_BATTERY_SIGN: c.BATTERY_CHARGE_POSITIVE,
+               c.CONF_ENT_BATTERY_SOC: SOC, c.CONF_ENT_POWER_EL: POWER_EL},
+        )
+        hass.states.set(POWER_EL, 40, unit_of_measurement="W")
+        hass.states.set(BATTERY, 2000, unit_of_measurement="W")  # lädt mit 2 kW
+        hass.states.set(SURPLUS, 0)
+        hass.states.set(FORECAST, 2, unit_of_measurement="kWh")
+        await ctrl.async_start()
+        # 10-kWh-Akku: 2 kW heben den Ladestand um 20 % je Stunde
+        start = CLOCK.now
+        for _ in range(130):
+            hours = (CLOCK.now - start).total_seconds() / 3600
+            hass.states.set(SOC, round(30 + hours * 20))
+            await tick(ctrl, 0.5)
+        learned = ctrl.snapshot()["state"]["learned"]
+        assert learned["battery_n"] >= 1 and abs(learned["battery_kwh"] - 10) <= 0.5
+        assert ctrl.mode == "normal"  # der Akku lädt zuerst, die Prognose reicht nicht
+
+        # Viel Sonne angesagt: dem Akku fehlen bei 70 % rund 3 kWh, vorhergesagt sind 12 kWh
+        hass.states.set(SOC, 70)
+        hass.states.set(FORECAST, 12)
+        await tick(ctrl, 0.5)
+        state = ctrl.snapshot()["state"]
+        assert state["on"]["battery_fills"] is True and state["on"]["value_w"] == 2040
+        assert state["inputs"]["available_w"] == 40
+        await tick(ctrl, 10)
+        assert ctrl.mode == "boost"
+        assert "Der Akku wird heute ohnehin voll" in ctrl.snapshot()["log"][0]["text"]
+
+    asyncio.run(run())
+
+
+def test_problems_are_listed():
+    async def run():
+        hass, ctrl = make(c.ACT_SMART_GRID, **{c.CONF_ENT_POWER_EL: POWER_EL, c.CONF_ENT_OUTDOOR: OUTDOOR})
+        hass.states.set(POWER_EL, 500, unit_of_measurement="W")
+        await ctrl.async_start()
+        await tick(ctrl)
+        assert ctrl.problems == []
+
+        hass.services.fail = True
+        await sunny_until_boost(hass, ctrl)
+        assert any("nicht angenommen: Modbus antwortet nicht" in p for p in ctrl.problems)
+        hass.services.fail = False
+        await tick(ctrl, 6)
+        assert ctrl.mode == "boost" and ctrl.problems == []
+
+        hass.states.set(SURPLUS, "unavailable")
+        hass.states.set(SG, "unavailable")
+        hass.states.set(POWER_EL, "unavailable")
+        hass.states.set(OUTDOOR, "unknown")
+        hass.states.set(DHW, "unavailable")
+        hass.states.set(FORECAST, "unavailable")
+        await tick(ctrl, 4)
+        problems = ctrl.snapshot()["state"]["problems"]
+        assert problems == [
+            "Die Wärmepumpe hat die letzte Vorgabe nicht angenommen: select.wp_smart_grid_setzen ist nicht verfügbar.",
+            "Der PV-Überschuss (sensor.pv_ueberschuss) liefert keinen Wert.",
+            "Die Stellgröße (select.wp_smart_grid_setzen) ist nicht verfügbar.",
+            "Die Wärmepumpe meldet keine Werte.",
+            "Die PV-Prognose (sensor.pv_prognose) liefert keinen Wert.",
+        ]
+
+    asyncio.run(run())

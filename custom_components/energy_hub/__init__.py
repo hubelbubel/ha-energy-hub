@@ -16,7 +16,7 @@ from . import const as c
 from .controller import Controller
 from .websocket_api import async_register_websocket
 
-PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 
 type EnergyHubConfigEntry = ConfigEntry[Controller]
 

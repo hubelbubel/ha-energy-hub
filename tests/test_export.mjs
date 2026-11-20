@@ -140,7 +140,7 @@ function scenario() {
     data: {
       comp: [[at(-60), "off"], [at(10), "on"], [at(40), "off"], [at(70), "on"]],
       status: [[at(-60), "Aus"], [at(10), "Heizen"], [at(40), "Aus"], [at(70), "Warmwasser"]],
-      mode: [[at(-60), "normal"], [at(5), "boost"], [at(60), "normal"]],
+      mode: [[at(-60), "normal"], [at(5), "boost"], [at(30), "strong"], [at(50), "boost"], [at(60), "normal"]],
       outdoor: [[at(-60), "5"]],
       flow: [[at(-60), "28"], [at(10), "35"], [at(40), "28"], [at(70), "50"], [at(100), "54"]],
       ret: [[at(-60), "27"], [at(10), "30"], [at(40), "27"], [at(70), "45"]],
@@ -178,7 +178,8 @@ test("analyseEfficiency: Stundenwerte", () => {
   assert.equal(col(h0, "strom_zaehler_kwh"), null); // kein Zähler hinterlegt
   near(col(h0, "pv_ueberschuss_kwh"), 1);
   near(col(h0, "netzbezug_kwh"), 0);
-  assert.equal(col(h0, "angehoben_min"), 55);
+  assert.equal(col(h0, "angehoben_min"), 55); // beide Stufen zusammen
+  assert.equal(col(h0, "stark_angehoben_min"), 20);
   assert.equal(col(h0, "abgesenkt_min"), 0);
   assert.equal(col(h0, "heizstab_min"), 0);
   assert.equal(col(h0, "zweiter_waermeerzeuger_min"), null);

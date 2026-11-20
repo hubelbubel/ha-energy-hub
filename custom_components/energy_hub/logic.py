@@ -13,16 +13,39 @@ from datetime import datetime, time, timedelta
 
 MODE_NORMAL = "normal"
 MODE_BOOST = "boost"
+MODE_STRONG = "strong"
 MODE_SETBACK = "setback"
 
 MODE_LABEL = {
     MODE_NORMAL: "Normalbetrieb",
     MODE_BOOST: "Anheben",
+    MODE_STRONG: "Stark anheben",
     MODE_SETBACK: "Absenken",
 }
 
+# Zustände, in denen die Heizung angehoben ist
+RAISED = (MODE_BOOST, MODE_STRONG)
+
 # Regeln, die sofort gelten und die Mindesthaltezeit übergehen
 _IMMEDIATE_RULES = {"override", "automation_off", "no_data"}
+
+# Ab dieser elektrischen Leistung gilt die Wärmepumpe als laufend
+RUN_MIN_W = 300
+# Die Leistung im Lauf wird anfangs einfach gemittelt, ab so vielen Minuten Laufzeit gleitend
+LEARN_TAU_MIN = 360
+# So viel Laufzeit braucht es, bevor die gelernte Leistung als Einschaltschwelle gilt
+LEARN_MIN_MIN = 30
+# Der Akku wird „ohnehin voll“, wenn die Prognose für den Rest des Tages so oft reicht,
+# wie ihm zum Vollladen fehlt (der Rest geht an Haus, Wärmepumpe und Prognosefehler)
+BATTERY_FORECAST_FACTOR = 2.0
+# Kapazität des Akkus: geschätzt, sobald sich der Ladestand um so viele Prozentpunkte geändert hat
+CAPACITY_SOC_SPAN = 20
+CAPACITY_RANGE_KWH = (0.5, 200.0)
+# Ein Abschnitt der Schätzung beginnt neu nach einer Lücke oder wenn er zu lange dauert
+CAPACITY_GAP = timedelta(minutes=5)
+CAPACITY_MAX_SPAN = timedelta(hours=24)
+# Die Kapazität mittelt die letzten Schätzungen, gleitend über so viele
+CAPACITY_KEEP = 5
 
 
 @dataclass(frozen=True)
@@ -30,9 +53,14 @@ class Settings:
     """Parameter der Regelung."""
 
     boost_on_w: float = 1500
+    # Einschaltschwelle aus der gelernten Leistung der Wärmepumpe im Lauf, sobald sie bekannt ist
+    boost_on_learned: bool = True
     boost_on_min: float = 10
     boost_off_w: float = -300
     boost_off_min: float = 15
+    # Stark anheben (zweite Stufe): wenn beim Anheben noch so viel übrig ist
+    strong_enabled: bool = True
+    strong_on_w: float = 2000
     min_hold_min: float = 20
     # Nur für die Begründungen: über wie viele Minuten der Regler die Messwerte mittelt
     smoothing_min: float = 0
@@ -56,11 +84,24 @@ class Inputs:
     balance_w ist der Überschuss ohne Akku: PV-Überschuss plus Ladeleistung des Akkus
     (Entladen zählt negativ). Er entscheidet über das Ende des Anhebens; None heißt,
     es zählt wie bisher der PV-Überschuss.
+
+    available_w ist, was für die Wärmepumpe übrig ist: PV-Überschuss plus das, was die
+    Wärmepumpe gerade selbst zieht. Der Akku lädt zuerst; was er entlädt, zählt nicht als
+    übrig. available_free_w rechnet zusätzlich die Ladeleistung des Akkus als übrig; das
+    gilt, wenn der Akku heute ohnehin voll wird. None heißt: Es zählt der PV-Überschuss.
+
+    run_w ist die gelernte Leistung der Wärmepumpe im Lauf, battery_kwh die gelernte
+    Kapazität des Akkus, beide None, solange sie nicht bekannt sind.
     """
 
     now: datetime
     surplus_w: float | None = None
     balance_w: float | None = None
+    available_w: float | None = None
+    available_free_w: float | None = None
+    run_w: float | None = None
+    battery_soc: float | None = None
+    battery_kwh: float | None = None
     forecast_kwh: float | None = None
     forecast_tomorrow_kwh: float | None = None
     outdoor_c: float | None = None
@@ -71,10 +112,15 @@ class Inputs:
 
 @dataclass(frozen=True)
 class Timers:
-    """Seit wann der Überschuss über bzw. unter den Schwellen liegt."""
+    """Seit wann die Messwerte über bzw. unter den Schwellen liegen.
+
+    above_since: über der Einschaltschwelle, below_since: unter der Ausschaltschwelle,
+    strong_since: beim Anheben über der Schwelle zum starken Anheben.
+    """
 
     above_since: datetime | None = None
     below_since: datetime | None = None
+    strong_since: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -162,23 +208,139 @@ def trim_samples(
     return samples[max(0, first - 1):]
 
 
-def update_timers(timers: Timers, inputs: Inputs, settings: Settings) -> Timers:
-    """Führt die Zeitmarken für 'über Einschaltschwelle' / 'unter Ausschaltschwelle'.
+def battery_missing_kwh(inputs: Inputs) -> float | None:
+    """Wie viel dem Akku zum Vollladen fehlt; None ohne Ladestand oder gelernte Kapazität."""
+    if inputs.battery_kwh is None or inputs.battery_soc is None:
+        return None
+    return inputs.battery_kwh * max(0.0, 100.0 - inputs.battery_soc) / 100.0
 
-    Eingeschaltet wird nach dem PV-Überschuss, ausgeschaltet nach dem Überschuss ohne Akku,
-    sofern er bekannt ist.
+
+def battery_fills(inputs: Inputs) -> bool:
+    """Wird der Akku heute ohnehin voll? Dann darf die Wärmepumpe schon vorher seine Ladeleistung nutzen."""
+    missing = battery_missing_kwh(inputs)
+    if missing is None or inputs.forecast_kwh is None or inputs.available_free_w is None:
+        return False
+    return inputs.forecast_kwh >= BATTERY_FORECAST_FACTOR * missing
+
+
+@dataclass(frozen=True)
+class OnRule:
+    """Wonach angehoben wird: Wert, Schwelle und woher beides kommt."""
+
+    value: float
+    threshold: float
+    available: bool  # True: „für die Wärmepumpe übrig“, False: PV-Überschuss
+    learned: bool  # Schwelle aus der gelernten Leistung der Wärmepumpe
+    fills: bool  # Akku wird ohnehin voll, seine Ladeleistung zählt mit
+
+
+def on_rule(inputs: Inputs, s: Settings) -> OnRule | None:
+    """Einschaltregel zum Zeitpunkt; None ohne PV-Überschuss."""
+    if inputs.surplus_w is None:
+        return None
+    learned = s.boost_on_learned and inputs.run_w is not None
+    threshold = inputs.run_w if learned else s.boost_on_w
+    if inputs.available_w is None:
+        return OnRule(inputs.surplus_w, threshold, False, learned, False)
+    fills = battery_fills(inputs)
+    value = inputs.available_free_w if fills else inputs.available_w
+    return OnRule(value, threshold, True, learned, fills)
+
+
+def strong_value(inputs: Inputs) -> float | None:
+    """Was beim Anheben noch übrig ist: der PV-Überschuss, ohne Akku, wenn er ohnehin voll wird."""
+    if battery_fills(inputs) and inputs.balance_w is not None:
+        return inputs.balance_w
+    return inputs.surplus_w
+
+
+def update_timers(
+    timers: Timers, inputs: Inputs, settings: Settings, mode: str = MODE_NORMAL
+) -> Timers:
+    """Führt die Zeitmarken für die Schwellen.
+
+    Angehoben wird nach dem, was für die Wärmepumpe übrig ist (ohne Messung der Wärmepumpe
+    und ohne Akku nach dem PV-Überschuss), beendet nach dem Überschuss ohne Akku, sofern er
+    bekannt ist. Die Zeit zum starken Anheben läuft nur, solange angehoben ist.
     """
-    surplus = inputs.surplus_w
-    if surplus is None:
+    rule = on_rule(inputs, settings)
+    if rule is None:
         return Timers()
-    above = timers.above_since if surplus >= settings.boost_on_w else None
-    if surplus >= settings.boost_on_w and above is None:
-        above = inputs.now
-    off = inputs.balance_w if inputs.balance_w is not None else surplus
-    below = timers.below_since if off < settings.boost_off_w else None
-    if off < settings.boost_off_w and below is None:
-        below = inputs.now
-    return Timers(above_since=above, below_since=below)
+    now = inputs.now
+    above = (timers.above_since or now) if rule.value >= rule.threshold else None
+    off = inputs.balance_w if inputs.balance_w is not None else inputs.surplus_w
+    below = (timers.below_since or now) if off < settings.boost_off_w else None
+    strong = None
+    extra = strong_value(inputs)
+    if mode == MODE_BOOST and settings.strong_enabled and extra is not None and extra >= settings.strong_on_w:
+        strong = timers.strong_since or now
+    return Timers(above_since=above, below_since=below, strong_since=strong)
+
+
+# ------------------------------------------------------------------- Lernen
+def learn_run_power(
+    value: float | None, minutes: float, power_w: float | None, dt_min: float
+) -> tuple[float | None, float]:
+    """Lernt die Leistung der Wärmepumpe im Lauf.
+
+    Anfangs ist es der zeitgewichtete Mittelwert aller Messungen im Lauf, ab LEARN_TAU_MIN
+    Minuten Laufzeit ein gleitender Mittelwert. So folgt er langsam der Jahreszeit: Bei Kälte
+    zieht eine Luft-Wärmepumpe mehr. Gezählt wird nur, solange sie läuft.
+    """
+    if power_w is None or power_w < RUN_MIN_W or dt_min <= 0:
+        return value, minutes
+    minutes += dt_min
+    weight = min(minutes, LEARN_TAU_MIN)
+    value = power_w if value is None else value + (power_w - value) * dt_min / weight
+    return value, minutes
+
+
+def learned_run_w(value: float | None, minutes: float) -> float | None:
+    """Die gelernte Leistung, sobald genug Laufzeit beisammen ist; auf 50 W gerundet."""
+    if value is None or minutes < LEARN_MIN_MIN:
+        return None
+    return max(float(RUN_MIN_W), round(value / 50) * 50.0)
+
+
+@dataclass(frozen=True)
+class Segment:
+    """Laufender Abschnitt der Kapazitäts-Schätzung: Beginn, Ladestand am Beginn, Energie seitdem."""
+
+    start: datetime
+    soc: float
+    kwh: float
+    last: datetime
+
+
+def capacity_step(
+    segment: Segment | None, now: datetime, soc: float | None, charge_w: float | None
+) -> tuple[Segment | None, float | None]:
+    """Ein Schritt der Kapazitäts-Schätzung aus Ladeleistung und Ladestand.
+
+    Die Energie, die seit Beginn des Abschnitts in den Akku floss (Entladen negativ), geteilt
+    durch die Änderung des Ladestands, ergibt die Kapazität. Geschätzt wird, sobald sich der
+    Ladestand um CAPACITY_SOC_SPAN Prozentpunkte geändert hat. Liefert den neuen Abschnitt
+    und, wenn es so weit ist, die Schätzung in kWh.
+    """
+    if soc is None or charge_w is None or not 0 <= soc <= 100:
+        return None, None
+    if segment is None or now - segment.last > CAPACITY_GAP or now - segment.start > CAPACITY_MAX_SPAN:
+        return Segment(now, soc, 0.0, now), None
+    hours = (now - segment.last).total_seconds() / 3600
+    kwh = segment.kwh + charge_w * hours / 1000
+    span = soc - segment.soc
+    if abs(span) < CAPACITY_SOC_SPAN:
+        return Segment(segment.start, segment.soc, kwh, now), None
+    estimate = kwh / span * 100
+    low, high = CAPACITY_RANGE_KWH
+    return Segment(now, soc, 0.0, now), (estimate if low <= estimate <= high else None)
+
+
+def learn_capacity(value: float | None, count: int, estimate: float) -> tuple[float, int]:
+    """Mittelt die Schätzungen der Kapazität, gleitend über die letzten CAPACITY_KEEP."""
+    count += 1
+    value = estimate if value is None else value + (estimate - value) / min(count, CAPACITY_KEEP)
+    return value, count
 
 
 def _measured(value: float, s: Settings) -> str:
@@ -287,6 +449,45 @@ def _setback_check(inputs: Inputs, s: Settings) -> tuple[bool, str]:
     )
 
 
+def _on_texts(rule: OnRule, s: Settings) -> tuple[str, str]:
+    """Bausteine der Begründung: Schwelle mit Herkunft und Hinweis auf den Akku."""
+    note = " So viel zieht die Wärmepumpe im Lauf." if rule.learned else ""
+    if rule.fills:
+        note += " Der Akku wird heute ohnehin voll, deshalb zählt auch seine Ladeleistung."
+    return fmt_w(rule.threshold), note
+
+
+def _boost_text(rule: OnRule, s: Settings, above_for: float) -> str:
+    limit, note = _on_texts(rule, s)
+    if rule.available:
+        return (
+            f"Für die Wärmepumpe sind seit {fmt_min(above_for)} mehr als {limit} übrig "
+            f"({_measured(rule.value, s)}).{note}"
+        )
+    return f"Der PV-Überschuss liegt seit {fmt_min(above_for)} über {limit} ({_measured(rule.value, s)})."
+
+
+def _waiting_text(rule: OnRule, s: Settings, above_for: float | None) -> str:
+    """Begründung im Normalbetrieb, solange (noch) nicht angehoben wird."""
+    limit, note = _on_texts(rule, s)
+    mean = f" im {s.smoothing_min:.0f}-Minuten-Mittel" if s.smoothing_min > 0 else ""
+    # Angezeigt wird nie weniger als 0 W; ein negativer Wert ist Netzbezug oder Akku
+    shown = fmt_w(max(0.0, rule.value))
+    if rule.available:
+        if above_for is not None:
+            return (
+                f"Für die Wärmepumpe sind erst seit {fmt_min(above_for)} mehr als {limit} übrig "
+                f"({_measured(rule.value, s)}); angehoben wird nach {fmt_min(s.boost_on_min)}.{note}"
+            )
+        return f"Für die Wärmepumpe sind{mean} {shown} übrig, angehoben wird ab {limit}.{note}"
+    if above_for is not None:
+        return (
+            f"Der PV-Überschuss liegt erst seit {fmt_min(above_for)} über {limit} "
+            f"({_measured(rule.value, s)}); angehoben wird nach {fmt_min(s.boost_on_min)}."
+        )
+    return f"Der PV-Überschuss von {shown}{mean} liegt unter der Einschaltschwelle von {limit}."
+
+
 def _wanted(
     inputs: Inputs,
     s: Settings,
@@ -294,70 +495,76 @@ def _wanted(
     current_mode: str,
 ) -> Decision:
     """Was die Regeln ohne Mindesthaltezeit verlangen."""
-    surplus = inputs.surplus_w
-    assert surplus is not None
+    rule = on_rule(inputs, s)
+    assert rule is not None
     above_for = _minutes(timers.above_since, inputs.now)
     below_for = _minutes(timers.below_since, inputs.now)
+    strong_for = _minutes(timers.strong_since, inputs.now)
     block = _storage_block(inputs, s)
 
-    if current_mode == MODE_BOOST:
+    if current_mode in RAISED:
         if block:
             ok, text = _setback_check(inputs, s)
             if ok:
                 return Decision(MODE_SETBACK, f"{block} {text}", "setback")
             return Decision(MODE_NORMAL, block, "storage")
         off_value, off_name = _off_measure(inputs)
-        if below_for is None or below_for < s.boost_off_min:
-            if below_for is None:
-                reason = (
-                    f"{off_name} reicht weiter aus ({_measured(off_value, s)}). "
-                    f"Beendet wird unter {fmt_w(s.boost_off_w)} für {fmt_min(s.boost_off_min)}."
+        if below_for is not None and below_for >= s.boost_off_min:
+            ended = (
+                f"{off_name} liegt seit {fmt_min(below_for)} unter "
+                f"{fmt_w(s.boost_off_w)} ({_measured(off_value, s)})."
+            )
+            if current_mode == MODE_STRONG and rule.value >= rule.threshold:
+                # Für einfaches Anheben reicht es noch: eine Stufe zurück
+                return Decision(
+                    MODE_BOOST,
+                    f"{ended} Für einfaches Anheben reicht es noch ({_measured(rule.value, s)} "
+                    f"für die Wärmepumpe übrig, nötig {fmt_w(rule.threshold)}).",
+                    "strong_end",
                 )
-            else:
-                reason = (
-                    f"{off_name} liegt seit {fmt_min(below_for)} unter "
-                    f"{fmt_w(s.boost_off_w)} ({_measured(off_value, s)}). Nach "
-                    f"{fmt_min(s.boost_off_min)} endet das Anheben."
-                )
-            return Decision(MODE_BOOST, reason, "boost_keep")
-        ended = (
-            f"{off_name} liegt seit {fmt_min(below_for)} unter "
-            f"{fmt_w(s.boost_off_w)} ({_measured(off_value, s)})."
-        )
-        ok, text = _setback_check(inputs, s)
-        if ok:
-            return Decision(MODE_SETBACK, f"{ended} {text}", "setback")
-        return Decision(MODE_NORMAL, ended, "boost_end")
+            ok, text = _setback_check(inputs, s)
+            if ok:
+                return Decision(MODE_SETBACK, f"{ended} {text}", "setback")
+            return Decision(MODE_NORMAL, ended, "boost_end")
+        extra = strong_value(inputs)
+        if current_mode == MODE_BOOST and strong_for is not None and strong_for >= s.boost_on_min:
+            assert extra is not None
+            return Decision(
+                MODE_STRONG,
+                f"Trotz Anheben sind seit {fmt_min(strong_for)} mehr als {fmt_w(s.strong_on_w)} "
+                f"übrig ({_measured(extra, s)}).",
+                "strong",
+            )
+        if below_for is None:
+            reason = (
+                f"{off_name} reicht weiter aus ({_measured(off_value, s)}). "
+                f"Beendet wird unter {fmt_w(s.boost_off_w)} für {fmt_min(s.boost_off_min)}."
+            )
+        else:
+            reason = (
+                f"{off_name} liegt seit {fmt_min(below_for)} unter "
+                f"{fmt_w(s.boost_off_w)} ({_measured(off_value, s)}). Nach "
+                f"{fmt_min(s.boost_off_min)} endet "
+                + ("das starke Anheben." if current_mode == MODE_STRONG else "das Anheben.")
+            )
+        if current_mode == MODE_BOOST and strong_for is not None and extra is not None:
+            reason += (
+                f" Trotz Anheben sind seit {fmt_min(strong_for)} mehr als {fmt_w(s.strong_on_w)} übrig; "
+                f"stark angehoben wird nach {fmt_min(s.boost_on_min)}."
+            )
+        return Decision(current_mode, reason, "boost_keep")
 
     enough = above_for is not None and above_for >= s.boost_on_min
     if enough and not block:
-        return Decision(
-            MODE_BOOST,
-            f"Der PV-Überschuss liegt seit {fmt_min(above_for)} über "
-            f"{fmt_w(s.boost_on_w)} ({_measured(surplus, s)}).",
-            "boost",
-        )
+        assert above_for is not None
+        return Decision(MODE_BOOST, _boost_text(rule, s, above_for), "boost")
 
     ok, text = _setback_check(inputs, s)
     if ok:
         return Decision(MODE_SETBACK, text, "setback")
     if enough and block:
         return Decision(MODE_NORMAL, block, "storage")
-
-    if above_for is not None:
-        boost_text = (
-            f"Der PV-Überschuss liegt erst seit {fmt_min(above_for)} über "
-            f"{fmt_w(s.boost_on_w)} ({_measured(surplus, s)}); angehoben wird nach "
-            f"{fmt_min(s.boost_on_min)}."
-        )
-    else:
-        mean = f" im {s.smoothing_min:.0f}-Minuten-Mittel" if s.smoothing_min > 0 else ""
-        # Angezeigt wird nie weniger als 0 W; ein negativer Wert ist Netzbezug
-        boost_text = (
-            f"Der PV-Überschuss von {fmt_w(max(0.0, surplus))}{mean} liegt unter der Einschaltschwelle "
-            f"von {fmt_w(s.boost_on_w)}."
-        )
-    return Decision(MODE_NORMAL, f"{boost_text} {text}", "idle")
+    return Decision(MODE_NORMAL, f"{_waiting_text(rule, s, above_for)} {text}", "idle")
 
 
 def decide(

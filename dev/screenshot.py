@@ -43,6 +43,9 @@ SHOTS = [
     ("pv-mobile-raster", 390, 844, "?tab=pv&mode=boost&raster=dach", 13),
     ("overview-desktop-empty", 1360, 900, "?tab=overview&mode=empty"),
     ("desktop-light-boost", 1360, 900, "?tab=heat&mode=boost"),
+    # zweite Stufe: stark angehoben
+    ("desktop-light-strong", 1360, 900, "?tab=heat&mode=strong"),
+    ("mobile-light-strong", 390, 844, "?tab=heat&mode=strong"),
     ("desktop-dark-setback", 1360, 900, "?tab=heat&mode=setback&theme=dark"),
     # Absenkfenster über Mitternacht, abends mit der Prognose für morgen
     ("desktop-light-nacht", 1360, 900, "?tab=heat&mode=setback&fenster=nacht", 22),

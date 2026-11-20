@@ -32,6 +32,7 @@ DE = {
             "data_description": {
                 "ent_outdoor": "Wird auch für die Bedingung „nicht absenken, wenn es zu kalt ist“ benutzt.",
                 "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt.",
+                "ent_power_el": "Damit rechnet die Regelung die Wärmepumpe aus dem Überschuss heraus und lernt, wie viel sie im Lauf zieht.",
             },
         },
         "power": {
@@ -56,6 +57,7 @@ DE = {
             "data_description": {
                 "ent_grid_power": "Ein Sensor mit Vorzeichen: Bezug und Einspeisung.",
                 "ent_grid_import_energy": "Zählerstände in kWh, wie im Energie-Dashboard (Zustandsklasse total_increasing oder total). Hinterlegt, kommen Tages- und Stundenwerte aus ihnen statt aus der Leistung. Das ist genauer, weil kurze Wechsel zwischen Bezug und Einspeisung nicht gegeneinander aufgerechnet werden. Ohne Zähler hier nimmt das Panel die aus dem Schritt „Wechselrichter“.",
+                "ent_battery_soc": "Aus Ladestand und Leistung der Batterie lernt Energy Hub ihre Kapazität. Damit erkennt die Regelung, ob die Batterie heute ohnehin voll wird.",
                 "ent_house_power": "Leer lassen, dann wird der Verbrauch aus PV, Netz und Batterie berechnet.",
                 "consumers": "Leistungs-Sensoren einzelner Geräte, zum Beispiel Badheizung, Waschmaschine, Trockner, Spülmaschine. Die Wärmepumpe kommt aus dem Schritt „Wärmepumpe“.",
             },
@@ -132,13 +134,16 @@ DE = {
         },
         "rules": {
             "title": "Regeln",
-            "description": "Angehoben wird, wenn genug eigener Strom übrig ist. Abgesenkt wird im Absenkfenster, wenn die Prognose später genug Sonne verspricht.",
+            "description": "Angehoben wird, wenn genug eigener Strom für die Wärmepumpe übrig ist, stark angehoben, wenn beim Anheben noch mehr übrig bleibt. Abgesenkt wird im Absenkfenster, wenn die Prognose später genug Sonne verspricht.",
             "data": {
-                "boost_on_w": "Anheben ab Überschuss",
-                "boost_on_min": "… wenn er so lange anliegt",
+                "boost_on_w": "Anheben ab",
+                "boost_on_learned": "Schwelle an die Wärmepumpe anpassen",
+                "boost_on_min": "… wenn es so lange anliegt",
                 "boost_off_w": "Anheben beenden unter",
                 "boost_off_min": "… wenn er so lange darunter liegt",
-                "off_without_battery": "Beim Beenden den Akku herausrechnen",
+                "off_without_battery": "Den Akku herausrechnen",
+                "strong_enabled": "Stark anheben (zweite Stufe)",
+                "strong_on_w": "Stark anheben, wenn beim Anheben noch übrig sind",
                 "smoothing_min": "Überschuss mitteln über",
                 "min_hold_min": "Mindesthaltezeit je Zustand",
                 "setback_enabled": "Absenken, wenn Sonne vorhergesagt ist",
@@ -149,8 +154,11 @@ DE = {
                 "setback_min_dhw_c": "Nicht absenken unter Warmwassertemperatur",
             },
             "data_description": {
+                "boost_on_w": "Verglichen wird, was für die Wärmepumpe übrig ist: der Überschuss plus das, was sie gerade selbst zieht (Schritt Wärmepumpe, elektrische Leistung). Ohne diese Leistung zählt der Überschuss allein.",
+                "boost_on_learned": "Statt der festen Schwelle gilt, was die Wärmepumpe im Lauf zieht, sobald Energy Hub das aus 30 min Laufzeit gelernt hat. Der Wert folgt langsam der Jahreszeit.",
                 "boost_off_w": "Negativ heißt: Das Anheben läuft weiter, solange höchstens so viel aus Akku oder Netz kommt.",
-                "off_without_battery": "Das Anheben endet nach dem Überschuss plus Ladeleistung des Akkus. So läuft es weiter, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste. Wirkt nur mit hinterlegter Leistung der Batterie (Schritt Strom). Ausschalten, wenn der Überschuss-Sensor den Akku schon herausrechnet.",
+                "off_without_battery": "Das Anheben endet nach dem Überschuss plus Ladeleistung des Akkus. So läuft es weiter, solange die PV die Wärmepumpe trägt, und endet, wenn der Akku sie stützen müsste. Strom aus dem Akku zählt nicht als übrig für die Wärmepumpe. Wird der Akku laut Prognose heute ohnehin voll, zählt seine Ladeleistung beim Anheben mit (dafür braucht es den Ladestand der Batterie). Wirkt nur mit hinterlegter Leistung der Batterie (Schritt Strom). Ausschalten, wenn der Überschuss-Sensor den Akku schon herausrechnet.",
+                "strong_on_w": "Gemessen am Überschuss, während angehoben ist. Liegt er so lange darüber wie beim Anheben, geht es auf die zweite Stufe; trägt die PV sie nicht mehr, zurück auf die erste. Was die zweite Stufe tut, stellst du an der Wärmepumpe ein.",
                 "smoothing_min": "Kurze Wolken zählen dann weniger. 0 = keine Glättung, etwa wenn der Sensor schon gemittelt ist. Fällt der Sensor aus, gilt sein letzter Wert noch 3 min.",
                 "min_hold_min": "Schützt den Verdichter vor häufigem Umschalten. Handbetrieb und fehlende Messwerte wirken sofort.",
                 "setback_min_forecast_kwh": "Prognose für den Rest des Tages; geht das Absenkfenster über Mitternacht, vor Mitternacht die Prognose für morgen.",
@@ -166,14 +174,17 @@ DE = {
                 "ent_smart_grid": "Smart-Grid-Auswahl",
                 "opt_normal": "Option für Normalbetrieb",
                 "opt_boost": "Option für Anheben",
+                "opt_strong": "Option für stark anheben",
                 "opt_setback": "Option für Absenken",
                 "ent_shift": "Parallelverschiebung",
                 "shift_boost_k": "Anheben um",
+                "shift_strong_k": "Stark anheben um",
                 "shift_setback_k": "Absenken um",
             },
             "data_description": {
                 "ent_smart_grid": "Auswahl-Entität, die den Smart-Grid-Zustand der Wärmepumpe schreibt.",
                 "opt_normal": "Muss genau so heißen wie in der Auswahl-Entität.",
+                "opt_strong": "Gibt es diese Option in der Auswahl nicht, setzt Energy Hub die Option für Anheben.",
                 "ent_shift": "Zahl-Entität für die Parallelverschiebung der Heizkurve. Der Wert vor dem Eingriff wird gemerkt und danach wiederhergestellt.",
             },
         },
@@ -228,13 +239,16 @@ DE = {
                 "parallel_shift": "Parallelverschiebung der Heizkurve",
             }
         },
-        "mode": {"options": {"normal": "Normalbetrieb", "boost": "Anheben", "setback": "Absenken"}},
+        "mode": {
+            "options": {"normal": "Normalbetrieb", "boost": "Anheben", "strong": "Stark anheben", "setback": "Absenken"}
+        },
     },
     "entity": {
+        "binary_sensor": {"problem": {"name": "Problem"}},
         "sensor": {
             "mode": {
                 "name": "Regelzustand",
-                "state": {"normal": "Normalbetrieb", "boost": "Angehoben", "setback": "Abgesenkt"},
+                "state": {"normal": "Normalbetrieb", "boost": "Angehoben", "strong": "Stark angehoben", "setback": "Abgesenkt"},
             }
         },
         "switch": {"automation": {"name": "Automatik"}},
@@ -244,7 +258,7 @@ DE = {
             "name": "Handbetrieb starten",
             "description": "Hält die Heizung unabhängig von den Regeln in einem Zustand.",
             "fields": {
-                "mode": {"name": "Zustand", "description": "Normalbetrieb, Anheben oder Absenken."},
+                "mode": {"name": "Zustand", "description": "Normalbetrieb, Anheben, stark anheben oder Absenken."},
                 "minutes": {
                     "name": "Dauer",
                     "description": "Leer lassen, damit der Handbetrieb bis zum Beenden gilt.",
@@ -278,6 +292,7 @@ EN = {
             "data_description": {
                 "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
                 "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\".",
+                "ent_power_el": "Lets the control take the heat pump out of the surplus and learn how much it draws while running.",
             },
         },
         "power": {
@@ -302,6 +317,7 @@ EN = {
             "data_description": {
                 "ent_grid_import_energy": "Meter readings in kWh as in the energy dashboard (state class total_increasing or total). When set, daily and hourly values come from them instead of power. This is more accurate because short switches between import and export do not cancel out. Without counters here the panel uses those from the inverter step.",
                 "ent_grid_power": "One signed sensor: import and export.",
+                "ent_battery_soc": "From state of charge and battery power Energy Hub learns the battery capacity. The control uses it to see whether the battery will be full today anyway.",
                 "ent_house_power": "Leave empty to calculate consumption from PV, grid and battery.",
                 "consumers": "Power sensors of single appliances, for example bathroom heater, washing machine, dryer, dishwasher. The heat pump comes from the step \"Heat pump\".",
             },
@@ -378,13 +394,16 @@ EN = {
         },
         "rules": {
             "title": "Rules",
-            "description": "The heating is raised when enough own power is left over. It is lowered within the lowering window when the forecast promises enough sun later.",
+            "description": "The heating is raised when enough own power is left over for the heat pump, and raised strongly when even more is left while raising. It is lowered within the lowering window when the forecast promises enough sun later.",
             "data": {
-                "boost_on_w": "Raise from surplus",
+                "boost_on_w": "Raise from",
+                "boost_on_learned": "Adapt the threshold to the heat pump",
                 "boost_on_min": "… once it has lasted",
                 "boost_off_w": "Stop raising below",
                 "boost_off_min": "… once it has stayed below for",
-                "off_without_battery": "Leave the battery out when stopping",
+                "off_without_battery": "Leave the battery out",
+                "strong_enabled": "Raise strongly (second stage)",
+                "strong_on_w": "Raise strongly when still left over while raising",
                 "smoothing_min": "Average the surplus over",
                 "min_hold_min": "Minimum hold time per state",
                 "setback_enabled": "Lower when sun is forecast",
@@ -395,8 +414,11 @@ EN = {
                 "setback_min_dhw_c": "Do not lower below hot water temperature",
             },
             "data_description": {
+                "boost_on_w": "Compared with what is left over for the heat pump: the surplus plus what it draws itself right now (step Heat pump, electrical power). Without that power the surplus alone counts.",
+                "boost_on_learned": "Instead of the fixed threshold, what the heat pump draws while running applies once Energy Hub has learned it from 30 min of runtime. The value slowly follows the season.",
                 "boost_off_w": "Negative means: raising continues as long as at most this much comes from battery or grid.",
-                "off_without_battery": "Raising stops by the surplus plus the battery charging power. It keeps going while PV carries the heat pump and stops when the battery would have to help. Only with a battery power sensor (step Power). Switch off if the surplus sensor already leaves the battery out.",
+                "off_without_battery": "Raising stops by the surplus plus the battery charging power. It keeps going while PV carries the heat pump and stops when the battery would have to help. Power from the battery does not count as left over for the heat pump. If the forecast fills the battery today anyway, its charging power counts when raising (needs the battery state of charge). Only with a battery power sensor (step Power). Switch off if the surplus sensor already leaves the battery out.",
+                "strong_on_w": "Measured on the surplus while raised. If it stays above for as long as for raising, the second stage starts; when PV no longer carries it, back to the first. What the second stage does is set on the heat pump.",
                 "smoothing_min": "Short clouds count less. 0 = no smoothing, for example if the sensor is already averaged. If the sensor drops out, its last value counts for 3 more minutes.",
                 "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
                 "setback_min_forecast_kwh": "Forecast for the rest of today; if the lowering window spans midnight, before midnight the forecast for tomorrow.",
@@ -412,14 +434,17 @@ EN = {
                 "ent_smart_grid": "Smart grid select",
                 "opt_normal": "Option for normal operation",
                 "opt_boost": "Option for raising",
+                "opt_strong": "Option for raising strongly",
                 "opt_setback": "Option for lowering",
                 "ent_shift": "Parallel shift",
                 "shift_boost_k": "Raise by",
+                "shift_strong_k": "Raise strongly by",
                 "shift_setback_k": "Lower by",
             },
             "data_description": {
                 "ent_smart_grid": "Select entity that writes the smart grid state of the heat pump.",
                 "opt_normal": "Must be spelled exactly as in the select entity.",
+                "opt_strong": "If the select has no such option, Energy Hub sets the option for raising.",
                 "ent_shift": "Number entity for the parallel shift of the heating curve. The value before the action is remembered and restored afterwards.",
             },
         },
@@ -474,13 +499,16 @@ EN = {
                 "parallel_shift": "Parallel shift of the heating curve",
             }
         },
-        "mode": {"options": {"normal": "Normal operation", "boost": "Raise", "setback": "Lower"}},
+        "mode": {
+            "options": {"normal": "Normal operation", "boost": "Raise", "strong": "Raise strongly", "setback": "Lower"}
+        },
     },
     "entity": {
+        "binary_sensor": {"problem": {"name": "Problem"}},
         "sensor": {
             "mode": {
                 "name": "Control state",
-                "state": {"normal": "Normal operation", "boost": "Raised", "setback": "Lowered"},
+                "state": {"normal": "Normal operation", "boost": "Raised", "strong": "Raised strongly", "setback": "Lowered"},
             }
         },
         "switch": {"automation": {"name": "Automatic control"}},
@@ -490,7 +518,7 @@ EN = {
             "name": "Start manual mode",
             "description": "Holds the heating in one state regardless of the rules.",
             "fields": {
-                "mode": {"name": "State", "description": "Normal operation, raise or lower."},
+                "mode": {"name": "State", "description": "Normal operation, raise, raise strongly or lower."},
                 "minutes": {
                     "name": "Duration",
                     "description": "Leave empty to keep manual mode until it is ended.",

@@ -1,10 +1,10 @@
 """Konstanten für Energy Hub."""
 from __future__ import annotations
 
-from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK
+from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK, MODE_STRONG
 
 DOMAIN = "energy_hub"
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"
@@ -20,9 +20,11 @@ EVALUATE_SECONDS = 30
 REAPPLY_MINUTES = 5
 # So lange gilt der letzte Wert des Überschuss-Sensors weiter, wenn er ausfällt
 SURPLUS_GAP_MINUTES = 3
+# Gelerntes (Leistung der Wärmepumpe, Kapazität des Akkus) wird höchstens so oft gespeichert
+LEARN_SAVE_MINUTES = 10
 
 # Regelzustände (definiert in logic.py, damit die Logik ohne HA testbar bleibt)
-MODES = (MODE_NORMAL, MODE_BOOST, MODE_SETBACK)
+MODES = (MODE_NORMAL, MODE_BOOST, MODE_STRONG, MODE_SETBACK)
 
 # Stellgröße
 ACT_DRY_RUN = "dry_run"
@@ -121,11 +123,14 @@ CONF_ENT_FIREPLACE_STATUS = "ent_fireplace_status"
 
 # --- Regeln ----------------------------------------------------------------
 CONF_BOOST_ON_W = "boost_on_w"
+CONF_BOOST_ON_LEARNED = "boost_on_learned"
 CONF_BOOST_ON_MIN = "boost_on_min"
 CONF_BOOST_OFF_W = "boost_off_w"
 CONF_BOOST_OFF_MIN = "boost_off_min"
 CONF_SMOOTHING_MIN = "smoothing_min"
 CONF_OFF_WITHOUT_BATTERY = "off_without_battery"
+CONF_STRONG_ENABLED = "strong_enabled"
+CONF_STRONG_ON_W = "strong_on_w"
 CONF_MIN_HOLD_MIN = "min_hold_min"
 CONF_SETBACK_ENABLED = "setback_enabled"
 CONF_SETBACK_START = "setback_start"
@@ -139,9 +144,11 @@ CONF_ACTUATOR = "actuator"
 CONF_ENT_SMART_GRID = "ent_smart_grid"
 CONF_OPT_NORMAL = "opt_normal"
 CONF_OPT_BOOST = "opt_boost"
+CONF_OPT_STRONG = "opt_strong"
 CONF_OPT_SETBACK = "opt_setback"
 CONF_ENT_SHIFT = "ent_shift"
 CONF_SHIFT_BOOST_K = "shift_boost_k"
+CONF_SHIFT_STRONG_K = "shift_strong_k"
 CONF_SHIFT_SETBACK_K = "shift_setback_k"
 
 # Vorschläge passend zu packages/dimplex_wpm.yaml
@@ -203,11 +210,14 @@ DEFAULTS: dict[str, object] = {
     CONF_GRID_SIGN: GRID_IMPORT_POSITIVE,
     CONF_BATTERY_SIGN: BATTERY_DISCHARGE_POSITIVE,
     CONF_BOOST_ON_W: 1500,
+    CONF_BOOST_ON_LEARNED: True,
     CONF_BOOST_ON_MIN: 10,
     CONF_BOOST_OFF_W: -300,
     CONF_BOOST_OFF_MIN: 15,
     CONF_SMOOTHING_MIN: 5,
     CONF_OFF_WITHOUT_BATTERY: True,
+    CONF_STRONG_ENABLED: True,
+    CONF_STRONG_ON_W: 2000,
     CONF_MIN_HOLD_MIN: 20,
     CONF_SETBACK_ENABLED: True,
     CONF_SETBACK_START: "05:00:00",
@@ -223,8 +233,10 @@ DEFAULTS: dict[str, object] = {
     CONF_ACTUATOR: ACT_DRY_RUN,
     CONF_OPT_NORMAL: "Normalbetrieb (gelb)",
     CONF_OPT_BOOST: "Verstärkter Betrieb (grün)",
+    CONF_OPT_STRONG: "Verstärkt Stufe 3 (dunkelgrün)",
     CONF_OPT_SETBACK: "Abgesenkter Betrieb (rot)",
     CONF_SHIFT_BOOST_K: 2,
+    CONF_SHIFT_STRONG_K: 4,
     CONF_SHIFT_SETBACK_K: 2,
 }
 

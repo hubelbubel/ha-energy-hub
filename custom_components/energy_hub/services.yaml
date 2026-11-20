@@ -8,6 +8,7 @@ set_override:
           options:
             - normal
             - boost
+            - strong
             - setback
     minutes:
       required: false
