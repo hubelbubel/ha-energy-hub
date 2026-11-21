@@ -141,6 +141,8 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_OFF_WITHOUT_BATTERY, selector.BooleanSelector(), True),
         (c.CONF_STRONG_ENABLED, selector.BooleanSelector(), True),
         (c.CONF_STRONG_ON_W, _number(0, 20000, 50, "W"), True),
+        (c.CONF_DHW_RELOAD, selector.BooleanSelector(), True),
+        (c.CONF_DHW_RELOAD_HYST_K, _number(0.5, 10, 0.5, "K"), True),
         (c.CONF_SMOOTHING_MIN, _number(0, 30, 1, "min"), True),
         (c.CONF_MIN_HOLD_MIN, _number(0, 240, 1, "min"), True),
         (c.CONF_SETBACK_ENABLED, selector.BooleanSelector(), True),
@@ -161,6 +163,7 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_SHIFT_BOOST_K, _number(0, 10, 1, "K"), True),
         (c.CONF_SHIFT_STRONG_K, _number(0, 10, 1, "K"), True),
         (c.CONF_SHIFT_SETBACK_K, _number(0, 10, 1, "K"), True),
+        (c.CONF_ENT_DHW_HYST, _entity("number"), False),
     ],
     STEP_EXPORT: [
         (c.CONF_ENT_ENERGY_EL, _entity("sensor"), False),

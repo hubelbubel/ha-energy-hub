@@ -353,7 +353,8 @@ export function entryTitle(e) {
     if (e.from === "setback") return "Absenken beendet";
     return "Normalbetrieb";
   }
-  return { override: "Handbetrieb", automation: "Automatik", error: "Fehler", reapply: "Erneut gesetzt" }[e.kind] || "Hinweis";
+  return { override: "Handbetrieb", automation: "Automatik", error: "Fehler", reapply: "Erneut gesetzt",
+    dhw_start: "Warmwasser nachladen", dhw_end: "Nachladen beendet" }[e.kind] || "Hinweis";
 }
 
 const RESULT_TEXT = { sent: "gesendet", simulated: "nur protokolliert", failed: "fehlgeschlagen" };
@@ -2502,6 +2503,14 @@ class EnergyHubPanel extends HTMLElement {
           belowHint || (raised ? `Anheben endet unter ${fmtW(set.boost_off_w)}` : "entscheidet, wann das Anheben endet")]);
       }
     }
+    const reload = st.dhw_reload;
+    if (reload) {
+      const at = (iso) => new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+      items.push(["Warmwasser nachladen",
+        reload.active_since ? `läuft seit ${at(reload.active_since)}`
+          : reload.done_today && reload.last ? `heute ${at(reload.last)}` : "wartet",
+        reload.active_since || reload.done_today ? "" : reload.wait || ""]);
+    }
     if (cfg.ent_forecast_today) items.push(["Prognose Rest heute", fmtKwh(st.inputs.forecast_kwh)]);
     if (cfg.ent_forecast_tomorrow) items.push(["Prognose morgen", fmtKwh(st.inputs.forecast_tomorrow_kwh)]);
     const el = this._value("ent_power_el", "power");
@@ -2583,6 +2592,9 @@ class EnergyHubPanel extends HTMLElement {
         ? `Der Akku fasst rund ${fmtKwh(learned.battery_kwh)}, gelernt aus Ladung und Ladestand. Reicht die Prognose für den Rest des Tages für das Doppelte dessen, was ihm zum Vollladen fehlt, zählt auch seine Ladeleistung als übrig.`
         : "Sobald Energy Hub die Kapazität des Akkus aus Ladung und Ladestand gelernt hat, zählt auch seine Ladeleistung als übrig, wenn er laut Prognose ohnehin voll wird.");
     }
+    if (st.dhw_reload) {
+      parts.push(`Warmwasser wird einmal am Tag nachgeladen: nach Mittag, wenn für die Wärmepumpe 10 min lang nur noch zwischen ${fmtW(threshold)} und ${fmtW(threshold * 1.5)} übrig sind, der Akku voll ist und das Warmwasser mindestens 4 K unter dem Soll liegt. Dann senkt Energy Hub die Warmwasser-Hysterese auf ${nf1.format(set.dhw_reload_hyst_k)} K und stellt sie danach zurück, spätestens nach 90 min.`);
+    }
     if (set.strong_enabled) {
       parts.push(`Stark angehoben wird, wenn beim Anheben ${nf0.format(set.boost_on_min)} min lang noch mehr als ${fmtW(set.strong_on_w)} übrig sind. Trägt die PV das nicht mehr, geht es zurück auf einfaches Anheben, solange es dafür reicht.`);
     }
@@ -2631,6 +2643,7 @@ class EnergyHubPanel extends HTMLElement {
       : e.kind === "switch" && e.to === "boost" ? "M7 2 L12.5 11 H1.5 Z"
       : e.kind === "switch" && e.to === "setback" ? "M7 12 L1.5 3 H12.5 Z"
       : e.kind === "switch" ? "M2 6 H12 V8 H2 Z"
+      : e.kind === "dhw_start" || e.kind === "dhw_end" ? "M7 1 C5.5 3.5 2.5 6.5 2.5 9 A4.5 4.5 0 0 0 11.5 9 C11.5 6.5 8.5 3.5 7 1 Z"
       : "M7 4.5 a2.5 2.5 0 1 0 0.01 0 Z";
     return s("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" },
       s("path", { d, "fill-rule": "evenodd" }));

@@ -131,6 +131,8 @@ CONF_SMOOTHING_MIN = "smoothing_min"
 CONF_OFF_WITHOUT_BATTERY = "off_without_battery"
 CONF_STRONG_ENABLED = "strong_enabled"
 CONF_STRONG_ON_W = "strong_on_w"
+CONF_DHW_RELOAD = "dhw_reload"
+CONF_DHW_RELOAD_HYST_K = "dhw_reload_hyst_k"
 CONF_MIN_HOLD_MIN = "min_hold_min"
 CONF_SETBACK_ENABLED = "setback_enabled"
 CONF_SETBACK_START = "setback_start"
@@ -149,6 +151,7 @@ CONF_OPT_SETBACK = "opt_setback"
 CONF_ENT_SHIFT = "ent_shift"
 CONF_SHIFT_BOOST_K = "shift_boost_k"
 CONF_SHIFT_STRONG_K = "shift_strong_k"
+CONF_ENT_DHW_HYST = "ent_dhw_hysteresis"
 CONF_SHIFT_SETBACK_K = "shift_setback_k"
 
 # Vorschläge passend zu packages/dimplex_wpm.yaml
@@ -165,6 +168,7 @@ SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
     CONF_ENT_POWER_HEAT: "sensor.wp_heizleistung",
     CONF_ENT_SMART_GRID: "select.wp_smart_grid_setzen",
     CONF_ENT_SHIFT: "number.wp_parallelverschiebung_setzen",
+    CONF_ENT_DHW_HYST: "number.wp_warmwasser_hysterese_setzen",
     CONF_ENT_STORAGE: "sensor.wp_regenerativspeicher_temperatur",
     CONF_ENT_LOCK: "sensor.wp_sperre",
     CONF_ENT_ENERGY_HEAT: "sensor.wp_warmemenge_heizen",
@@ -218,6 +222,8 @@ DEFAULTS: dict[str, object] = {
     CONF_OFF_WITHOUT_BATTERY: True,
     CONF_STRONG_ENABLED: True,
     CONF_STRONG_ON_W: 2000,
+    CONF_DHW_RELOAD: True,
+    CONF_DHW_RELOAD_HYST_K: 2,
     CONF_MIN_HOLD_MIN: 20,
     CONF_SETBACK_ENABLED: True,
     CONF_SETBACK_START: "05:00:00",

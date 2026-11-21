@@ -25,6 +25,7 @@
   Start:  python3 -m http.server 8000   (im Hauptordner des Repositories)
   Dann:   http://localhost:8000/dev/preview.html
   Parameter: ?theme=dark  ?mode=normal|boost|strong|setback|override|empty  ?tab=overview|power|pv|heat
+             ?nachladen=1 (Warmwasser wird gerade nachgeladen)
              ?ohne=wp,speicher,regelung,strom,batterie,wallbox,wr,tigo  (diese Teile sind nicht hinterlegt)
              ?weg=wp  (Wärmepumpe hinterlegt, aber nicht erreichbar, etwa ohne Modbus-Karte)
              ?ohneverlauf=netz  (Sensor hat einen Wert, aber keinen Verlauf, etwa vom Recorder ausgeschlossen)
@@ -50,7 +51,7 @@
     ent_power_el: "sensor.wp_elektrische_leistung", ent_power_heat: "sensor.wp_heizleistung",
     ent_pv_surplus: "sensor.pv_ueberschuss", ent_forecast_today: "sensor.pv_prognose_rest_heute",
     ent_forecast_tomorrow: "sensor.pv_prognose_morgen",
-    ent_smart_grid: "select.wp_smart_grid_setzen", ent_shift: null,
+    ent_smart_grid: "select.wp_smart_grid_setzen", ent_shift: null, ent_dhw_hysteresis: "number.wp_warmwasser_hysterese_setzen",
     ent_energy_el: null, ent_energy_heat: "sensor.wp_warmemenge_heizen",
     ent_energy_dhw: "sensor.wp_warmemenge_warmwasser", ent_energy_env: null,
     ent_heater: "binary_sensor.wp_flanschheizung_e9", ent_second_heat: null,
@@ -236,7 +237,20 @@
   states["sensor.azzurro_status"] = st(nowSim["sensor.pv_power"].at(-1) > 0 ? 2 : 0);
   Object.assign(ent, pw, inv);
 
+  const reloading = q.get("nachladen") === "1";
+  const dhwValues = { surplus_w: 260, balance_w: 260, available_w: 2140, forecast_kwh: 0.9, forecast_tomorrow_kwh: 19.4, outdoor_c: 9.8, dhw_c: 51.6 };
   const log = scene === "empty" ? [] : [
+    ...(reloading ? [{ ts: iso(now - 12 * 60e3), kind: "dhw_start", result: "sent",
+      detail: "number.wp_warmwasser_hysterese_setzen → 2 K (vorher 7 K)",
+      text: "Die Sonne lässt nach: Für die Wärmepumpe sind seit 10 min nur noch zwischen 1.650 W und 2.475 W übrig (im 5-Minuten-Mittel 2.140 W), später reicht es für eine Ladung nicht mehr. Das Warmwasser hat 51,6 °C und liegt 6,4 K unter dem Soll von 58,0 °C.",
+      values: dhwValues }] : [
+      { ts: iso(now - 26 * 60e3), kind: "dhw_end", result: "sent", detail: "number.wp_warmwasser_hysterese_setzen → 7 K",
+        text: "Das Warmwasser hat 57,6 °C erreicht (Soll 58,0 °C).", values: { ...dhwValues, dhw_c: 57.6 } },
+      { ts: iso(now - 71 * 60e3), kind: "dhw_start", result: "sent",
+        detail: "number.wp_warmwasser_hysterese_setzen → 2 K (vorher 7 K)",
+        text: "Die Sonne lässt nach: Für die Wärmepumpe sind seit 10 min nur noch zwischen 1.650 W und 2.475 W übrig (im 5-Minuten-Mittel 2.140 W), später reicht es für eine Ladung nicht mehr. Das Warmwasser hat 51,6 °C und liegt 6,4 K unter dem Soll von 58,0 °C.",
+        values: dhwValues },
+    ]),
     ...(strong ? [{ ts: iso(now - 12 * 60e3), kind: "switch", from: "boost", to: "strong", result: "sent",
       detail: "select.wp_smart_grid_setzen → Verstärkt Stufe 3 (dunkelgrün)",
       text: "Trotz Anheben sind seit 10 min mehr als 2.000 W übrig (im 5-Minuten-Mittel 2.380 W).",
@@ -280,6 +294,7 @@
     settings: {
       boost_on_w: 1500, boost_on_learned: true, boost_on_min: 10, boost_off_w: -300, boost_off_min: 15, min_hold_min: 20,
       smoothing_min: 5, off_without_battery: true, strong_enabled: true, strong_on_w: 2000,
+      dhw_reload: true, dhw_reload_hyst_k: 2,
       setback_enabled: true, setback_start: night ? "21:00:00" : "05:00:00", setback_end: "10:00:00",
       setback_min_forecast_kwh: 10, setback_min_outdoor_c: 3, setback_min_dhw_c: 42,
       actuator: scene === "empty" ? "dry_run" : "smart_grid", shift_boost_k: 2, shift_strong_k: 4, shift_setback_k: 2,
@@ -307,6 +322,11 @@
       },
       learned: { run_w: 1650, run_min: 842, battery_kwh: scene === "empty" ? null : 5.1, battery_n: 6 },
       problems: [],
+      dhw_reload: scene === "empty" ? null : {
+        active_since: reloading ? iso(now - 12 * 60e3) : null,
+        last: iso(now - (reloading ? 12 : 71) * 60e3),
+        done_today: true, wait: null, hyst_base: reloading ? 7 : null,
+      },
       inputs: { surplus_w: surplusNow, balance_w: scene === "empty" ? null : night ? -640 : strong ? 1150 : 1860,
         available_w: scene === "empty" ? null : night ? -20 + wpNow : surplusNow + wpNow,
         forecast_kwh: 11.8, forecast_tomorrow_kwh: 19.4, outdoor_c: 6.4, dhw_c: 48.3, battery_soc: 52 },

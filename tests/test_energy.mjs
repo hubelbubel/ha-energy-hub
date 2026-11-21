@@ -333,4 +333,6 @@ test("entryTitle: Stufen beim Anheben", () => {
   assert.equal(m.entryTitle({ kind: "switch", from: "strong", to: "boost" }), "Zurück auf Anheben");
   assert.equal(m.entryTitle({ kind: "switch", from: "normal", to: "boost" }), "Angehoben");
   assert.equal(m.entryTitle({ kind: "switch", from: "strong", to: "normal" }), "Anheben beendet");
+  assert.equal(m.entryTitle({ kind: "dhw_start" }), "Warmwasser nachladen");
+  assert.equal(m.entryTitle({ kind: "dhw_end" }), "Nachladen beendet");
 });

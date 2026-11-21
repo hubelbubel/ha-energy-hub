@@ -47,6 +47,14 @@ CAPACITY_MAX_SPAN = timedelta(hours=24)
 # Die Kapazität mittelt die letzten Schätzungen, gleitend über so viele
 CAPACITY_KEEP = 5
 
+# Warmwasser nachladen: einmal am Tag, wenn die Sonne nachlässt und die PV gerade noch eine Ladung trägt
+DHW_RELOAD_GAP_K = 4.0  # so weit muss das Warmwasser unter dem Soll liegen
+DHW_RELOAD_BAND = 1.5  # übrig für die Wärmepumpe: zwischen ihrer Leistung und dem 1,5-Fachen
+DHW_RELOAD_WAIT_MIN = 10  # so lange muss das anliegen
+DHW_RELOAD_MAX_MIN = 90  # längstens so lange nachladen
+DHW_RELOAD_DONE_K = 0.5  # fertig, wenn das Warmwasser so nah am Soll ist
+BATTERY_FULL_SOC = 95.0  # ab diesem Ladestand gilt der Akku als voll
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -61,6 +69,9 @@ class Settings:
     # Stark anheben (zweite Stufe): wenn beim Anheben noch so viel übrig ist
     strong_enabled: bool = True
     strong_on_w: float = 2000
+    # Warmwasser nachladen: Hysterese vorübergehend auf diesen Wert
+    dhw_reload: bool = True
+    dhw_reload_hyst_k: float = 2.0
     min_hold_min: float = 20
     # Nur für die Begründungen: über wie viele Minuten der Regler die Messwerte mittelt
     smoothing_min: float = 0
@@ -102,6 +113,11 @@ class Inputs:
     run_w: float | None = None
     battery_soc: float | None = None
     battery_kwh: float | None = None
+    # Warmwasser nachladen: Soll, das gerade gilt; Nachmittag (nach dem Sonnenhöchststand);
+    # die Wärmepumpe macht gerade Warmwasser
+    dhw_target_c: float | None = None
+    afternoon: bool | None = None
+    dhw_heating: bool | None = None
     forecast_kwh: float | None = None
     forecast_tomorrow_kwh: float | None = None
     outdoor_c: float | None = None
@@ -115,12 +131,14 @@ class Timers:
     """Seit wann die Messwerte über bzw. unter den Schwellen liegen.
 
     above_since: über der Einschaltschwelle, below_since: unter der Ausschaltschwelle,
-    strong_since: beim Anheben über der Schwelle zum starken Anheben.
+    strong_since: beim Anheben über der Schwelle zum starken Anheben,
+    reload_since: für die Wärmepumpe übrig zwischen ihrer Leistung und dem 1,5-Fachen.
     """
 
     above_since: datetime | None = None
     below_since: datetime | None = None
     strong_since: datetime | None = None
+    reload_since: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -274,7 +292,89 @@ def update_timers(
     extra = strong_value(inputs)
     if mode == MODE_BOOST and settings.strong_enabled and extra is not None and extra >= settings.strong_on_w:
         strong = timers.strong_since or now
-    return Timers(above_since=above, below_since=below, strong_since=strong)
+    in_band = settings.dhw_reload and rule.threshold > 0 and (
+        rule.threshold <= rule.value < DHW_RELOAD_BAND * rule.threshold
+    )
+    reload = (timers.reload_since or now) if in_band else None
+    return Timers(above_since=above, below_since=below, strong_since=strong, reload_since=reload)
+
+
+# ------------------------------------------------------- Warmwasser nachladen
+@dataclass(frozen=True)
+class ReloadCheck:
+    """Ob das Warmwasser jetzt nachgeladen wird; reason fürs Logbuch, short fürs Panel."""
+
+    start: bool
+    reason: str
+    short: str
+
+
+def dhw_reload_check(inputs: Inputs, s: Settings, timers: Timers, done_today: bool) -> ReloadCheck:
+    """Warmwasser nachladen: einmal am Tag, bevor die Sonne für eine Ladung nicht mehr reicht.
+
+    Mittags lädt Grün das Warmwasser auf die Maximaltemperatur. Danach fällt es langsam, bleibt
+    aber innerhalb der Hysterese, und die Wärmepumpe lädt erst nachts nach. Deshalb wird am
+    Nachmittag einmal nachgeladen, wenn für die Wärmepumpe nur noch knapp so viel übrig ist, wie
+    sie zieht: Später reicht die PV nicht mehr.
+    """
+    def no(short: str) -> ReloadCheck:
+        return ReloadCheck(False, "", short)
+
+    if not s.dhw_reload:
+        return no("abgeschaltet")
+    if done_today:
+        return no("heute schon nachgeladen")
+    if inputs.dhw_c is None or inputs.dhw_target_c is None:
+        return no("Warmwasser-Temperatur oder Soll fehlt")
+    gap = inputs.dhw_target_c - inputs.dhw_c
+    if gap < DHW_RELOAD_GAP_K:
+        return no(f"erst ab {fmt_num(DHW_RELOAD_GAP_K, 'K', 0)} unter Soll, jetzt {fmt_num(max(0.0, gap), 'K')}")
+    if inputs.afternoon is False:
+        return no("erst nach Mittag")
+    if inputs.dhw_heating:
+        return no("die Wärmepumpe macht gerade Warmwasser")
+    if inputs.battery_soc is not None and inputs.battery_soc < BATTERY_FULL_SOC and not battery_fills(inputs):
+        return no("der Akku lädt noch")
+    rule = on_rule(inputs, s)
+    if rule is None:
+        return no("kein PV-Überschuss gemessen")
+    band = (
+        f"zwischen {fmt_w(rule.threshold)} und {fmt_w(DHW_RELOAD_BAND * rule.threshold)}"
+    )
+    held = _minutes(timers.reload_since, inputs.now)
+    if held is None or held < DHW_RELOAD_WAIT_MIN:
+        if rule.value >= DHW_RELOAD_BAND * rule.threshold:
+            return no("wartet, bis die Sonne nachlässt")
+        if rule.value < rule.threshold:
+            return no("zu wenig Sonne")
+        return no(f"übrig {band}, seit {fmt_min(held or 0)}")
+    what = "Für die Wärmepumpe sind" if rule.available else "Als PV-Überschuss sind"
+    return ReloadCheck(
+        True,
+        f"Die Sonne lässt nach: {what} seit {fmt_min(held)} nur noch {band} übrig "
+        f"({_measured(rule.value, s)}), später reicht es für eine Ladung nicht mehr. Das Warmwasser hat "
+        f"{fmt_num(inputs.dhw_c, '°C')} und liegt {fmt_num(gap, 'K')} unter dem Soll von "
+        f"{fmt_num(inputs.dhw_target_c, '°C')}.",
+        "läuft",
+    )
+
+
+def dhw_reload_end(inputs: Inputs, s: Settings, since: datetime, timers: Timers) -> str | None:
+    """Warum das Nachladen jetzt endet; None, solange es weiterläuft."""
+    if inputs.dhw_c is not None and inputs.dhw_target_c is not None:
+        if inputs.dhw_c >= inputs.dhw_target_c - DHW_RELOAD_DONE_K:
+            return f"Das Warmwasser hat {fmt_num(inputs.dhw_c, '°C')} erreicht (Soll {fmt_num(inputs.dhw_target_c, '°C')})."
+    ran = _minutes(since, inputs.now) or 0.0
+    if ran >= DHW_RELOAD_MAX_MIN:
+        return f"Nach {fmt_min(DHW_RELOAD_MAX_MIN)} beendet."
+    below = _minutes(timers.below_since, inputs.now)
+    if below is not None and below >= s.boost_off_min:
+        off_value, off_name = _off_measure(inputs)
+        return (
+            f"{off_name} liegt seit {fmt_min(below)} unter {fmt_w(s.boost_off_w)} "
+            f"({_measured(off_value, s)}); die PV trägt die Wärmepumpe nicht mehr."
+        )
+    return None
 
 
 # ------------------------------------------------------------------- Lernen

@@ -27,6 +27,7 @@ from .logic import (
     Decision,
     Inputs,
     Override,
+    ReloadCheck,
     Segment,
     Settings,
     Timers,
@@ -34,6 +35,8 @@ from .logic import (
     battery_missing_kwh,
     capacity_step,
     decide,
+    dhw_reload_check,
+    dhw_reload_end,
     learn_capacity,
     learn_run_power,
     learned_run_w,
@@ -65,6 +68,7 @@ ENTITY_KEYS = (
     c.CONF_ENT_FORECAST_TOMORROW,
     c.CONF_ENT_SMART_GRID,
     c.CONF_ENT_SHIFT,
+    c.CONF_ENT_DHW_HYST,
     c.CONF_ENT_ENERGY_EL,
     c.CONF_ENT_ENERGY_HEAT,
     c.CONF_ENT_ENERGY_DHW,
@@ -114,6 +118,8 @@ SETTING_KEYS = (
     c.CONF_OFF_WITHOUT_BATTERY,
     c.CONF_STRONG_ENABLED,
     c.CONF_STRONG_ON_W,
+    c.CONF_DHW_RELOAD,
+    c.CONF_DHW_RELOAD_HYST_K,
     c.CONF_MIN_HOLD_MIN,
     c.CONF_SETBACK_ENABLED,
     c.CONF_SETBACK_START,
@@ -153,6 +159,10 @@ HEATPUMP_KEYS = (
 )
 
 
+def _parse(value: str | None) -> datetime | None:
+    return dt_util.parse_datetime(value) if value else None
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
@@ -181,6 +191,10 @@ class Controller:
         self._learn_saved_at: datetime | None = None
         self._segment: Segment | None = None
         self._problems: list[str] = []
+        # Warmwasser nachladen: letzte Prüfung, Fehler beim Schreiben der Hysterese, nächster Versuch
+        self._reload_check: ReloadCheck | None = None
+        self._reload_error: str | None = None
+        self._reload_retry_at: datetime | None = None
         self._aux: dict[str, Any] = {}
         self._retry_at: datetime | None = None
         self._last_apply: datetime | None = None
@@ -239,6 +253,8 @@ class Controller:
             boost_off_min=float(o[c.CONF_BOOST_OFF_MIN]),
             strong_enabled=bool(o[c.CONF_STRONG_ENABLED]),
             strong_on_w=float(o[c.CONF_STRONG_ON_W]),
+            dhw_reload=self.reload_possible,
+            dhw_reload_hyst_k=float(o[c.CONF_DHW_RELOAD_HYST_K]),
             min_hold_min=float(o[c.CONF_MIN_HOLD_MIN]),
             smoothing_min=float(o[c.CONF_SMOOTHING_MIN]),
             setback_enabled=bool(o[c.CONF_SETBACK_ENABLED]),
@@ -268,6 +284,11 @@ class Controller:
             "run_min": 0.0,
             "battery_kwh": None,
             "battery_n": 0,
+            # Warmwasser nachladen: läuft seit, Hysterese vorher, Tag und Zeitpunkt des letzten Starts
+            "dhw_reload_since": None,
+            "dhw_hyst_base": None,
+            "dhw_reload_day": None,
+            "dhw_reload_last": None,
             **stored,
         }
         if self._data["mode"] not in c.MODES:
@@ -437,7 +458,23 @@ class Controller:
             dhw_c=self._number(c.CONF_ENT_DHW)[0],
             storage_c=self._aux["storage"]["temp"],
             return_target_c=self._aux["return_target"],
+            dhw_target_c=self._number(c.CONF_ENT_DHW_TARGET)[0],
+            afternoon=self._afternoon(now),
+            dhw_heating=self._dhw_heating(),
         )
+
+    def _afternoon(self, now: datetime) -> bool:
+        """Nach dem Sonnenhöchststand? Aus sun.sun, ohne die Sonne-Integration ab 13 Uhr."""
+        sun = self.hass.states.get("sun.sun")
+        rising = sun.attributes.get("rising") if sun is not None else None
+        if rising is None:
+            return now.hour >= 13
+        return not bool(rising)
+
+    def _dhw_heating(self) -> bool | None:
+        """Macht die Wärmepumpe gerade Warmwasser? Aus dem Status; None ohne Status."""
+        status = self._text(c.CONF_ENT_STATUS)
+        return None if status is None else "warmwasser" in status.casefold()
 
     def _text(self, key: str) -> str | None:
         entity_id = self.options.get(key)
@@ -512,7 +549,9 @@ class Controller:
         self.log_rev += 1
         self._save()
 
-        title = MODE_LABEL[mode_to] if mode_to else {"error": "Fehler"}.get(kind, "Hinweis")
+        title = MODE_LABEL[mode_to] if mode_to else {
+            "error": "Fehler", "dhw_start": "Warmwasser nachladen", "dhw_end": "Nachladen beendet",
+        }.get(kind, "Hinweis")
         event = {"name": c.TITLE, "message": f"{title}: {text}", "domain": c.DOMAIN}
         if entity_id := self.state_entity_id:
             event["entity_id"] = entity_id
@@ -594,6 +633,7 @@ class Controller:
         self._timers = update_timers(self._timers, inputs, settings, self.mode)
         try:
             await self._decide_and_apply(inputs, settings)
+            await self._reload_step(inputs, settings)
         finally:
             self._problems = self._find_problems()
 
@@ -665,6 +705,139 @@ class Controller:
             detail=detail,
         )
 
+    # ------------------------------------------------------ Warmwasser nachladen
+    @property
+    def reload_possible(self) -> bool:
+        """Nachladen ist an und alles dafür hinterlegt: Hysterese, Warmwasser und sein Soll."""
+        o = self.options
+        return bool(
+            o.get(c.CONF_DHW_RELOAD)
+            and o.get(c.CONF_ENT_DHW_HYST)
+            and o.get(c.CONF_ENT_DHW)
+            and o.get(c.CONF_ENT_DHW_TARGET)
+        )
+
+    async def _reload_step(self, inputs: Inputs, settings: Settings) -> None:
+        """Startet, beendet oder prüft das Nachladen des Warmwassers."""
+        now = inputs.now
+        since = _parse(self._data.get("dhw_reload_since"))
+        if since is not None:
+            if not self.reload_possible:
+                reason = "Nachladen ist abgeschaltet."
+            elif self.override is not None:
+                reason = "Handbetrieb."
+            elif not self.automation:
+                reason = "Die Automatik ist aus."
+            else:
+                reason = dhw_reload_end(inputs, settings, since, self._timers)
+            if reason:
+                await self._reload_stop(reason, now)
+            return
+        if self._data.get("dhw_hyst_base") is not None:
+            # Die Hysterese steht noch vom letzten Nachladen (Fehler beim Zurückstellen, Neustart)
+            await self._reload_restore(now)
+            return
+        if not self.reload_possible or not self.automation or self.override is not None:
+            self._reload_check = None
+            return
+        done_today = self._data.get("dhw_reload_day") == now.date().isoformat()
+        check = dhw_reload_check(inputs, settings, self._timers, done_today)
+        self._reload_check = check
+        if check.start:
+            await self._reload_start(check.reason, now)
+
+    async def _reload_start(self, reason: str, now: datetime) -> None:
+        o = self.options
+        entity_id = o[c.CONF_ENT_DHW_HYST]
+        self._data["dhw_reload_day"] = now.date().isoformat()  # höchstens ein Versuch am Tag
+        target = float(o[c.CONF_DHW_RELOAD_HYST_K])
+        if self.dry_run:
+            result, detail = "simulated", None
+        else:
+            base = self._number(c.CONF_ENT_DHW_HYST)[0]
+            if base is None:
+                result, detail = "failed", f"{entity_id} ist nicht verfügbar."
+            else:
+                result, detail = await self._write_number(entity_id, target)
+                if result != "failed":
+                    self._data["dhw_hyst_base"] = base
+                    detail = f"{entity_id} → {target:g} K (vorher {base:g} K)"
+        if result == "failed":
+            self._reload_error = detail
+            self._log("error", "Das Warmwasser ließ sich nicht nachladen: Die Hysterese ließ sich nicht setzen.",
+                      result=result, detail=detail)
+            return
+        self._reload_error = None
+        self._data["dhw_reload_since"] = now.isoformat()
+        self._data["dhw_reload_last"] = now.isoformat()
+        self._log("dhw_start", reason, result=result, detail=detail)
+
+    async def _reload_stop(self, reason: str, now: datetime) -> None:
+        self._data["dhw_reload_since"] = None
+        detail = None
+        result = "simulated" if self.dry_run else "sent"
+        if self._data.get("dhw_hyst_base") is not None:
+            result, detail = await self._reload_restore(now, log=False)
+        self._log("dhw_end", reason, result=result, detail=detail)
+
+    async def _reload_restore(self, now: datetime, *, log: bool = True) -> tuple[str, str | None]:
+        """Stellt die Hysterese von vor dem Nachladen wieder her; bei Fehler alle 5 min neu."""
+        if self._reload_retry_at and now < self._reload_retry_at:
+            return "failed", self._reload_error
+        entity_id = self.options.get(c.CONF_ENT_DHW_HYST)
+        base = float(self._data["dhw_hyst_base"])
+        if not entity_id:
+            self._data["dhw_hyst_base"] = None
+            return "failed", "Es ist keine Entität für die Hysterese mehr eingestellt."
+        result, detail = await self._write_number(entity_id, base)
+        if result == "failed":
+            self._reload_error = detail
+            self._reload_retry_at = now + timedelta(minutes=c.REAPPLY_MINUTES)
+            self._log("error", f"Die Warmwasser-Hysterese ließ sich nicht auf {base:g} K zurückstellen. "
+                      f"Nächster Versuch um {self._reload_retry_at:%H:%M} Uhr.", result=result, detail=detail)
+            return result, detail
+        self._data["dhw_hyst_base"] = None
+        self._reload_error = None
+        self._reload_retry_at = None
+        detail = f"{entity_id} → {base:g} K"
+        if log:
+            self._log("reapply", "Die Warmwasser-Hysterese vom letzten Nachladen wurde zurückgestellt.",
+                      result=result, detail=detail)
+        else:
+            self._save()
+        return result, detail
+
+    async def _write_number(self, entity_id: str, value: float) -> tuple[str, str | None]:
+        """Schreibt eine Zahl-Entität, begrenzt auf ihr Minimum und Maximum."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
+            return "failed", f"{entity_id} ist nicht verfügbar."
+        low, high = state.attributes.get("min"), state.attributes.get("max")
+        if low is not None:
+            value = max(float(low), value)
+        if high is not None:
+            value = min(float(high), value)
+        try:
+            await self.hass.services.async_call(
+                "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
+            )
+        except HomeAssistantError as err:
+            return "failed", str(err)
+        return "sent", f"{entity_id} → {value:g}"
+
+    def _reload_snapshot(self) -> dict[str, Any] | None:
+        if not self.reload_possible:
+            return None
+        check = self._reload_check
+        today = dt_util.now().date().isoformat()
+        return {
+            "active_since": self._data.get("dhw_reload_since"),
+            "last": self._data.get("dhw_reload_last"),
+            "done_today": self._data.get("dhw_reload_day") == today,
+            "wait": check.short if check and not check.start else None,
+            "hyst_base": self._data.get("dhw_hyst_base"),
+        }
+
     # ----------------------------------------------------------------- Probleme
     @property
     def problems(self) -> list[str]:
@@ -693,6 +866,10 @@ class Controller:
             out.append("Die Wärmepumpe meldet keine Werte.")
         if o[c.CONF_SETBACK_ENABLED] and o.get(c.CONF_ENT_FORECAST_TODAY) and self._missing(c.CONF_ENT_FORECAST_TODAY):
             out.append(f"Die PV-Prognose ({o[c.CONF_ENT_FORECAST_TODAY]}) liefert keinen Wert.")
+        if self.reload_possible and not self.dry_run and self._missing(c.CONF_ENT_DHW_HYST):
+            out.append(f"Die Warmwasser-Hysterese ({o[c.CONF_ENT_DHW_HYST]}) ist nicht verfügbar.")
+        elif self._reload_error:
+            out.append(f"Die Warmwasser-Hysterese ließ sich nicht setzen: {self._reload_error}")
         return out
 
     # --------------------------------------------------------------- Stellgröße
@@ -830,6 +1007,7 @@ class Controller:
                     "battery_n": int(self._data.get("battery_n") or 0),
                 },
                 "problems": self.problems,
+                "dhw_reload": self._reload_snapshot(),
                 "inputs": {
                     "surplus_w": inputs.surplus_w if inputs else None,
                     "balance_w": inputs.balance_w if inputs else None,

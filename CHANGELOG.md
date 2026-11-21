@@ -12,6 +12,7 @@ Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releas
 - Auswertung der letzten 7 Tage: „Beim Anheben … % Solarstrom“ statt nur der Dauer. Die Aussage zur Wärmepumpe rechnet jetzt vorsichtig: Netzbezug und Akku zählen zuerst bei der Wärmepumpe.
 - Neuer Problem-Sensor: an, wenn die Wärmepumpe eine Vorgabe nicht annimmt, der Überschuss oder die Prognose keinen Wert liefert, die Stellgröße fehlt oder die Wärmepumpe nichts meldet. Die Gründe stehen im Attribut `problems`. Damit lässt sich eine Benachrichtigung als normale Automation bauen.
 - Effizienz-Export: neue Spalte `stark_angehoben_min`; `angehoben_min` zählt beide Stufen.
+- Warmwasser nachmittags nachladen: Einmal am Tag, wenn die Sonne nachlässt und die PV gerade noch eine Ladung trägt, setzt Energy Hub die Warmwasser-Hysterese vorübergehend auf 2 K. Die Wärmepumpe lädt dann mit Sonnenstrom nach statt in der Nacht. Voraussetzungen: Akku voll, Warmwasser mindestens 4 K unter dem Soll. Danach kommt die alte Hysterese zurück, auch nach einem Neustart. Neu im Schritt Eingriff die Hysterese-Entität (Dimplex: `number.wp_warmwasser_hysterese_setzen`), im Schritt Regeln Schalter und Wert. Im Panel: Kennwert „Warmwasser nachladen“, Einträge im Logbuch und in „So wird geregelt“.
 
 ## 0.6.0 – 2026-11-20
 

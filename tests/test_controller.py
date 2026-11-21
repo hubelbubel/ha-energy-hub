@@ -762,3 +762,116 @@ def test_problems_are_listed():
         ]
 
     asyncio.run(run())
+
+
+# --- Warmwasser nachladen ---------------------------------------------------
+
+DHW_TARGET = "sensor.wp_warmwasser_soll_aktuell"
+DHW_HYST = "number.wp_warmwasser_hysterese_setzen"
+STATUS = "sensor.wp_status"
+
+
+def make_reload(actuator=c.ACT_SMART_GRID):
+    hass, ctrl = make(
+        actuator,
+        **{c.CONF_ENT_DHW_TARGET: DHW_TARGET, c.CONF_ENT_DHW_HYST: DHW_HYST, c.CONF_ENT_STATUS: STATUS,
+           c.CONF_ENT_POWER_EL: POWER_EL, c.CONF_BOOST_ON_LEARNED: False},
+    )
+    CLOCK.now = CLOCK.now.replace(hour=17, minute=0)
+    hass.states.set("sun.sun", "above_horizon", rising=False)
+    hass.states.set(DHW, 52)
+    hass.states.set(DHW_TARGET, 58)
+    hass.states.set(DHW_HYST, 7, min=1, max=15)
+    hass.states.set(STATUS, "Aus")
+    hass.states.set(POWER_EL, 40, unit_of_measurement="W")
+    hass.states.set(SURPLUS, 1900)  # 1.940 W übrig: zwischen 1.500 W und 2.250 W
+    return hass, ctrl
+
+
+def test_reload_lowers_the_hysteresis_and_restores_it():
+    async def run():
+        hass, ctrl = make_reload()
+        await ctrl.async_start()
+        await tick(ctrl)
+        assert ctrl.snapshot()["state"]["dhw_reload"]["wait"] == "übrig zwischen 1.500 W und 2.250 W, seit 0 min"
+        await tick(ctrl, 10)
+        assert float(hass.states.get(DHW_HYST).state) == 2
+        entry = next(e for e in ctrl.snapshot()["log"] if e["kind"] == "dhw_start")
+        assert entry["text"].startswith("Die Sonne lässt nach")
+        assert entry["detail"] == f"{DHW_HYST} → 2 K (vorher 7 K)"
+        state = ctrl.snapshot()["state"]["dhw_reload"]
+        assert state["active_since"] is not None and state["hyst_base"] == 7
+
+        # Die Wärmepumpe lädt, das Warmwasser erreicht den Soll: Hysterese zurück
+        hass.states.set(STATUS, "Warmwasser")
+        hass.states.set(DHW, 57.6)
+        await tick(ctrl, 30)
+        assert float(hass.states.get(DHW_HYST).state) == 7
+        end = ctrl.snapshot()["log"][0]
+        assert (end["kind"], end["detail"]) == ("dhw_end", f"{DHW_HYST} → 7 K")
+        assert end["text"] == "Das Warmwasser hat 57,6 °C erreicht (Soll 58,0 °C)."
+
+        # Höchstens einmal am Tag
+        hass.states.set(STATUS, "Aus")
+        hass.states.set(DHW, 50)
+        await tick(ctrl, 20)
+        assert float(hass.states.get(DHW_HYST).state) == 7
+        assert ctrl.snapshot()["state"]["dhw_reload"]["wait"] == "heute schon nachgeladen"
+        assert [e["kind"] for e in ctrl.snapshot()["log"]].count("dhw_start") == 1
+
+    asyncio.run(run())
+
+
+def test_reload_survives_a_restart_and_retries_the_restore():
+    async def run():
+        hass, ctrl = make_reload()
+        await ctrl.async_start()
+        await tick(ctrl)
+        await tick(ctrl, 10)
+        assert float(hass.states.get(DHW_HYST).state) == 2
+        await ctrl.async_stop()
+
+        # Neustart nach zwei Stunden, Modbus antwortet zunächst nicht
+        CLOCK.advance(minutes=120)
+        again = controller_mod.Controller(hass, ctrl.entry)
+        await again.async_start()
+        hass.services.fail = True
+        await tick(again)
+        assert float(hass.states.get(DHW_HYST).state) == 2
+        assert any("Warmwasser-Hysterese ließ sich nicht setzen" in p for p in again.problems)
+        assert again.snapshot()["state"]["dhw_reload"]["hyst_base"] == 7
+        hass.services.fail = False
+        await tick(again, 2)
+        assert float(hass.states.get(DHW_HYST).state) == 2  # nächster Versuch erst nach 5 min
+        await tick(again, 4)
+        assert float(hass.states.get(DHW_HYST).state) == 7
+        assert again.problems == [] and again.snapshot()["state"]["dhw_reload"]["hyst_base"] is None
+        kinds = [e["kind"] for e in again.snapshot()["log"]]
+        assert kinds[:3] == ["reapply", "dhw_end", "error"]  # neueste zuerst
+
+    asyncio.run(run())
+
+
+def test_reload_in_dry_run_and_without_sun_integration():
+    async def run():
+        hass, ctrl = make_reload(c.ACT_DRY_RUN)
+        hass.states.set("sun.sun", "unavailable")  # ohne Sonnenstand gilt ab 13 Uhr als Nachmittag
+        await ctrl.async_start()
+        await tick(ctrl)
+        await tick(ctrl, 10)
+        assert float(hass.states.get(DHW_HYST).state) == 7  # nichts geschrieben
+        entry = ctrl.snapshot()["log"][0]
+        assert (entry["kind"], entry["result"]) == ("dhw_start", "simulated")
+        hass.states.set(DHW, 58)
+        await tick(ctrl)
+        assert ctrl.snapshot()["log"][0]["kind"] == "dhw_end"
+
+        # vormittags (Sonne steigt) wird nicht nachgeladen
+        hass, ctrl = make_reload()
+        hass.states.set("sun.sun", "above_horizon", rising=True)
+        await ctrl.async_start()
+        await tick(ctrl)
+        await tick(ctrl, 10)
+        assert ctrl.snapshot()["state"]["dhw_reload"]["wait"] == "erst nach Mittag"
+
+    asyncio.run(run())

@@ -195,7 +195,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 69 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Wärmepumpe, Auswertung und Tage durch 24 und die für PV durch 17 weitere. Die zweite Stufe, „für die Wärmepumpe übrig“, die gelernte Leistung der Wärmepumpe und die gelernte Kapazität des Akkus sind nur mit nachgebildetem Home Assistant und Beispieldaten geprüft. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 76 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Wärmepumpe, Auswertung und Tage durch 24 und die für PV durch 17 weitere. Die zweite Stufe, „für die Wärmepumpe übrig“, die gelernte Leistung der Wärmepumpe, die gelernte Kapazität des Akkus und das Nachladen des Warmwassers sind nur mit nachgebildetem Home Assistant und Beispieldaten geprüft. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -217,6 +217,7 @@ Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 69 automatis
 - Für das Absenken: ein Sensor „PV-Prognose Rest heute“ (kWh oder Wh), zum Beispiel aus Solcast oder Forecast.Solar. Für ein Absenkfenster über Mitternacht zusätzlich „PV-Prognose morgen“.
 - Damit das Anheben nicht den Akku leert: die Leistung der Batterie im Schritt Strom; damit die Regelung erkennt, ob der Akku ohnehin voll wird, dazu ihr Ladestand.
 - Damit die Regelung die Wärmepumpe aus dem Überschuss herausrechnet und ihre Leistung lernt: die elektrische Leistung der Wärmepumpe.
+- Damit das Warmwasser nachmittags nachgeladen wird: Warmwasser-Temperatur und -Soll (Schritt Wärmepumpe) und die Warmwasser-Hysterese als Zahl-Entität (Schritt Eingriff).
 
 ## Was gebraucht wird
 
@@ -285,6 +286,21 @@ Das gilt nur mit hinterlegter Leistung der Batterie (Schritt Strom); fehlt ihr W
 | noch nicht gelernt | | | | nein |
 
 **Stark anheben:** gemessen am Überschuss, während angehoben ist, also an dem, was trotz Anheben noch eingespeist wird (wird der Akku ohnehin voll, am Überschuss ohne Akku). Was die zweite Stufe tut, stellst du an der Wärmepumpe ein; bei Dimplex ist es „Verstärkt Stufe 3 (dunkelgrün)“. Kennt die Smart-Grid-Auswahl diese Option nicht, setzt Energy Hub die für Anheben und schreibt das ins Logbuch. Mit Parallelverschiebung hebt die zweite Stufe um 4 K statt 2 K an. Abschalten lässt sie sich mit „Stark anheben (zweite Stufe)“.
+
+**Warmwasser nachmittags nachladen:** Mittags lädt Grün das Warmwasser auf die Maximaltemperatur. Danach kühlt es langsam ab, bleibt aber innerhalb der Hysterese, und die Wärmepumpe lädt erst nachts nach, mit Strom aus Akku oder Netz. Deshalb setzt Energy Hub einmal am Tag die Warmwasser-Hysterese herab, solange die Sonne gerade noch reicht. Die Bedingungen:
+
+| Bedingung | Wert |
+|---|---|
+| Nachmittag | nach dem Sonnenhöchststand (`sun.sun`), ohne Sonne-Integration ab 13 Uhr |
+| Die Sonne lässt nach | für die Wärmepumpe 10 min lang zwischen ihrer Leistung (Einschaltschwelle) und dem 1,5-Fachen übrig |
+| Akku | voll (ab 95 %) oder wird es ohnehin; ohne Ladestand entfällt die Bedingung |
+| Warmwasser | mindestens 4 K unter dem Soll, das gerade gilt (bei Dimplex „WP Warmwasser Soll aktuell“) |
+| Wärmepumpe | macht nicht gerade Warmwasser (Status) |
+| Häufigkeit | höchstens einmal am Tag, nicht im Handbetrieb und nicht mit Automatik aus |
+
+Dann geht die Hysterese auf 2 K (einstellbar), und die Wärmepumpe lädt mit dem letzten Sonnenstrom. Beendet wird, wenn das Warmwasser bis auf 0,5 K am Soll ist, nach 90 min oder wenn die PV die Wärmepumpe nicht mehr trägt (Ausschaltregel wie beim Anheben). Danach kommt die Hysterese von vorher zurück. Energy Hub merkt sich den alten Wert dauerhaft und stellt ihn auch nach einem Neustart zurück; schlägt das fehl, alle 5 min erneut. Smart Grid bleibt dabei, wie die Regeln es wollen: Am Nachmittag ist meist ohnehin angehoben, dann gilt die Maximaltemperatur als Soll.
+
+Bei Dimplex ist die Hysterese die Zahl-Entität `number.wp_warmwasser_hysterese_setzen` aus dem Package (Schritt Eingriff). Im Probebetrieb wird nichts geschrieben, nur protokolliert.
 
 **Absenkfenster über Mitternacht:** Stellst du das Fenster etwa auf 21:00 bis 10:00 Uhr, zählt vor Mitternacht die Prognose für morgen, danach die für den Rest des Tages. Abgesenkt wird also nur in Nächten vor einem sonnigen Tag; die Wärme holt die Wärmepumpe dann mit eigenem Strom nach. Wer jede Nacht absenken will, stellt das im Zeitprogramm der Wärmepumpe ein. Mit Smart Grid stellt Energy Hub im Normalbetrieb „gelb“ ein und setzt es nach fünf Minuten erneut; eine Absenkung über dieselbe Auswahl aus einer anderen Automation würde also überschrieben.
 
@@ -385,6 +401,8 @@ Der Problem-Sensor meldet:
 | Die Stellgröße ist nicht verfügbar | Smart-Grid-Auswahl oder Parallelverschiebung gewählt, Entität fehlt oder ist nicht verfügbar |
 | Die Wärmepumpe meldet keine Werte | Sensoren der Wärmepumpe hinterlegt, keiner hat einen Wert |
 | Die PV-Prognose liefert keinen Wert | Absenken an, Prognose hinterlegt, aber ohne Wert |
+| Die Warmwasser-Hysterese ist nicht verfügbar | Nachladen an und eingerichtet, Entität fehlt oder ist nicht verfügbar (nicht im Probebetrieb) |
+| Die Warmwasser-Hysterese ließ sich nicht setzen | Schreiben beim Nachladen oder Zurückstellen fehlgeschlagen, bis es klappt |
 
 Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einrichtung.
 

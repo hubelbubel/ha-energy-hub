@@ -46,6 +46,8 @@ SHOTS = [
     # zweite Stufe: stark angehoben
     ("desktop-light-strong", 1360, 900, "?tab=heat&mode=strong"),
     ("mobile-light-strong", 390, 844, "?tab=heat&mode=strong"),
+    # Warmwasser wird gerade nachgeladen
+    ("mobile-light-nachladen", 390, 844, "?tab=heat&mode=boost&nachladen=1"),
     ("desktop-dark-setback", 1360, 900, "?tab=heat&mode=setback&theme=dark"),
     # Absenkfenster über Mitternacht, abends mit der Prognose für morgen
     ("desktop-light-nacht", 1360, 900, "?tab=heat&mode=setback&fenster=nacht", 22),

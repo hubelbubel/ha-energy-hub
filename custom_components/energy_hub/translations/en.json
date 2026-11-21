@@ -131,6 +131,8 @@
           "off_without_battery": "Leave the battery out",
           "strong_enabled": "Raise strongly (second stage)",
           "strong_on_w": "Raise strongly when still left over while raising",
+          "dhw_reload": "Top up hot water in the afternoon",
+          "dhw_reload_hyst_k": "Hot water hysteresis while topping up",
           "smoothing_min": "Average the surplus over",
           "min_hold_min": "Minimum hold time per state",
           "setback_enabled": "Lower when sun is forecast",
@@ -145,6 +147,8 @@
           "boost_on_learned": "Instead of the fixed threshold, what the heat pump draws while running applies once Energy Hub has learned it from 30 min of runtime. The value slowly follows the season.",
           "boost_off_w": "Negative means: raising continues as long as at most this much comes from battery or grid.",
           "off_without_battery": "Raising stops by the surplus plus the battery charging power. It keeps going while PV carries the heat pump and stops when the battery would have to help. Power from the battery does not count as left over for the heat pump. If the forecast fills the battery today anyway, its charging power counts when raising (needs the battery state of charge). Only with a battery power sensor (step Power). Switch off if the surplus sensor already leaves the battery out.",
+          "dhw_reload": "Once a day, after noon: when for 10 min only between the heat pump's power and 1.5 times that is left over, the battery is full and the hot water is at least 4 K below its target, Energy Hub lowers the hot water hysteresis for a while. The heat pump then tops up with the last solar power instead of at night. Needs the hysteresis entity (step Actuator) and hot water temperature and target (step Heat pump).",
+          "dhw_reload_hyst_k": "Afterwards the previous value is restored, also after a restart.",
           "strong_on_w": "Measured on the surplus while raised. If it stays above for as long as for raising, the second stage starts; when PV no longer carries it, back to the first. What the second stage does is set on the heat pump.",
           "smoothing_min": "Short clouds count less. 0 = no smoothing, for example if the sensor is already averaged. If the sensor drops out, its last value counts for 3 more minutes.",
           "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
@@ -166,12 +170,14 @@
           "ent_shift": "Parallel shift",
           "shift_boost_k": "Raise by",
           "shift_strong_k": "Raise strongly by",
+          "ent_dhw_hysteresis": "Hot water hysteresis",
           "shift_setback_k": "Lower by"
         },
         "data_description": {
           "ent_smart_grid": "Select entity that writes the smart grid state of the heat pump.",
           "opt_normal": "Must be spelled exactly as in the select entity.",
           "opt_strong": "If the select has no such option, Energy Hub sets the option for raising.",
+          "ent_dhw_hysteresis": "Number entity for the hot water hysteresis, used to top up in the afternoon (step Rules). Written with Smart Grid too; not in trial mode.",
           "ent_shift": "Number entity for the parallel shift of the heating curve. The value before the action is remembered and restored afterwards."
         }
       },
@@ -347,6 +353,8 @@
           "off_without_battery": "Leave the battery out",
           "strong_enabled": "Raise strongly (second stage)",
           "strong_on_w": "Raise strongly when still left over while raising",
+          "dhw_reload": "Top up hot water in the afternoon",
+          "dhw_reload_hyst_k": "Hot water hysteresis while topping up",
           "smoothing_min": "Average the surplus over",
           "min_hold_min": "Minimum hold time per state",
           "setback_enabled": "Lower when sun is forecast",
@@ -361,6 +369,8 @@
           "boost_on_learned": "Instead of the fixed threshold, what the heat pump draws while running applies once Energy Hub has learned it from 30 min of runtime. The value slowly follows the season.",
           "boost_off_w": "Negative means: raising continues as long as at most this much comes from battery or grid.",
           "off_without_battery": "Raising stops by the surplus plus the battery charging power. It keeps going while PV carries the heat pump and stops when the battery would have to help. Power from the battery does not count as left over for the heat pump. If the forecast fills the battery today anyway, its charging power counts when raising (needs the battery state of charge). Only with a battery power sensor (step Power). Switch off if the surplus sensor already leaves the battery out.",
+          "dhw_reload": "Once a day, after noon: when for 10 min only between the heat pump's power and 1.5 times that is left over, the battery is full and the hot water is at least 4 K below its target, Energy Hub lowers the hot water hysteresis for a while. The heat pump then tops up with the last solar power instead of at night. Needs the hysteresis entity (step Actuator) and hot water temperature and target (step Heat pump).",
+          "dhw_reload_hyst_k": "Afterwards the previous value is restored, also after a restart.",
           "strong_on_w": "Measured on the surplus while raised. If it stays above for as long as for raising, the second stage starts; when PV no longer carries it, back to the first. What the second stage does is set on the heat pump.",
           "smoothing_min": "Short clouds count less. 0 = no smoothing, for example if the sensor is already averaged. If the sensor drops out, its last value counts for 3 more minutes.",
           "min_hold_min": "Protects the compressor from frequent switching. Manual mode and missing readings apply immediately.",
@@ -382,12 +392,14 @@
           "ent_shift": "Parallel shift",
           "shift_boost_k": "Raise by",
           "shift_strong_k": "Raise strongly by",
+          "ent_dhw_hysteresis": "Hot water hysteresis",
           "shift_setback_k": "Lower by"
         },
         "data_description": {
           "ent_smart_grid": "Select entity that writes the smart grid state of the heat pump.",
           "opt_normal": "Must be spelled exactly as in the select entity.",
           "opt_strong": "If the select has no such option, Energy Hub sets the option for raising.",
+          "ent_dhw_hysteresis": "Number entity for the hot water hysteresis, used to top up in the afternoon (step Rules). Written with Smart Grid too; not in trial mode.",
           "ent_shift": "Number entity for the parallel shift of the heating curve. The value before the action is remembered and restored afterwards."
         }
       },

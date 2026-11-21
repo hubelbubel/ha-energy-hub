@@ -479,3 +479,61 @@ def test_capacity_from_charge_and_soc():
     for e in (10.0, 12.0, 11.0):
         value, count = logic.learn_capacity(value, count, e)
     assert count == 3 and value == 11
+
+
+# --- Warmwasser nachladen ---------------------------------------------------
+
+AFTERNOON = NOON.replace(hour=17, minute=30)
+
+
+def reload_inputs(**kw):
+    base = dict(surplus_w=300, balance_w=300, available_w=2300, available_free_w=2300, run_w=1800,
+                dhw_c=52, dhw_target_c=58, afternoon=True, dhw_heating=False)
+    return Inputs(AFTERNOON, **{**base, **kw})
+
+
+def test_reload_band_timer():
+    t = logic.update_timers(Timers(), reload_inputs(), S, BOOST)
+    assert t.reload_since == AFTERNOON
+    # mehr als das 1,5-Fache: die Sonne reicht noch für später
+    assert logic.update_timers(t, reload_inputs(available_w=2800, available_free_w=2800), S, BOOST).reload_since is None
+    # weniger, als die Wärmepumpe zieht: zu spät
+    assert logic.update_timers(t, reload_inputs(available_w=1700, available_free_w=1700), S, BOOST).reload_since is None
+    assert logic.update_timers(Timers(), reload_inputs(), Settings(dhw_reload=False), BOOST).reload_since is None
+
+
+def test_reload_starts_when_the_sun_fades():
+    waiting = logic.dhw_reload_check(reload_inputs(), S, Timers(reload_since=AFTERNOON - timedelta(minutes=4)), False)
+    assert not waiting.start and waiting.short == "übrig zwischen 1.800 W und 2.700 W, seit 4 min"
+    due = logic.dhw_reload_check(reload_inputs(), S, Timers(reload_since=AFTERNOON - timedelta(minutes=10)), False)
+    assert due.start
+    assert due.reason == (
+        "Die Sonne lässt nach: Für die Wärmepumpe sind seit 10 min nur noch zwischen 1.800 W und 2.700 W übrig "
+        "(aktuell 2.300 W), später reicht es für eine Ladung nicht mehr. Das Warmwasser hat 52,0 °C und liegt "
+        "6,0 K unter dem Soll von 58,0 °C."
+    )
+
+
+def test_reload_waits_for_its_conditions():
+    held = Timers(reload_since=AFTERNOON - timedelta(minutes=30))
+    def short(**kw):
+        return logic.dhw_reload_check(reload_inputs(**kw), S, held, False).short
+    assert logic.dhw_reload_check(reload_inputs(), S, held, True).short == "heute schon nachgeladen"
+    assert short(dhw_c=55) == "erst ab 4 K unter Soll, jetzt 3,0 K"
+    assert short(afternoon=False) == "erst nach Mittag"
+    assert short(dhw_heating=True) == "die Wärmepumpe macht gerade Warmwasser"
+    assert short(dhw_target_c=None) == "Warmwasser-Temperatur oder Soll fehlt"
+    assert short(battery_soc=80) == "der Akku lädt noch"
+    assert logic.dhw_reload_check(reload_inputs(battery_soc=97), S, held, False).start
+    fresh = logic.dhw_reload_check(reload_inputs(available_w=3500, available_free_w=3500), S, Timers(), False)
+    assert fresh.short == "wartet, bis die Sonne nachlässt"
+    assert logic.dhw_reload_check(reload_inputs(), Settings(dhw_reload=False), held, False).short == "abgeschaltet"
+
+
+def test_reload_ends():
+    since = AFTERNOON - timedelta(minutes=20)
+    assert logic.dhw_reload_end(reload_inputs(), S, since, Timers()) is None
+    assert logic.dhw_reload_end(reload_inputs(dhw_c=57.6), S, since, Timers()) == "Das Warmwasser hat 57,6 °C erreicht (Soll 58,0 °C)."
+    assert logic.dhw_reload_end(reload_inputs(), S, AFTERNOON - timedelta(minutes=90), Timers()) == "Nach 90 min beendet."
+    low = Timers(below_since=AFTERNOON - timedelta(minutes=15))
+    assert logic.dhw_reload_end(reload_inputs(balance_w=-600), S, since, low).endswith("die PV trägt die Wärmepumpe nicht mehr.")
