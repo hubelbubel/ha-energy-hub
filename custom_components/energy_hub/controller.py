@@ -18,12 +18,42 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import const as c
+from .alerts import (
+    DHW_COLD_C,
+    DHW_WARM_AGAIN_K,
+    FAULT_DELAY_MIN,
+    LEVEL_ISSUES,
+    PROBLEM_DELAY_MIN,
+    REAPPLY_WINDOW_MIN,
+    START_GRACE_MIN,
+    Issue,
+    Message,
+    Runs,
+    automation_off_text,
+    cold_since,
+    cold_text,
+    cycling_text,
+    entry_title,
+    fault_text,
+    fmt_c,
+    heater_texts,
+    locked,
+    log_message,
+    no_effect_text,
+    override_text,
+    reapply_text,
+    step_issues,
+    tag,
+    track_runs,
+    wanted,
+)
 from .logic import (
     MODE_BOOST,
     MODE_LABEL,
     MODE_NORMAL,
     MODE_SETBACK,
     MODE_STRONG,
+    RUN_MIN_W,
     Decision,
     Inputs,
     Override,
@@ -199,6 +229,14 @@ class Controller:
         self._retry_at: datetime | None = None
         self._last_apply: datetime | None = None
         self._last_error: str | None = None
+        # Auffälligkeiten (nur im Arbeitsspeicher): Läufe des Verdichters, erneut gesetzte
+        # Vorgaben, seit wann etwas ansteht, Warmwasser kalt seit; Meldungen zum Versenden
+        self._runs = Runs()
+        self._reapplied: list[datetime] = []
+        self._since: dict[str, datetime] = {}
+        self._cold_since: datetime | None = None
+        self._outbox: list[Message] = []
+        self._started_at: datetime | None = None
         self.log_rev = 0
 
     # ------------------------------------------------------------------ Zugriff
@@ -289,10 +327,19 @@ class Controller:
             "dhw_hyst_base": None,
             "dhw_reload_day": None,
             "dhw_reload_last": None,
+            # Benachrichtigung: gemeldete Auffälligkeiten (gegen Wiederholung), zuletzt
+            # eingerichteter Dienst und Umfang (für die Testnachricht); Automatik aus seit
+            "notify_memory": {},
+            "notify_setup": None,
+            "automation_since": None,
             **stored,
         }
         if self._data["mode"] not in c.MODES:
             self._data["mode"] = MODE_NORMAL
+        self._started_at = dt_util.now()
+        if not self._data["automation"] and not self._data.get("automation_since"):
+            self._data["automation_since"] = self._started_at.isoformat()
+        self._queue_setup_message()
 
         @callback
         def _begin(_hass: HomeAssistant) -> None:
@@ -310,6 +357,7 @@ class Controller:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        self._outbox.clear()
         await self._store.async_save(self._data)
 
     @callback
@@ -522,7 +570,14 @@ class Controller:
         mode_to: str | None = None,
         result: str | None = None,
         detail: str | None = None,
+        title: str | None = None,
+        notify: bool = True,
     ) -> None:
+        """Schreibt ins Logbuch (Panel und Home Assistant).
+
+        notify: beim Umfang „alles“ auch als Benachrichtigung. Auffälligkeiten gehen ihren
+        eigenen Weg (_check_alerts) und stehen mit title im Logbuch.
+        """
         inputs = self._inputs
         entry = {
             "ts": dt_util.utcnow().isoformat(),
@@ -543,19 +598,21 @@ class Controller:
                 "storage_c": inputs.storage_c if inputs else None,
             },
         }
+        if title:
+            entry["title"] = title
         log: list[dict[str, Any]] = self._data["log"]
         log.append(entry)
         del log[: max(0, len(log) - c.LOG_LIMIT)]
         self.log_rev += 1
         self._save()
 
-        title = MODE_LABEL[mode_to] if mode_to else {
-            "error": "Fehler", "dhw_start": "Warmwasser nachladen", "dhw_end": "Nachladen beendet",
-        }.get(kind, "Hinweis")
-        event = {"name": c.TITLE, "message": f"{title}: {text}", "domain": c.DOMAIN}
+        heading = title or entry_title(kind, mode_from, mode_to)
+        event = {"name": c.TITLE, "message": f"{heading}: {text}", "domain": c.DOMAIN}
         if entity_id := self.state_entity_id:
             event["entity_id"] = entity_id
         self.hass.bus.async_fire("logbook_entry", event)
+        if notify:
+            self._outbox.append(log_message(kind, text, mode_from, mode_to, result, detail))
 
     @property
     def state_entity_id(self) -> str | None:
@@ -585,6 +642,7 @@ class Controller:
         if enabled == self.automation:
             return
         self._data["automation"] = enabled
+        self._data["automation_since"] = None if enabled else dt_util.now().isoformat()
         self._log(
             "automation",
             "Automatik eingeschaltet." if enabled else "Automatik ausgeschaltet.",
@@ -592,8 +650,9 @@ class Controller:
         await self.async_evaluate()
 
     async def async_set_override(self, mode: str, minutes: float | None) -> None:
-        until = dt_util.now() + timedelta(minutes=minutes) if minutes else None
-        self._data["override"] = {"mode": mode, "until": _iso(until)}
+        now = dt_util.now()
+        until = now + timedelta(minutes=minutes) if minutes else None
+        self._data["override"] = {"mode": mode, "until": _iso(until), "since": now.isoformat()}
         when = f"bis {until:%H:%M} Uhr" if until else "bis er beendet wird"
         self._log("override", f"Handbetrieb gestartet: {MODE_LABEL[mode]}, {when}.")
         self._retry_at = None
@@ -617,6 +676,7 @@ class Controller:
                 await self._evaluate()
             except Exception:  # noqa: BLE001 - die Regelung darf HA nie mitreißen
                 _LOGGER.exception("Auswertung fehlgeschlagen")
+            await self._send_outbox()
             self._notify()
 
     def _on_value(self, inputs: Inputs | None) -> float | None:
@@ -636,6 +696,7 @@ class Controller:
             await self._reload_step(inputs, settings)
         finally:
             self._problems = self._find_problems()
+            self._check_alerts(inputs)
 
     async def _decide_and_apply(self, inputs: Inputs, settings: Settings) -> None:
         now = inputs.now
@@ -695,6 +756,11 @@ class Controller:
             return
         self._last_apply = now
         result, detail = await self._apply(self.mode, reapply=True)
+        if result == "failed":
+            self._last_error = detail
+        else:
+            self._last_error = None
+            self._reapplied.append(now)
         self._log(
             "reapply" if result != "failed" else "error",
             f"Die Vorgabe „{MODE_LABEL[self.mode]}“ stand nicht mehr an der Wärmepumpe "
@@ -870,7 +936,177 @@ class Controller:
             out.append(f"Die Warmwasser-Hysterese ({o[c.CONF_ENT_DHW_HYST]}) ist nicht verfügbar.")
         elif self._reload_error:
             out.append(f"Die Warmwasser-Hysterese ließ sich nicht setzen: {self._reload_error}")
+        service = self.notify_service
+        if service and not self.hass.services.has_service("notify", service):
+            out.append(f"Der Benachrichtigungsdienst (notify.{service}) ist nicht vorhanden.")
         return out
+
+    # ------------------------------------------------------ Auffälligkeiten
+    def _on_off(self, key: str) -> bool | None:
+        """Ein/Aus einer Entität (binary_sensor, Schalter); None ohne Wert."""
+        text = self._text(key)
+        if text is None:
+            return None
+        low = text.strip().casefold()
+        if low in ("on", "true", "an", "ein", "1"):
+            return True
+        if low in ("off", "false", "aus", "0"):
+            return False
+        return None
+
+    def _running(self) -> bool | None:
+        """Läuft der Verdichter? Aus dem Verdichter-Sensor, sonst aus der elektrischen Leistung."""
+        o = self.options
+        if o.get(c.CONF_ENT_COMPRESSOR):
+            return self._on_off(c.CONF_ENT_COMPRESSOR)
+        if o.get(c.CONF_ENT_POWER_EL):
+            power = self._power_w(c.CONF_ENT_POWER_EL)
+            return None if power is None else power >= RUN_MIN_W
+        return None
+
+    def _check_alerts(self, inputs: Inputs) -> None:
+        """Sammelt, was gerade auffällig ist, und schreibt neue Meldungen ins Logbuch."""
+        now = inputs.now
+        o = self.options
+        issues: list[Issue] = []
+        unknown: set[str] = set()
+
+        self._runs = track_runs(self._runs, now, self._running())
+        if text := cycling_text(self._runs, now):
+            issues.append(Issue("cycling", "Takten", text, daily=True))
+
+        names: list[str] = []
+        for key, name in ((c.CONF_ENT_HEATER, "Heizstab"), (c.CONF_ENT_SECOND_HEAT, "2. Wärmeerzeuger")):
+            if o.get(key):
+                on = self._on_off(key)
+                if on is None:
+                    unknown.add("heater")
+                elif on:
+                    names.append(name)
+        if names:
+            text, ok = heater_texts(names, self.mode, self.dry_run)
+            title = " und ".join(names) + (" laufen" if len(names) > 1 else " läuft")
+            issues.append(Issue("heater", title, text, ok, self._since.setdefault("heater", now)))
+        else:
+            self._since.pop("heater", None)
+
+        if text := no_effect_text(
+            mode=self.mode,
+            mode_since=self.mode_since,
+            now=now,
+            dry_run=self.dry_run,
+            runs=self._runs,
+            dhw_c=inputs.dhw_c,
+            dhw_target_c=inputs.dhw_target_c,
+            hyst_k=self._number(c.CONF_ENT_DHW_HYST)[0],
+            locked=locked(self._text(c.CONF_ENT_LOCK)),
+        ):
+            issues.append(Issue(
+                "no_effect", "Anheben ohne Wirkung", text, "Der Verdichter läuft, oder es wird nicht mehr angehoben"
+            ))
+
+        window = timedelta(minutes=REAPPLY_WINDOW_MIN)
+        self._reapplied = [t for t in self._reapplied if now - t < window]
+        if text := reapply_text(self._reapplied, now):
+            issues.append(Issue(
+                "overwritten", "Vorgabe wird überschrieben", text, "Die Vorgabe bleibt wieder an der Wärmepumpe stehen"
+            ))
+
+        if o.get(c.CONF_ENT_FAULT):
+            state = self._text(c.CONF_ENT_FAULT)
+            if state is None:
+                unknown.add("fault")
+            elif text := fault_text(state):
+                issues.append(Issue(
+                    "fault", "Störung", text, "Die Wärmepumpe meldet keine Störung mehr",
+                    self._since.setdefault("fault", now), FAULT_DELAY_MIN,
+                ))
+            else:
+                self._since.pop("fault", None)
+
+        self._cold_since = cold_since(self._cold_since, inputs.dhw_c, now)
+        if text := cold_text(self._cold_since, inputs.dhw_c, now):
+            issues.append(Issue(
+                "dhw_cold", "Warmwasser kalt", text,
+                f"Das Warmwasser ist wieder über {fmt_c(DHW_COLD_C + DHW_WARM_AGAIN_K)}", self._cold_since,
+            ))
+
+        if override := self._data.get("override"):
+            if not override.get("since"):
+                override["since"] = now.isoformat()  # Handbetrieb von vor 0.8
+            since = _parse(override["since"])
+            if text := override_text(override["mode"], since, _parse(override.get("until")), now):
+                issues.append(Issue("override_long", "Handbetrieb läuft lange", text, "Der Handbetrieb ist beendet", since))
+        if not self.automation:
+            since = _parse(self._data.get("automation_since"))
+            if text := automation_off_text(since, now):
+                issues.append(Issue("automation_off", "Automatik aus", text, "Die Automatik ist wieder an", since))
+
+        for problem in self._problems:
+            issues.append(Issue(
+                f"problem:{problem}", "Problem", problem, f"Behoben: {problem.rstrip('.')}",
+                self._since.setdefault(f"problem:{problem}", now), PROBLEM_DELAY_MIN,
+            ))
+        for key in [k for k in self._since if k.startswith("problem:") and k[8:] not in self._problems]:
+            del self._since[key]
+
+        quiet = self._started_at is not None and now - self._started_at < timedelta(minutes=START_GRACE_MIN)
+        memory = self._data.get("notify_memory") or {}
+        messages, memory = step_issues(issues, memory, now, unknown=unknown, quiet_end=quiet)
+        if memory != self._data.get("notify_memory"):
+            self._data["notify_memory"] = memory
+            self._save()
+        for message in messages:
+            self._log("alert_end" if message.end else "alert", message.text, title=message.title, notify=False)
+            self._outbox.append(message)
+
+    # ---------------------------------------------------------- Benachrichtigung
+    @property
+    def notify_service(self) -> str | None:
+        """Dienst ohne „notify.“, etwa „mobile_app_handy“; None = keine Benachrichtigung."""
+        value = str(self.options.get(c.CONF_NOTIFY_SERVICE) or "").strip()
+        return value.removeprefix("notify.") or None
+
+    @property
+    def notify_level(self) -> str:
+        return str(self.options.get(c.CONF_NOTIFY_LEVEL) or LEVEL_ISSUES)
+
+    def _queue_setup_message(self) -> None:
+        """Testnachricht, sobald Dienst oder Umfang neu eingestellt sind."""
+        service = self.notify_service
+        setup = [service, self.notify_level] if service else None
+        if setup == self._data.get("notify_setup"):
+            return
+        self._data["notify_setup"] = setup
+        self._save()
+        if setup:
+            what = "jeden Eingriff, Auffälligkeiten und Fehler" if self.notify_level != LEVEL_ISSUES \
+                else "Auffälligkeiten und Fehler"
+            self._outbox.append(Message(
+                "Benachrichtigung eingerichtet", f"Energy Hub meldet hier ab jetzt {what}.", issue=True
+            ))
+
+    async def _send_outbox(self) -> None:
+        """Verschickt, was beim Umfang gewünscht ist. Fehler stehen im Protokoll von HA."""
+        messages, self._outbox = self._outbox, []
+        service = self.notify_service
+        if not service:
+            return
+        level = self.notify_level
+        for message in messages:
+            if not wanted(message, level):
+                continue
+            data: dict[str, Any] = {"title": f"{c.TITLE} · {message.title}", "message": message.text}
+            if service.startswith("mobile_app_"):
+                # Companion-App: alles in einer Gruppe; „wieder in Ordnung“ ersetzt die Warnung
+                extra = {"group": c.DOMAIN}
+                if message.key:
+                    extra["tag"] = tag(message.key)
+                data["data"] = extra
+            try:
+                await self.hass.services.async_call("notify", service, data, blocking=False)
+            except Exception as err:  # noqa: BLE001 - eine Benachrichtigung darf die Regelung nicht stören
+                _LOGGER.warning("Benachrichtigung über notify.%s fehlgeschlagen: %s", service, err)
 
     # --------------------------------------------------------------- Stellgröße
     def _smart_grid_option(self, mode: str, offered: list[str] | None = None) -> str:

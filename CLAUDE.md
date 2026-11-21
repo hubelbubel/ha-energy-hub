@@ -14,8 +14,9 @@ Home-Assistant-Integration „Energy Hub“ (Domain `energy_hub`, per HACS insta
 custom_components/energy_hub/
   logic.py          Entscheidung aus Messwerten + Einstellungen – rein, ohne HA-Importe
   tigo.py           Optimierer/Strings aus dem Entitätsregister von tigo_rs485 – rein, ohne HA-Importe
+  alerts.py         Auffälligkeiten und Benachrichtigungen (Prüfungen, Wiederholsperre) – rein, ohne HA-Importe
   controller.py     liest Messwerte, ruft logic auf, stellt die Wärmepumpe, führt nach, schreibt das Logbuch
-  config_flow.py    Einrichtung in 8 Schritten; Optionen zeigen dieselben Formulare
+  config_flow.py    Einrichtung in 9 Schritten; Optionen zeigen dieselben Formulare
   websocket_api.py  Schnittstelle Panel ↔ Regler
   const.py          Konstanten, Standardwerte, VERSION, STORAGE_VERSION
   sensor.py, binary_sensor.py, switch.py, services.yaml
@@ -30,7 +31,7 @@ docs/                       Screenshots für die README
 
 ## Regeln für Änderungen
 
-- **`logic.py` und `tigo.py` bleiben frei von Home-Assistant-Importen**, damit sie ohne HA testbar sind. Der Kontakt zu HA gehört in `controller.py` und `websocket_api.py`.
+- **`logic.py`, `tigo.py` und `alerts.py` bleiben frei von Home-Assistant-Importen**, damit sie ohne HA testbar sind. Der Kontakt zu HA gehört in `controller.py` und `websocket_api.py`.
 - **Die Texte für Einrichtung und Optionen stehen in `dev/build_translations.py`.** Nach jeder Änderung dort `python3 dev/build_translations.py` ausführen und beide erzeugten JSON-Dateien mit committen.
 - **Panel:** Rechenfunktionen werden als `export function …` aus `energy-hub-panel.js` exportiert und in `tests/*.mjs` direkt getestet. Neue Rechnungen gehören in solche reinen Funktionen, nicht in die Darstellung. Die Schwellen für die PV-Auswertung stehen in `PV_LIMITS`. Keine externen Bibliotheken und kein Bundler.
 - **Die Version steht an vier Stellen:** `const.py` (`VERSION`), `manifest.json`, `dev/preview.html` und README („Stand“). Bei einer neuen Version alle vier ändern. `VERSION` dient auch als Cache-Buster für die Panel-URL. Jede neue Version bekommt im selben Commit einen Abschnitt in `CHANGELOG.md` („## 0.5.3 – Datum“, darunter Punkte für Nutzer, deutsch, ohne Interna); ein Test prüft das. Nach dem Push auf `main` legt die CI zur Version in `manifest.json` ein Release an (Tag ohne „v“, etwa `0.5.3`) und nimmt diesen Abschnitt als Text, den Home Assistant beim Update anzeigt. Nur Releases bietet der Marketplace als Update an.

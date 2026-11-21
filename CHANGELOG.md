@@ -2,6 +2,15 @@
 
 Jede Version hat hier einen Abschnitt. Die CI übernimmt ihn als Text des Releases; den zeigt Home Assistant beim Update an. Ältere Versionen stehen nur im Verlauf auf GitHub.
 
+## 0.8.0 – 2026-11-21
+
+- Benachrichtigung: Energy Hub meldet Auffälligkeiten an der Wärmepumpe und Fehler der Regelung an einen Benachrichtigungsdienst, etwa die Companion-App aufs Handy. Neuer Schritt „Benachrichtigung“ mit Dienst und Umfang. „Nur Auffälligkeiten und Fehler“ ist der Standard; „Alles“ schickt dazu jeden Eintrag des Logbuchs, gut zum Prüfen im Probebetrieb. Nach dem Speichern kommt eine Testnachricht.
+- Gemeldet werden: Takten des Verdichters, laufender Heizstab oder 2. Wärmeerzeuger (mit dem, was Energy Hub gerade vorgibt), Anheben ohne Wirkung, eine Vorgabe, die von außen immer wieder überschrieben wird, eine Störung der Wärmepumpe, Warmwasser, das lange kalt bleibt, ein vergessener Handbetrieb oder eine Automatik, die seit 12 Stunden aus ist, und alles, was der Problem-Sensor meldet. Eine eigene Automation für den Problem-Sensor braucht es nicht mehr.
+- Jede Auffälligkeit kommt einmal und einmal mit „wieder in Ordnung“, dieselbe höchstens alle 6 Stunden, Takten höchstens einmal am Tag. In der Companion-App ersetzt „wieder in Ordnung“ die Warnung.
+- Die Auffälligkeiten stehen auch ohne Benachrichtigungsdienst im Logbuch, mit eigenem Zeichen.
+- Neu im Schritt Wärmepumpe: „Störung“ (Dimplex: `sensor.wp_storung`). Wer schon eingerichtet ist, trägt den Sensor dort nach.
+- Schlägt das erneute Setzen einer verlorenen Vorgabe fehl, meldet das jetzt auch der Problem-Sensor.
+
 ## 0.7.0 – 2026-11-20
 
 - Stark anheben: eine zweite Stufe. Bleiben beim Anheben 10 min lang noch mehr als 2.000 W übrig, stellt Energy Hub auf „Verstärkt Stufe 3 (dunkelgrün)“ bzw. hebt die Heizkurve um 4 K statt 2 K an. Trägt die PV das nicht mehr, geht es zurück auf einfaches Anheben. Kennt die Smart-Grid-Auswahl keine zweite Stufe, bleibt es bei Grün. Neu im Schritt Regeln: „Stark anheben (zweite Stufe)“ (an) und die Schwelle; im Schritt Eingriff die Option bzw. der Betrag. Auch von Hand und im Dienst `set_override` als `strong`.

@@ -6,10 +6,11 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from . import const as c
+from .alerts import LEVELS
 
 STEP_HEATPUMP = "heatpump"
 STEP_POWER = "power"
@@ -19,6 +20,7 @@ STEP_STORAGE = "storage"
 STEP_RULES = "rules"
 STEP_ACTUATOR = "actuator"
 STEP_EXPORT = "export"
+STEP_NOTIFY = "notify"
 
 
 def _entity(*domains: str) -> selector.EntitySelector:
@@ -60,6 +62,7 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
         (c.CONF_ENT_OUTDOOR, _entity("sensor"), False),
         (c.CONF_ENT_STATUS, _entity("sensor"), False),
         (c.CONF_ENT_COMPRESSOR, _entity("binary_sensor"), False),
+        (c.CONF_ENT_FAULT, _entity("sensor", "binary_sensor"), False),
         (c.CONF_ENT_POWER_EL, _entity("sensor"), False),
         (c.CONF_ENT_POWER_HEAT, _entity("sensor"), False),
     ],
@@ -178,7 +181,31 @@ FIELDS: dict[str, list[tuple[str, Any, bool]]] = {
             False,
         ),
     ],
+    # Die Auswahl der Dienste hängt davon ab, was es gibt; siehe notify_selector
+    STEP_NOTIFY: [
+        (c.CONF_NOTIFY_SERVICE, None, False),
+        (c.CONF_NOTIFY_LEVEL, _select(LEVELS, "notify_level"), True),
+    ],
 }
+
+
+def notify_services(hass: HomeAssistant) -> list[str]:
+    """Benachrichtigungsdienste in diesem Home Assistant, etwa „notify.mobile_app_handy“."""
+    services = hass.services.async_services().get("notify", {})
+    # send_message gehört zu den neuen Benachrichtigungs-Entitäten und braucht eine entity_id
+    return sorted(f"notify.{name}" for name in services if name != "send_message")
+
+
+def notify_selector(services: list[str], current: Any) -> selector.SelectSelector:
+    """Auswahl der Dienste; ein gespeicherter, gerade nicht geladener Dienst bleibt drin."""
+    options = list(services)
+    if isinstance(current, str) and current and current not in options:
+        options.insert(0, current)
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=options, custom_value=True, mode=selector.SelectSelectorMode.DROPDOWN
+        )
+    )
 
 
 def _existing_only(suggestion: Any, existing: set[str] | None) -> Any:
@@ -191,7 +218,12 @@ def _existing_only(suggestion: Any, existing: set[str] | None) -> Any:
 
 
 def build_schema(
-    step: str, values: dict[str, Any], *, initial: bool, existing: set[str] | None = None
+    step: str,
+    values: dict[str, Any],
+    *,
+    initial: bool,
+    existing: set[str] | None = None,
+    services: list[str] | None = None,
 ) -> vol.Schema:
     """Formular eines Schritts mit Vorschlägen für die Entitäten.
 
@@ -200,6 +232,7 @@ def build_schema(
     Bei der Ersteinrichtung gilt das für alle Schritte. Der Schritt „Wechselrichter“ kam
     erst mit 0.5 dazu; wer schon eingerichtet ist, bekommt dort beim ersten Öffnen die
     Vorschläge. Sobald ein Feld belegt ist, gilt nur noch das Gespeicherte.
+    services: Benachrichtigungsdienste für den Schritt „Benachrichtigung“.
     """
     schema: dict[Any, Any] = {}
     fresh = (
@@ -217,6 +250,8 @@ def build_schema(
             current = suggestion
         else:
             current = c.DEFAULTS.get(key) if required else None
+        if sel is None:
+            sel = notify_selector(services or [], current)
         if required:
             schema[vol.Required(key, default=current)] = sel
         else:
@@ -247,7 +282,7 @@ def validate_step(step: str, data: dict[str, Any]) -> dict[str, str]:
 
 
 class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
-    """Ersteinrichtung in acht Schritten."""
+    """Ersteinrichtung in neun Schritten."""
 
     VERSION = 1
 
@@ -269,7 +304,11 @@ class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
         return self.async_show_form(
             step_id=step_id,
             data_schema=build_schema(
-                step, values, initial=user_input is None, existing=set(self.hass.states.async_entity_ids())
+                step,
+                values,
+                initial=user_input is None,
+                existing=set(self.hass.states.async_entity_ids()),
+                services=notify_services(self.hass),
             ),
             errors=errors,
         )
@@ -296,7 +335,10 @@ class EnergyHubConfigFlow(ConfigFlow, domain=c.DOMAIN):
         return await self._step(STEP_ACTUATOR, STEP_ACTUATOR, user_input, STEP_EXPORT)
 
     async def async_step_export(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return await self._step(STEP_EXPORT, STEP_EXPORT, user_input, None)
+        return await self._step(STEP_EXPORT, STEP_EXPORT, user_input, STEP_NOTIFY)
+
+    async def async_step_notify(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_NOTIFY, STEP_NOTIFY, user_input, None)
 
     @staticmethod
     @callback
@@ -319,6 +361,7 @@ class EnergyHubOptionsFlow(OptionsFlow):
                 STEP_RULES,
                 STEP_ACTUATOR,
                 STEP_EXPORT,
+                STEP_NOTIFY,
             ],
         )
 
@@ -333,7 +376,9 @@ class EnergyHubOptionsFlow(OptionsFlow):
         existing = None if user_input is not None else set(self.hass.states.async_entity_ids())
         return self.async_show_form(
             step_id=step,
-            data_schema=build_schema(step, values, initial=False, existing=existing),
+            data_schema=build_schema(
+                step, values, initial=False, existing=existing, services=notify_services(self.hass)
+            ),
             errors=errors,
         )
 
@@ -360,3 +405,6 @@ class EnergyHubOptionsFlow(OptionsFlow):
 
     async def async_step_export(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return await self._step(STEP_EXPORT, user_input)
+
+    async def async_step_notify(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._step(STEP_NOTIFY, user_input)

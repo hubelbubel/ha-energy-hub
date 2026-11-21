@@ -195,7 +195,7 @@ Die Aussagen zur Wärme erscheinen nur, wenn mindestens ein Sensor der Wärmepum
 
 ## Stand
 
-Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 76 automatische Tests abgedeckt, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Wärmepumpe, Auswertung und Tage durch 24 und die für PV durch 17 weitere. Die zweite Stufe, „für die Wärmepumpe übrig“, die gelernte Leistung der Wärmepumpe, die gelernte Kapazität des Akkus und das Nachladen des Warmwassers sind nur mit nachgebildetem Home Assistant und Beispieldaten geprüft. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
+Version 0.8.0. Die Regellogik und die Abläufe im Regler sind durch 87 automatische Tests abgedeckt, die Auffälligkeiten und Benachrichtigungen durch 21, das Änderungsprotokoll durch 2, die Erkennung der Tigo-Optimierer durch 5, die Exporte durch 15, die Rechnungen für Strom, Wärmepumpe, Auswertung, Tage und Logbuch durch 25 und die für PV durch 17 weitere. Die zweite Stufe, „für die Wärmepumpe übrig“, die gelernte Leistung der Wärmepumpe, die gelernte Kapazität des Akkus, das Nachladen des Warmwassers und die Benachrichtigungen sind nur mit nachgebildetem Home Assistant und Beispieldaten geprüft; ob die Companion-App die Meldungen wie beschrieben gruppiert und ersetzt, ist nicht geprüft. Der Bereich PV ist mit Beispieldaten geprüft (16 Optimierer an einem MPPT), noch nicht an der echten Anlage. Mit Beispieldaten geprüft ist auch, wie das Panel ohne Wärmepumpe, mit nicht erreichbarer Wärmepumpe, nur mit PV und nur mit Strom aussieht. Das Panel ist mit Beispieldaten in Chrome geprüft, einschließlich Erstellen und Herunterladen beider Exporte, dem Anordnen der Optimierer und der Zeitleiste unter den Kacheln, jeweils mit Maus, Tastatur und simuliertem Finger, und der Tagesleiste bis zum ersten Tag mit Daten, auch für Tage, von denen nur noch Stundenwerte da sind. In der Home-Assistant-App sind Anordnen, Zeitleiste und Tagesleiste nicht geprüft. **In einem laufenden Home Assistant und an einer echten Wärmepumpe ist die Integration noch nicht gelaufen.** Deshalb startet sie im Probebetrieb: Sie protokolliert, was sie tun würde, und sendet nichts.
 
 ## Wärme: was der Bereich macht
 
@@ -203,7 +203,7 @@ Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 76 automatis
 - **Kennwerte:** PV-Überschuss (gemittelt, nie unter 0 W; Netzbezug zählt als 0), für die Wärmepumpe übrig (nie unter 0 W), Überschuss ohne Akku (darf negativ sein: so viel liefern Akku oder Netz), Prognose für den Rest des Tages und für morgen, Stromaufnahme, Heizleistung, Leistungszahl. Dazu für den gezeigten Tag, woher der Strom der Wärmepumpe kam (vom Dach, aus dem Akku, aus dem Netz) und wie viel davon beim Anheben vom Dach kam; gerechnet wie in der Auswertung.
 - **Verlauf:** Überschuss, für die Wärmepumpe übrig (gepunktet) und mit hinterlegtem Akku ohne Akku (gestrichelt), dazu die Schwellen; Temperaturen und Eingriffe (stark angehoben als höherer, kräftigerer Balken) auf einer gemeinsamen Zeitachse (24 Stunden, 48 Stunden, 7 Tage), mit Ablesung beim Überfahren und Tabellenansicht.
 - **Regelung:** hebt an, wenn genug eigener Strom für die Wärmepumpe übrig ist, in zwei Stufen, und senkt im Absenkfenster ab, morgens oder über Nacht, wenn die Prognose später Sonne verspricht.
-- **Logbuch:** jede Schaltung mit Begründung, den Messwerten zum Zeitpunkt und dem Ergebnis (gesendet, nur protokolliert, fehlgeschlagen). Die Einträge erscheinen auch im Logbuch von Home Assistant.
+- **Logbuch:** jede Schaltung mit Begründung, den Messwerten zum Zeitpunkt und dem Ergebnis (gesendet, nur protokolliert, fehlgeschlagen), dazu die Auffälligkeiten aus der Benachrichtigung. Die Einträge erscheinen auch im Logbuch von Home Assistant.
 - **Handbetrieb:** Normalbetrieb, Anheben, stark anheben oder Absenken für eine Dauer oder bis du ihn beendest.
 - **Export:** zwei CSV-Dateien zum Auswerten, eine mit Verlauf und Entscheidungen, eine für die Effizienz.
 - **Kamin und Speicher:** zeigt, wann der Kamin brennt, wann der Speicher bereit ist und wie oft Wärme aus ihm geholt wurde, und hebt nicht an, solange der Speicher die Heizung versorgen kann.
@@ -218,6 +218,7 @@ Version 0.7.0. Die Regellogik und die Abläufe im Regler sind durch 76 automatis
 - Damit das Anheben nicht den Akku leert: die Leistung der Batterie im Schritt Strom; damit die Regelung erkennt, ob der Akku ohnehin voll wird, dazu ihr Ladestand.
 - Damit die Regelung die Wärmepumpe aus dem Überschuss herausrechnet und ihre Leistung lernt: die elektrische Leistung der Wärmepumpe.
 - Damit das Warmwasser nachmittags nachgeladen wird: Warmwasser-Temperatur und -Soll (Schritt Wärmepumpe) und die Warmwasser-Hysterese als Zahl-Entität (Schritt Eingriff).
+- Für Benachrichtigungen: ein Dienst aus `notify`, etwa die Companion-App (siehe „Benachrichtigung“).
 
 ## Was gebraucht wird
 
@@ -239,7 +240,7 @@ Ist die Wärmepumpe hinterlegt, meldet aber keiner ihrer Sensoren einen Wert (et
 
 **Von Hand:** den Ordner `custom_components/energy_hub` nach `/config/custom_components/` kopieren und Home Assistant neu starten.
 
-Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“, oder der zweite Knopf oben. Die Einrichtung fragt in acht Schritten nach Wärmepumpe, Strom, Photovoltaik, Wechselrichter, Kamin und Speicher, Regeln, Eingriff sowie Effizienz und Export. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
+Danach: Einstellungen, Geräte & Dienste, Integration hinzufügen, „Energy Hub“, oder der zweite Knopf oben. Die Einrichtung fragt in neun Schritten nach Wärmepumpe, Strom, Photovoltaik, Wechselrichter, Kamin und Speicher, Regeln, Eingriff, Effizienz und Export sowie Benachrichtigung. Jeder Schritt kann leer bleiben und später unter „Konfigurieren“ nachgeholt werden. In der Seitenleiste erscheint anschließend „Energie“.
 
 ## Wie geregelt wird
 
@@ -344,6 +345,33 @@ Im Panel erscheint dann:
 
 **Regel:** Solange der Speicher bereit ist, wird nicht angehoben, und ein laufendes Anheben endet nach der Mindesthaltezeit. Hintergrund: Im Smart-Grid-Zustand Grün entlädt eine Dimplex den regenerativen Speicher nicht und gibt der Wärmepumpe Vorrang. Die Regel lässt sich abschalten.
 
+## Benachrichtigung
+
+Energy Hub meldet Auffälligkeiten an der Wärmepumpe und Fehler der Regelung an einen Dienst aus `notify`, etwa `notify.mobile_app_dein_handy` für die Companion-App. Dienst und Umfang wählst du im Schritt „Benachrichtigung“; ohne Dienst stehen die Auffälligkeiten nur im Logbuch.
+
+| Umfang | Was kommt |
+|---|---|
+| Nur Auffälligkeiten und Fehler (Standard) | die Meldungen aus der Tabelle unten |
+| Alles | dazu jeder Eintrag des Logbuchs mit Begründung: Anheben, stark anheben, Absenken, Normalbetrieb, Nachladen, Handbetrieb, Automatik, erneut gesetzte Vorgaben und Fehler. Im Probebetrieb steht „(Probebetrieb, nicht gesendet)“ dahinter. Gut, um die Regelung vor dem echten Eingriff zu prüfen |
+
+Gemeldet wird:
+
+| Meldung | Wann | Braucht |
+|---|---|---|
+| Takten | mehr als 3 Verdichterstarts in einer Stunde oder ein Lauf unter 10 min; höchstens einmal am Tag | Verdichter läuft (Schritt Wärmepumpe); ersatzweise die elektrische Leistung, Lauf ab 300 W |
+| Heizstab läuft | Heizstab oder 2. Wärmeerzeuger ist an; dazu, was Energy Hub gerade vorgibt | die beiden Sensoren aus dem Schritt Effizienz und Export |
+| Anheben ohne Wirkung | 45 min angehoben, der Verdichter ist in der Zeit nicht gelaufen und das Warmwasser liegt um mehr als die Hysterese unter dem Soll (ohne Hysterese-Entität 2 K). Nicht im Probebetrieb und nicht, solange die Sperre der Wärmepumpe etwas anderes als „Keine“ zeigt | Verdichter, Warmwasser und Soll |
+| Vorgabe wird überschrieben | die Vorgabe ging in einer Stunde mehr als 2× an der Wärmepumpe verloren und wurde neu gesetzt | Smart Grid oder Parallelverschiebung |
+| Störung | steht 1 min an: Fehlercode ungleich 0, ein Text außer „Kein Fehler“ oder ein binary_sensor, der an ist | Störung (Schritt Wärmepumpe; Dimplex: `sensor.wp_storung`) |
+| Warmwasser kalt | länger als 1 h unter 40 °C; wieder in Ordnung ab 42 °C | Warmwasser |
+| Handbetrieb läuft lange | Handbetrieb ohne Ende seit 12 h | – |
+| Automatik aus | seit 12 h | – |
+| Problem | ein Problem des Problem-Sensors steht 5 min an (siehe „Entitäten und Dienste“) | – |
+
+Jede Meldung kommt einmal und, wenn es vorbei ist, noch einmal als „Wieder in Ordnung“ mit der Dauer. Dieselbe Meldung kommt höchstens alle 6 h, das Takten höchstens einmal am Tag. Hat ein Sensor kurz keinen Wert, gilt das weder als neu noch als vorbei; in den ersten 5 min nach einem Neustart gibt es kein „wieder in Ordnung“. Die Companion-App bekommt alle Meldungen in einer Gruppe, und „wieder in Ordnung“ ersetzt dort die Warnung. Im Logbuch des Panels stehen die Auffälligkeiten mit gelbem Ausrufezeichen, „wieder in Ordnung“ mit Haken. Die Schwellen sind fest.
+
+Nach dem Speichern eines neuen Dienstes oder Umfangs kommt eine Testnachricht. Gibt es den Dienst nicht (mehr), meldet das der Problem-Sensor.
+
 ## Export
 
 Im Bereich Wärme öffnet „Export“ oben einen Dialog mit Inhalt und Zeitraum (24 Stunden, 7 Tage, 30 Tage). Im Bereich PV öffnet derselbe Knopf den PV-Export (siehe unten). Die Datei wird im Browser aus dem Verlauf von Home Assistant berechnet und dann heruntergeladen; wo der Browser es unterstützt, erscheint zusätzlich „Teilen“.
@@ -388,7 +416,7 @@ Zu beachten:
 ## Entitäten und Dienste
 
 - `sensor.energy_hub_regelzustand`: `normal`, `boost`, `strong` (stark angehoben) oder `setback`, mit Begründung (`reason`), Zeitpunkt (`since`) und Handbetrieb als Attributen.
-- `binary_sensor.energy_hub_problem`: an, solange etwas die Regelung behindert; die Gründe in Klartext stehen im Attribut `problems`. Daraus baust du eine Benachrichtigung als normale Automation, etwa mit `for: "00:15:00"`.
+- `binary_sensor.energy_hub_problem`: an, solange etwas die Regelung behindert; die Gründe in Klartext stehen im Attribut `problems`. Benachrichtigen kann Energy Hub selbst (siehe „Benachrichtigung“); für eigene Automationen oder ein Dashboard bleibt der Sensor.
 - `switch.energy_hub_automatik`: Automatik ein oder aus.
 - `energy_hub.set_override` (`mode`, optional `minutes`) und `energy_hub.clear_override`: Handbetrieb aus Automationen heraus.
 
@@ -396,13 +424,14 @@ Der Problem-Sensor meldet:
 
 | Problem | Wann |
 |---|---|
-| Die Wärmepumpe hat die letzte Vorgabe nicht angenommen | Schreiben an die Stellgröße ist fehlgeschlagen, bis eine Vorgabe wieder klappt |
+| Die Wärmepumpe hat die letzte Vorgabe nicht angenommen | Schreiben an die Stellgröße ist fehlgeschlagen, auch beim erneuten Setzen einer verlorenen Vorgabe, bis eine Vorgabe wieder klappt |
 | Der PV-Überschuss liefert keinen Wert | Sensor hinterlegt, aber länger als 3 min ohne Wert (Automatik an) |
 | Die Stellgröße ist nicht verfügbar | Smart-Grid-Auswahl oder Parallelverschiebung gewählt, Entität fehlt oder ist nicht verfügbar |
 | Die Wärmepumpe meldet keine Werte | Sensoren der Wärmepumpe hinterlegt, keiner hat einen Wert |
 | Die PV-Prognose liefert keinen Wert | Absenken an, Prognose hinterlegt, aber ohne Wert |
 | Die Warmwasser-Hysterese ist nicht verfügbar | Nachladen an und eingerichtet, Entität fehlt oder ist nicht verfügbar (nicht im Probebetrieb) |
 | Die Warmwasser-Hysterese ließ sich nicht setzen | Schreiben beim Nachladen oder Zurückstellen fehlgeschlagen, bis es klappt |
+| Der Benachrichtigungsdienst ist nicht vorhanden | Dienst eingestellt, aber in Home Assistant nicht (mehr) da, etwa nach dem Umbenennen des Handys |
 
 Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einrichtung.
 
@@ -415,7 +444,7 @@ Die Entitäts-IDs richten sich nach der Sprache von Home Assistant bei der Einri
 ## Entwicklung
 
 ```bash
-pytest tests                       # Regellogik, Abläufe im Regler, Erkennung der Optimierer, ohne Home Assistant
+pytest tests                       # Regellogik, Abläufe im Regler, Auffälligkeiten, Erkennung der Optimierer, ohne Home Assistant
 node --test tests/test_export.mjs tests/test_energy.mjs tests/test_pv.mjs   # Rechenfunktionen für Exporte, Strom, PV und Auswertung
 python3 -m http.server 8000        # dann http://localhost:8000/dev/preview.html
 python3 dev/screenshot.py /tmp/shots   # Panel rendern, beide Exporte erzeugen, Anordnen, Zeitleiste und Tagesleiste prüfen (braucht Playwright und Chrome)
@@ -429,10 +458,11 @@ Aufbau:
 | Datei | Aufgabe |
 |---|---|
 | `logic.py` | Entscheidung aus Messwerten und Einstellungen, ohne Home-Assistant-Importe |
-| `controller.py` | Messwerte lesen, entscheiden lassen, stellen, nachführen, Logbuch führen |
+| `controller.py` | Messwerte lesen, entscheiden lassen, stellen, nachführen, Logbuch führen, benachrichtigen |
 | `config_flow.py` | Einrichtung und Einstellungen |
 | `websocket_api.py` | Schnittstelle zwischen Panel und Regler, dazu die Liste der Tigo-Optimierer und ihre Plätze im Raster |
 | `tigo.py` | Optimierer, Strings und ihre Entitäten aus dem Entitätsregister von tigo_rs485, ohne Home-Assistant-Importe |
+| `alerts.py` | Auffälligkeiten erkennen, Meldungen und Wiederholsperre, ohne Home-Assistant-Importe |
 | `frontend/energy-hub-panel.js` | Panel mit den vier Bereichen, Rechenfunktionen und Exporte, ohne Build-Schritt und ohne externe Abhängigkeiten |
 | `brand/` | Zeichen für die Integrationsseite (ab Home Assistant 2026.3), erzeugt mit `dev/brand.py` aus den Farben des Panels |
 

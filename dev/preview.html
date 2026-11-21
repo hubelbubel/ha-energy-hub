@@ -239,7 +239,20 @@
 
   const reloading = q.get("nachladen") === "1";
   const dhwValues = { surplus_w: 260, balance_w: 260, available_w: 2140, forecast_kwh: 0.9, forecast_tomorrow_kwh: 19.4, outdoor_c: 9.8, dhw_c: 51.6 };
+  // ?meldungen=1: Auffälligkeiten im Logbuch (Benachrichtigung)
+  const alerting = q.get("meldungen") === "1";
   const log = scene === "empty" ? [] : [
+    ...(alerting ? [
+      { ts: iso(now - 1 * 60e3), kind: "alert", title: "Heizstab läuft",
+        text: "Der Heizstab läuft. Energy Hub steht auf „Stark anheben“.",
+        values: { surplus_w: 2380, balance_w: 2380, available_w: 4220, forecast_kwh: 10.9, outdoor_c: 6.4, dhw_c: 47.6 } },
+      { ts: iso(now - 4 * 60e3), kind: "alert_end", title: "Wieder in Ordnung",
+        text: "Die Wärmepumpe meldet keine Störung mehr (nach 6 min).", values: {} },
+      { ts: iso(now - 10 * 60e3), kind: "alert", title: "Störung",
+        text: "Die Wärmepumpe meldet eine Störung: !Durchfluss.", values: { outdoor_c: 6.4, dhw_c: 47.2 } },
+      { ts: iso(now - 11 * 60e3), kind: "alert", title: "Takten",
+        text: "Die Wärmepumpe taktet: der letzte Lauf dauerte nur 6 min.", values: { outdoor_c: 6.5, dhw_c: 46.8 } },
+    ] : []),
     ...(reloading ? [{ ts: iso(now - 12 * 60e3), kind: "dhw_start", result: "sent",
       detail: "number.wp_warmwasser_hysterese_setzen → 2 K (vorher 7 K)",
       text: "Die Sonne lässt nach: Für die Wärmepumpe sind seit 10 min nur noch zwischen 1.650 W und 2.475 W übrig (im 5-Minuten-Mittel 2.140 W), später reicht es für eine Ladung nicht mehr. Das Warmwasser hat 51,6 °C und liegt 6,4 K unter dem Soll von 58,0 °C.",
@@ -282,7 +295,7 @@
   const surplusNow = scene === "empty" ? null : night ? -20 : strong ? 1150 : 2140;
   const wpNow = strong ? 2650 : running ? 1840 : 40;
   const snapshot = {
-    version: "0.7.0",
+    version: "0.8.0",
     export_extra: scene === "empty" ? [] : extra,
     consumers: scene === "empty" ? [] : consumers,
     entities: scene === "empty"

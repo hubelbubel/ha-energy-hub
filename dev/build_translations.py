@@ -26,6 +26,7 @@ DE = {
                 "ent_outdoor": "Außentemperatur",
                 "ent_status": "Betriebsstatus (Text)",
                 "ent_compressor": "Verdichter läuft",
+                "ent_fault": "Störung",
                 "ent_power_el": "Elektrische Leistung",
                 "ent_power_heat": "Heizleistung",
             },
@@ -33,6 +34,8 @@ DE = {
                 "ent_outdoor": "Wird auch für die Bedingung „nicht absenken, wenn es zu kalt ist“ benutzt.",
                 "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt.",
                 "ent_power_el": "Damit rechnet die Regelung die Wärmepumpe aus dem Überschuss heraus und lernt, wie viel sie im Lauf zieht.",
+                "ent_compressor": "Für die Meldungen „Takten“ und „Anheben ohne Wirkung“. Ohne diesen Sensor zählt eine elektrische Leistung ab 300 W als Lauf.",
+                "ent_fault": "Fehlercode (0 = keine Störung), Text wie „Kein Fehler“ oder ein binary_sensor. Steht eine Störung 1 min an, kommt eine Benachrichtigung.",
             },
         },
         "power": {
@@ -212,6 +215,18 @@ DE = {
                 "export_extra": "Zum Beispiel Statuscodes, Sollwerte, Laufzeiten oder Pumpen.",
             },
         },
+        "notify": {
+            "title": "Benachrichtigung",
+            "description": "Energy Hub meldet Auffälligkeiten an der Wärmepumpe und Fehler der Regelung, auf Wunsch auch jeden Eingriff. Jede Auffälligkeit kommt einmal und einmal mit „wieder in Ordnung“, dieselbe höchstens alle 6 Stunden. Im Logbuch des Panels stehen sie auch ohne Dienst. Nach dem Speichern kommt eine Testnachricht.",
+            "data": {
+                "notify_service": "Benachrichtigungsdienst",
+                "notify_level": "Umfang",
+            },
+            "data_description": {
+                "notify_service": "Ein Dienst aus notify, etwa notify.mobile_app_dein_handy für die Companion-App. Leer = keine Benachrichtigung.",
+                "notify_level": "„Alles“ eignet sich zum Prüfen der Regelung, besonders im Probebetrieb: Dann kommt jeder Eintrag des Logbuchs aufs Handy.",
+            },
+        },
     },
     "menu_title": "Energy Hub einstellen",
     "errors": {
@@ -247,6 +262,12 @@ DE = {
         },
         "mode": {
             "options": {"normal": "Normalbetrieb", "boost": "Anheben", "strong": "Stark anheben", "setback": "Absenken"}
+        },
+        "notify_level": {
+            "options": {
+                "issues": "Nur Auffälligkeiten und Fehler",
+                "all": "Alles: dazu jeder Eingriff (Debug)",
+            }
         },
     },
     "entity": {
@@ -292,6 +313,7 @@ EN = {
                 "ent_outdoor": "Outdoor temperature",
                 "ent_status": "Operating status (text)",
                 "ent_compressor": "Compressor running",
+                "ent_fault": "Fault",
                 "ent_power_el": "Electrical power",
                 "ent_power_heat": "Heat output",
             },
@@ -299,6 +321,8 @@ EN = {
                 "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
                 "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\".",
                 "ent_power_el": "Lets the control take the heat pump out of the surplus and learn how much it draws while running.",
+                "ent_compressor": "For the notifications \u201cshort cycling\u201d and \u201craising without effect\u201d. Without this sensor, an electrical power of 300 W or more counts as running.",
+                "ent_fault": "Fault code (0 = no fault), a text such as \u201cKein Fehler\u201d or a binary_sensor. A fault present for 1 min is notified.",
             },
         },
         "power": {
@@ -478,6 +502,18 @@ EN = {
                 "export_extra": "For example status codes, setpoints, runtimes or pumps.",
             },
         },
+        "notify": {
+            "title": "Notifications",
+            "description": "Energy Hub reports anomalies at the heat pump and errors of the control, optionally every action as well. Each anomaly is sent once and once more with \u201cback to normal\u201d, the same one at most every 6 hours. They are listed in the panel log even without a service. After saving, a test message is sent.",
+            "data": {
+                "notify_service": "Notification service",
+                "notify_level": "Scope",
+            },
+            "data_description": {
+                "notify_service": "A service from notify, for example notify.mobile_app_your_phone for the companion app. Empty = no notifications.",
+                "notify_level": "\u201cEverything\u201d helps to check the control, especially in trial mode: every log entry is sent to the phone.",
+            },
+        },
     },
     "menu_title": "Configure Energy Hub",
     "errors": {
@@ -513,6 +549,12 @@ EN = {
         },
         "mode": {
             "options": {"normal": "Normal operation", "boost": "Raise", "strong": "Raise strongly", "setback": "Lower"}
+        },
+        "notify_level": {
+            "options": {
+                "issues": "Anomalies and errors only",
+                "all": "Everything: every action as well (debug)",
+            }
         },
     },
     "entity": {
@@ -558,6 +600,7 @@ def build(src: dict) -> dict:
                 "rules": steps["rules"],
                 "actuator": steps["actuator"],
                 "export": steps["export"],
+                "notify": steps["notify"],
             },
             "error": src["errors"],
             "abort": src["abort"],

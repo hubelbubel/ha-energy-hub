@@ -1,10 +1,11 @@
 """Konstanten für Energy Hub."""
 from __future__ import annotations
 
+from .alerts import LEVEL_ISSUES
 from .logic import MODE_BOOST, MODE_NORMAL, MODE_SETBACK, MODE_STRONG
 
 DOMAIN = "energy_hub"
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 TITLE = "Energy Hub"
 
 PANEL_URL_PATH = "energy-hub"
@@ -45,6 +46,8 @@ CONF_ENT_DHW_TARGET = "ent_dhw_target"
 CONF_ENT_OUTDOOR = "ent_outdoor"
 CONF_ENT_STATUS = "ent_status"
 CONF_ENT_COMPRESSOR = "ent_compressor"
+# Störung: Fehlercode (0 = keine), Text („Kein Fehler“) oder binary_sensor
+CONF_ENT_FAULT = "ent_fault"
 CONF_ENT_POWER_EL = "ent_power_el"
 CONF_ENT_POWER_HEAT = "ent_power_heat"
 
@@ -141,6 +144,12 @@ CONF_SETBACK_MIN_FORECAST = "setback_min_forecast_kwh"
 CONF_SETBACK_MIN_OUTDOOR = "setback_min_outdoor_c"
 CONF_SETBACK_MIN_DHW = "setback_min_dhw_c"
 
+# --- Benachrichtigung -----------------------------------------------------
+# Dienst aus der Domain notify (etwa „notify.mobile_app_handy“), leer = keine Benachrichtigung
+CONF_NOTIFY_SERVICE = "notify_service"
+# Umfang: nur Auffälligkeiten und Fehler oder dazu jeder Eintrag im Logbuch
+CONF_NOTIFY_LEVEL = "notify_level"
+
 # --- Stellgröße ------------------------------------------------------------
 CONF_ACTUATOR = "actuator"
 CONF_ENT_SMART_GRID = "ent_smart_grid"
@@ -164,6 +173,7 @@ SUGGESTED_ENTITIES: dict[str, str | list[str]] = {
     CONF_ENT_OUTDOOR: "sensor.wp_aussentemperatur",
     CONF_ENT_STATUS: "sensor.wp_status",
     CONF_ENT_COMPRESSOR: "binary_sensor.wp_verdichter_1",
+    CONF_ENT_FAULT: "sensor.wp_storung",
     CONF_ENT_POWER_EL: "sensor.wp_elektrische_leistung",
     CONF_ENT_POWER_HEAT: "sensor.wp_heizleistung",
     CONF_ENT_SMART_GRID: "select.wp_smart_grid_setzen",
@@ -244,6 +254,7 @@ DEFAULTS: dict[str, object] = {
     CONF_SHIFT_BOOST_K: 2,
     CONF_SHIFT_STRONG_K: 4,
     CONF_SHIFT_SETBACK_K: 2,
+    CONF_NOTIFY_LEVEL: LEVEL_ISSUES,
 }
 
 # Felder, die leer bleiben dürfen (leer = Bedingung bzw. Anzeige entfällt)

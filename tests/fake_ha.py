@@ -50,14 +50,28 @@ class HomeAssistantError(Exception):
 
 
 class Services:
-    """select.select_option und number.set_value wirken wie echte Entitäten auf den Zustand."""
+    """select.select_option und number.set_value wirken wie echte Entitäten auf den Zustand.
+
+    Benachrichtigungsdienste gibt es nur, wenn ein Test sie in `notify` einträgt; ihre
+    Aufrufe landen in `sent`, nicht in `calls`.
+    """
 
     def __init__(self, hass) -> None:
         self.hass = hass
         self.calls: list[tuple[str, str, dict]] = []
+        self.sent: list[tuple[str, dict]] = []
+        self.notify: set[str] = set()
         self.fail = False
 
+    def has_service(self, domain, service) -> bool:
+        return domain != "notify" or service in self.notify
+
     async def async_call(self, domain, service, data, blocking=False):
+        if domain == "notify":
+            if service not in self.notify:
+                raise HomeAssistantError(f"Dienst notify.{service} nicht gefunden")
+            self.sent.append((service, dict(data)))
+            return
         if self.fail:
             raise HomeAssistantError("Modbus antwortet nicht")
         self.calls.append((domain, service, dict(data)))

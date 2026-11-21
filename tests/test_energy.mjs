@@ -336,3 +336,9 @@ test("entryTitle: Stufen beim Anheben", () => {
   assert.equal(m.entryTitle({ kind: "dhw_start" }), "Warmwasser nachladen");
   assert.equal(m.entryTitle({ kind: "dhw_end" }), "Nachladen beendet");
 });
+
+test("entryTitle: Auffälligkeiten mit eigenem Titel", () => {
+  assert.equal(m.entryTitle({ kind: "alert", title: "Takten" }), "Takten");
+  assert.equal(m.entryTitle({ kind: "alert" }), "Auffällig");
+  assert.equal(m.entryTitle({ kind: "alert_end", title: "Wieder in Ordnung" }), "Wieder in Ordnung");
+});

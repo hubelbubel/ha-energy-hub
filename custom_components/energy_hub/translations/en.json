@@ -13,13 +13,16 @@
           "ent_outdoor": "Outdoor temperature",
           "ent_status": "Operating status (text)",
           "ent_compressor": "Compressor running",
+          "ent_fault": "Fault",
           "ent_power_el": "Electrical power",
           "ent_power_heat": "Heat output"
         },
         "data_description": {
           "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
           "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\".",
-          "ent_power_el": "Lets the control take the heat pump out of the surplus and learn how much it draws while running."
+          "ent_power_el": "Lets the control take the heat pump out of the surplus and learn how much it draws while running.",
+          "ent_compressor": "For the notifications “short cycling” and “raising without effect”. Without this sensor, an electrical power of 300 W or more counts as running.",
+          "ent_fault": "Fault code (0 = no fault), a text such as “Kein Fehler” or a binary_sensor. A fault present for 1 min is notified."
         }
       },
       "power": {
@@ -197,6 +200,18 @@
           "ent_energy_el": "Meter reading in kWh, for example from a dedicated electricity meter. Without a meter the electricity is summed from the electrical power.",
           "ent_energy_heat": "Meter reading in kWh from the heat meter.",
           "export_extra": "For example status codes, setpoints, runtimes or pumps."
+        }
+      },
+      "notify": {
+        "title": "Notifications",
+        "description": "Energy Hub reports anomalies at the heat pump and errors of the control, optionally every action as well. Each anomaly is sent once and once more with “back to normal”, the same one at most every 6 hours. They are listed in the panel log even without a service. After saving, a test message is sent.",
+        "data": {
+          "notify_service": "Notification service",
+          "notify_level": "Scope"
+        },
+        "data_description": {
+          "notify_service": "A service from notify, for example notify.mobile_app_your_phone for the companion app. Empty = no notifications.",
+          "notify_level": "“Everything” helps to check the control, especially in trial mode: every log entry is sent to the phone."
         }
       }
     },
@@ -220,7 +235,8 @@
           "storage": "Fireplace and storage tank",
           "rules": "Rules",
           "actuator": "Action on the heat pump",
-          "export": "Efficiency and export"
+          "export": "Efficiency and export",
+          "notify": "Notifications"
         }
       },
       "heatpump": {
@@ -235,13 +251,16 @@
           "ent_outdoor": "Outdoor temperature",
           "ent_status": "Operating status (text)",
           "ent_compressor": "Compressor running",
+          "ent_fault": "Fault",
           "ent_power_el": "Electrical power",
           "ent_power_heat": "Heat output"
         },
         "data_description": {
           "ent_outdoor": "Also used for the condition \"do not lower when it is too cold\".",
           "ent_dhw": "Also used for the condition \"do not lower when the hot water is too cold\".",
-          "ent_power_el": "Lets the control take the heat pump out of the surplus and learn how much it draws while running."
+          "ent_power_el": "Lets the control take the heat pump out of the surplus and learn how much it draws while running.",
+          "ent_compressor": "For the notifications “short cycling” and “raising without effect”. Without this sensor, an electrical power of 300 W or more counts as running.",
+          "ent_fault": "Fault code (0 = no fault), a text such as “Kein Fehler” or a binary_sensor. A fault present for 1 min is notified."
         }
       },
       "power": {
@@ -419,6 +438,18 @@
           "ent_energy_el": "Meter reading in kWh, for example from a dedicated electricity meter. Without a meter the electricity is summed from the electrical power.",
           "ent_energy_heat": "Meter reading in kWh from the heat meter.",
           "export_extra": "For example status codes, setpoints, runtimes or pumps."
+        }
+      },
+      "notify": {
+        "title": "Notifications",
+        "description": "Energy Hub reports anomalies at the heat pump and errors of the control, optionally every action as well. Each anomaly is sent once and once more with “back to normal”, the same one at most every 6 hours. They are listed in the panel log even without a service. After saving, a test message is sent.",
+        "data": {
+          "notify_service": "Notification service",
+          "notify_level": "Scope"
+        },
+        "data_description": {
+          "notify_service": "A service from notify, for example notify.mobile_app_your_phone for the companion app. Empty = no notifications.",
+          "notify_level": "“Everything” helps to check the control, especially in trial mode: every log entry is sent to the phone."
         }
       }
     },
@@ -459,6 +490,12 @@
         "boost": "Raise",
         "strong": "Raise strongly",
         "setback": "Lower"
+      }
+    },
+    "notify_level": {
+      "options": {
+        "issues": "Anomalies and errors only",
+        "all": "Everything: every action as well (debug)"
       }
     }
   },

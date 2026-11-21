@@ -345,6 +345,8 @@ export function csvCell(v) {
 }
 
 export function entryTitle(e) {
+  if (e.kind === "alert") return e.title || "Auffällig";
+  if (e.kind === "alert_end") return "Wieder in Ordnung";
   if (e.kind === "switch") {
     if (e.to === "strong") return "Stark angehoben";
     if (e.to === "boost") return e.from === "strong" ? "Zurück auf Anheben" : "Angehoben";
@@ -1992,6 +1994,7 @@ main[hidden] { display: none; }
 .entry time { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .entry svg { margin-top: 4px; fill: var(--ink); }
 .entry.k-error svg { fill: var(--c-warn); }
+.entry.k-alert svg { fill: var(--c-pv); }
 .entry .what { font-weight: 500; }
 .entry p { margin: 2px 0 0; max-width: 62ch; }
 .entry .meta { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
@@ -2644,6 +2647,8 @@ class EnergyHubPanel extends HTMLElement {
       : e.kind === "switch" && e.to === "setback" ? "M7 12 L1.5 3 H12.5 Z"
       : e.kind === "switch" ? "M2 6 H12 V8 H2 Z"
       : e.kind === "dhw_start" || e.kind === "dhw_end" ? "M7 1 C5.5 3.5 2.5 6.5 2.5 9 A4.5 4.5 0 0 0 11.5 9 C11.5 6.5 8.5 3.5 7 1 Z"
+      : e.kind === "alert" ? "M7 1 A6 6 0 1 0 7.01 1 Z M6.2 3.5 h1.6 v4.6 h-1.6 Z M6.2 9.4 h1.6 v1.6 h-1.6 Z"
+      : e.kind === "alert_end" ? "M5.6 9.2 L2.8 6.4 L1.6 7.6 L5.6 11.6 L12.4 4.8 L11.2 3.6 Z"
       : "M7 4.5 a2.5 2.5 0 1 0 0.01 0 Z";
     return s("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" },
       s("path", { d, "fill-rule": "evenodd" }));

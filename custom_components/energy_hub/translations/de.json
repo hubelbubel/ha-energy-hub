@@ -13,13 +13,16 @@
           "ent_outdoor": "Außentemperatur",
           "ent_status": "Betriebsstatus (Text)",
           "ent_compressor": "Verdichter läuft",
+          "ent_fault": "Störung",
           "ent_power_el": "Elektrische Leistung",
           "ent_power_heat": "Heizleistung"
         },
         "data_description": {
           "ent_outdoor": "Wird auch für die Bedingung „nicht absenken, wenn es zu kalt ist“ benutzt.",
           "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt.",
-          "ent_power_el": "Damit rechnet die Regelung die Wärmepumpe aus dem Überschuss heraus und lernt, wie viel sie im Lauf zieht."
+          "ent_power_el": "Damit rechnet die Regelung die Wärmepumpe aus dem Überschuss heraus und lernt, wie viel sie im Lauf zieht.",
+          "ent_compressor": "Für die Meldungen „Takten“ und „Anheben ohne Wirkung“. Ohne diesen Sensor zählt eine elektrische Leistung ab 300 W als Lauf.",
+          "ent_fault": "Fehlercode (0 = keine Störung), Text wie „Kein Fehler“ oder ein binary_sensor. Steht eine Störung 1 min an, kommt eine Benachrichtigung."
         }
       },
       "power": {
@@ -197,6 +200,18 @@
           "ent_energy_el": "Zählerstand in kWh, zum Beispiel von einem eigenen Stromzähler. Ohne Zähler wird der Strom aus der elektrischen Leistung aufsummiert.",
           "ent_energy_heat": "Zählerstand in kWh aus dem Wärmemengenzähler.",
           "export_extra": "Zum Beispiel Statuscodes, Sollwerte, Laufzeiten oder Pumpen."
+        }
+      },
+      "notify": {
+        "title": "Benachrichtigung",
+        "description": "Energy Hub meldet Auffälligkeiten an der Wärmepumpe und Fehler der Regelung, auf Wunsch auch jeden Eingriff. Jede Auffälligkeit kommt einmal und einmal mit „wieder in Ordnung“, dieselbe höchstens alle 6 Stunden. Im Logbuch des Panels stehen sie auch ohne Dienst. Nach dem Speichern kommt eine Testnachricht.",
+        "data": {
+          "notify_service": "Benachrichtigungsdienst",
+          "notify_level": "Umfang"
+        },
+        "data_description": {
+          "notify_service": "Ein Dienst aus notify, etwa notify.mobile_app_dein_handy für die Companion-App. Leer = keine Benachrichtigung.",
+          "notify_level": "„Alles“ eignet sich zum Prüfen der Regelung, besonders im Probebetrieb: Dann kommt jeder Eintrag des Logbuchs aufs Handy."
         }
       }
     },
@@ -220,7 +235,8 @@
           "storage": "Kamin und Speicher",
           "rules": "Regeln",
           "actuator": "Eingriff an der Wärmepumpe",
-          "export": "Effizienz und Export"
+          "export": "Effizienz und Export",
+          "notify": "Benachrichtigung"
         }
       },
       "heatpump": {
@@ -235,13 +251,16 @@
           "ent_outdoor": "Außentemperatur",
           "ent_status": "Betriebsstatus (Text)",
           "ent_compressor": "Verdichter läuft",
+          "ent_fault": "Störung",
           "ent_power_el": "Elektrische Leistung",
           "ent_power_heat": "Heizleistung"
         },
         "data_description": {
           "ent_outdoor": "Wird auch für die Bedingung „nicht absenken, wenn es zu kalt ist“ benutzt.",
           "ent_dhw": "Wird auch für die Bedingung „nicht absenken, wenn das Warmwasser zu kalt ist“ benutzt.",
-          "ent_power_el": "Damit rechnet die Regelung die Wärmepumpe aus dem Überschuss heraus und lernt, wie viel sie im Lauf zieht."
+          "ent_power_el": "Damit rechnet die Regelung die Wärmepumpe aus dem Überschuss heraus und lernt, wie viel sie im Lauf zieht.",
+          "ent_compressor": "Für die Meldungen „Takten“ und „Anheben ohne Wirkung“. Ohne diesen Sensor zählt eine elektrische Leistung ab 300 W als Lauf.",
+          "ent_fault": "Fehlercode (0 = keine Störung), Text wie „Kein Fehler“ oder ein binary_sensor. Steht eine Störung 1 min an, kommt eine Benachrichtigung."
         }
       },
       "power": {
@@ -419,6 +438,18 @@
           "ent_energy_el": "Zählerstand in kWh, zum Beispiel von einem eigenen Stromzähler. Ohne Zähler wird der Strom aus der elektrischen Leistung aufsummiert.",
           "ent_energy_heat": "Zählerstand in kWh aus dem Wärmemengenzähler.",
           "export_extra": "Zum Beispiel Statuscodes, Sollwerte, Laufzeiten oder Pumpen."
+        }
+      },
+      "notify": {
+        "title": "Benachrichtigung",
+        "description": "Energy Hub meldet Auffälligkeiten an der Wärmepumpe und Fehler der Regelung, auf Wunsch auch jeden Eingriff. Jede Auffälligkeit kommt einmal und einmal mit „wieder in Ordnung“, dieselbe höchstens alle 6 Stunden. Im Logbuch des Panels stehen sie auch ohne Dienst. Nach dem Speichern kommt eine Testnachricht.",
+        "data": {
+          "notify_service": "Benachrichtigungsdienst",
+          "notify_level": "Umfang"
+        },
+        "data_description": {
+          "notify_service": "Ein Dienst aus notify, etwa notify.mobile_app_dein_handy für die Companion-App. Leer = keine Benachrichtigung.",
+          "notify_level": "„Alles“ eignet sich zum Prüfen der Regelung, besonders im Probebetrieb: Dann kommt jeder Eintrag des Logbuchs aufs Handy."
         }
       }
     },
@@ -459,6 +490,12 @@
         "boost": "Anheben",
         "strong": "Stark anheben",
         "setback": "Absenken"
+      }
+    },
+    "notify_level": {
+      "options": {
+        "issues": "Nur Auffälligkeiten und Fehler",
+        "all": "Alles: dazu jeder Eingriff (Debug)"
       }
     }
   },

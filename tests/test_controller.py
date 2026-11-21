@@ -128,8 +128,11 @@ def test_failed_write_is_logged_and_retried():
         await sunny_until_boost(hass, ctrl)
         assert ctrl.mode == "normal"
         snap = ctrl.snapshot()
-        assert snap["log"][0]["kind"] == "error" and snap["log"][0]["result"] == "failed"
+        error = next(e for e in snap["log"] if e["kind"] != "alert")
+        assert error["kind"] == "error" and error["result"] == "failed"
         assert "Modbus antwortet nicht" in snap["state"]["last_error"]
+        # Der Fehler steht seit dem ersten Nachsetzen um 12:25 an, also als Problem im Logbuch
+        assert snap["log"][0]["kind"] == "alert" and snap["log"][0]["title"] == "Problem"
         errors = len(snap["log"])
 
         await tick(ctrl, 2)
@@ -873,5 +876,242 @@ def test_reload_in_dry_run_and_without_sun_integration():
         await tick(ctrl)
         await tick(ctrl, 10)
         assert ctrl.snapshot()["state"]["dhw_reload"]["wait"] == "erst nach Mittag"
+
+    asyncio.run(run())
+
+
+# ------------------------------------------------------------ Benachrichtigung
+PHONE = "mobile_app_handy"
+COMP = "binary_sensor.wp_verdichter_1"
+HEATER = "binary_sensor.wp_flanschheizung_e9"
+FAULT = "sensor.wp_storung"
+
+
+def make_notify(actuator=c.ACT_DRY_RUN, level="issues", **extra):
+    hass, ctrl = make(actuator, **{c.CONF_NOTIFY_SERVICE: f"notify.{PHONE}", c.CONF_NOTIFY_LEVEL: level, **extra})
+    hass.services.notify.add(PHONE)
+    return hass, ctrl
+
+
+def titles(hass):
+    return [data["title"].removeprefix("Energy Hub · ") for _service, data in hass.services.sent]
+
+
+def test_notify_level_all_mirrors_the_logbook():
+    async def run():
+        hass, ctrl = make_notify(level="all")
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        assert titles(hass) == ["Benachrichtigung eingerichtet", "Angehoben"]
+        _service, data = hass.services.sent[1]
+        assert data["message"].endswith("(Probebetrieb, nicht gesendet)")
+        assert data["data"] == {"group": "energy_hub"}  # Ereignis: ohne tag
+        assert "jeden Eingriff" in hass.services.sent[0][1]["message"]
+
+    asyncio.run(run())
+
+
+def test_notify_issues_only_and_setup_message_once():
+    async def run():
+        hass, ctrl = make_notify()
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        assert titles(hass) == ["Benachrichtigung eingerichtet"]
+        assert "Auffälligkeiten und Fehler" in hass.services.sent[0][1]["message"]
+
+        # Neustart mit denselben Einstellungen: keine zweite Testnachricht
+        again = controller_mod.Controller(hass, ctrl.entry)
+        await again.async_start()
+        await tick(again)
+        assert len(hass.services.sent) == 1
+        # Umfang geändert: neue Testnachricht
+        again.entry.options = {**again.entry.options, c.CONF_NOTIFY_LEVEL: "all"}
+        third = controller_mod.Controller(hass, again.entry)
+        await third.async_start()
+        await tick(third)
+        assert titles(hass)[1] == "Benachrichtigung eingerichtet"
+
+    asyncio.run(run())
+
+
+def test_cycling_is_reported_once_a_day_and_logged():
+    async def run():
+        hass, ctrl = make_notify(**{c.CONF_ENT_COMPRESSOR: COMP})
+        hass.states.set(COMP, "off")
+        await ctrl.async_start()
+        await tick(ctrl)
+        hass.states.set(COMP, "on")
+        await tick(ctrl, 1)
+        hass.states.set(COMP, "off")
+        await tick(ctrl, 4)
+        assert titles(hass)[-1] == "Takten"
+        _service, data = hass.services.sent[-1]
+        assert data["message"] == "Die Wärmepumpe taktet: der letzte Lauf dauerte nur 4 min."
+        assert data["data"]["tag"] == "energy_hub_cycling"
+        entry = ctrl.snapshot()["log"][0]
+        assert (entry["kind"], entry["title"]) == ("alert", "Takten")
+
+        for _ in range(3):  # weiter kurze Läufe: heute keine zweite Meldung
+            hass.states.set(COMP, "on")
+            await tick(ctrl, 2)
+            hass.states.set(COMP, "off")
+            await tick(ctrl, 2)
+        assert titles(hass).count("Takten") == 1
+
+    asyncio.run(run())
+
+
+def test_heater_reported_with_mode_and_back_off():
+    async def run():
+        hass, ctrl = make_notify(**{c.CONF_ENT_HEATER: HEATER})
+        hass.states.set(HEATER, "off")
+        await ctrl.async_start()
+        await tick(ctrl)
+        hass.states.set(HEATER, "on")
+        await tick(ctrl, 1)
+        _service, data = hass.services.sent[-1]
+        assert data["title"] == "Energy Hub · Heizstab läuft"
+        assert data["message"] == ("Der Heizstab läuft. Energy Hub steht auf „Normalbetrieb“, "
+                                   "im Probebetrieb nur protokolliert.")
+        hass.states.set(HEATER, "unavailable")
+        await tick(ctrl, 10)
+        assert len(hass.services.sent) == 2  # ohne Wert: weder neu noch vorbei
+        hass.states.set(HEATER, "off")
+        await tick(ctrl, 30)
+        _service, end = hass.services.sent[-1]
+        assert end["title"] == "Energy Hub · Wieder in Ordnung"
+        assert end["message"] == "Der Heizstab ist wieder aus (nach 40 min)."
+        assert end["data"]["tag"] == data["data"]["tag"] == "energy_hub_heater"
+        assert ctrl.snapshot()["log"][0]["kind"] == "alert_end"
+
+    asyncio.run(run())
+
+
+def test_boost_without_effect():
+    async def run():
+        hass, ctrl = make_notify(c.ACT_SMART_GRID, **{
+            c.CONF_ENT_COMPRESSOR: COMP, c.CONF_ENT_DHW_TARGET: DHW_TARGET, c.CONF_STRONG_ENABLED: False,
+        })
+        hass.states.set(COMP, "off")
+        hass.states.set(DHW_TARGET, 55)
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        assert ctrl.mode == "boost"
+        await tick(ctrl, 40)
+        assert "Anheben ohne Wirkung" not in titles(hass)
+        await tick(ctrl, 5)
+        assert titles(hass)[-1] == "Anheben ohne Wirkung"
+        assert "Seit 45 min steht „Anheben“" in hass.services.sent[-1][1]["message"]
+        hass.states.set(COMP, "on")
+        await tick(ctrl, 1)
+        assert titles(hass)[-1] == "Wieder in Ordnung"
+
+    asyncio.run(run())
+
+
+def test_boost_without_effect_not_while_locked_or_in_dry_run():
+    async def run():
+        for actuator, lock in ((c.ACT_SMART_GRID, "EVU-Sperre"), (c.ACT_DRY_RUN, "Keine")):
+            hass, ctrl = make_notify(actuator, **{
+                c.CONF_ENT_COMPRESSOR: COMP, c.CONF_ENT_DHW_TARGET: DHW_TARGET,
+                c.CONF_ENT_LOCK: LOCK, c.CONF_STRONG_ENABLED: False,
+            })
+            hass.states.set(COMP, "off")
+            hass.states.set(DHW_TARGET, 55)
+            hass.states.set(LOCK, lock)
+            await ctrl.async_start()
+            await sunny_until_boost(hass, ctrl)
+            await tick(ctrl, 60)
+            assert "Anheben ohne Wirkung" not in titles(hass)
+
+    asyncio.run(run())
+
+
+def test_setting_overwritten_from_outside():
+    async def run():
+        hass, ctrl = make_notify(c.ACT_SMART_GRID, **{c.CONF_STRONG_ENABLED: False})
+        await ctrl.async_start()
+        await sunny_until_boost(hass, ctrl)
+        for _ in range(3):
+            hass.states.set(SG, "Normalbetrieb (gelb)")  # etwas anderes stellt zurück
+            await tick(ctrl, 5)
+        assert titles(hass)[-1] == "Vorgabe wird überschrieben"
+        assert "3× an der Wärmepumpe verloren" in hass.services.sent[-1][1]["message"]
+
+    asyncio.run(run())
+
+
+def test_fault_after_a_minute_and_cleared():
+    async def run():
+        hass, ctrl = make_notify(**{c.CONF_ENT_FAULT: FAULT})
+        hass.states.set(FAULT, "Kein Fehler")
+        await ctrl.async_start()
+        await tick(ctrl, 6)
+        hass.states.set(FAULT, "!Hochdruck")
+        await tick(ctrl)
+        assert "Störung" not in titles(hass)  # erst nach 1 min
+        await tick(ctrl, 1)
+        assert hass.services.sent[-1][1]["message"] == "Die Wärmepumpe meldet eine Störung: !Hochdruck."
+        hass.states.set(FAULT, "Kein Fehler")
+        await tick(ctrl, 1)
+        assert hass.services.sent[-1][1]["message"] == "Die Wärmepumpe meldet keine Störung mehr (nach 2 min)."
+
+    asyncio.run(run())
+
+
+def test_cold_hot_water_and_forgotten_manual_mode():
+    async def run():
+        hass, ctrl = make_notify()
+        await ctrl.async_start()
+        hass.states.set(DHW, 38)
+        await tick(ctrl)
+        await tick(ctrl, 59)
+        assert "Warmwasser kalt" not in titles(hass)
+        await tick(ctrl, 1)
+        assert titles(hass)[-1] == "Warmwasser kalt"
+
+        await ctrl.async_set_override("boost", None)
+        await tick(ctrl, 12 * 60)
+        assert "Handbetrieb läuft lange" in titles(hass)
+        await ctrl.async_clear_override()
+        assert hass.services.sent[-1][1]["message"].startswith("Der Handbetrieb ist beendet (nach 12 h")
+
+        await ctrl.async_set_automation(False)
+        await tick(ctrl, 12 * 60)
+        assert titles(hass)[-1] == "Automatik aus"
+
+    asyncio.run(run())
+
+
+def test_problems_after_five_minutes_and_missing_service():
+    async def run():
+        hass, ctrl = make_notify()
+        hass.states.set(FORECAST, "unavailable")
+        await ctrl.async_start()
+        await tick(ctrl)
+        await tick(ctrl, 4)
+        assert titles(hass) == ["Benachrichtigung eingerichtet"]
+        await tick(ctrl, 1)
+        assert titles(hass)[-1] == "Problem"
+        hass.states.set(FORECAST, 14, unit_of_measurement="kWh")
+        await tick(ctrl)
+        assert hass.services.sent[-1][1]["message"].startswith("Behoben: Die PV-Prognose")
+
+        # Dienst gibt es nicht (mehr): steht als Problem da, die Regelung läuft weiter
+        hass.services.notify.clear()
+        await tick(ctrl)
+        assert "Der Benachrichtigungsdienst (notify.mobile_app_handy) ist nicht vorhanden." in ctrl.problems
+
+    asyncio.run(run())
+
+
+def test_without_service_alerts_only_in_the_logbook():
+    async def run():
+        hass, ctrl = make(c.ACT_DRY_RUN, **{c.CONF_ENT_HEATER: HEATER})
+        hass.states.set(HEATER, "on")
+        await ctrl.async_start()
+        await tick(ctrl)
+        assert hass.services.sent == []
+        assert ctrl.snapshot()["log"][0]["title"] == "Heizstab läuft"
 
     asyncio.run(run())
